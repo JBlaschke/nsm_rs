@@ -3,6 +3,9 @@ use std::net::TcpStream;
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 
+#[allow(unused_imports)]
+use log::{debug, error, info, trace, warn};
+
 use crate::utils::epoch;
 use crate::connection::{
     MessageHeader, Message, send, receive,
@@ -88,6 +91,7 @@ pub fn deserialize(payload: & String) -> Payload {
 pub fn request_handler(
     state: & mut State, stream: & mut TcpStream
 ) -> std::io::Result<()> {
+    trace!("Starting request handler");
 
     let message = receive(stream)?;
 
@@ -99,7 +103,7 @@ pub fn request_handler(
         MessageHeader::NULL => panic!("NULL message encountered!"),
     };
 
-    println!("Reqest received: {:?}", payload);
+    info!("Reqest handler received: {:?}", payload);
     match message.header {
         MessageHeader::PUB => {
             println!("Publishing Service: {:?}", payload);
@@ -107,9 +111,6 @@ pub fn request_handler(
         }
         _ => {panic!("This should not be reached!");}
     }
-
-
-
 
     // let response = "HTTP/1.1 200 OK\r\n\r\n";
     // stream.write(response.as_bytes())?;

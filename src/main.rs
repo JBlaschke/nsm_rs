@@ -105,6 +105,8 @@ fn main() -> std::io::Result<()> {
         }
 
         CLIOperation::Listen(inputs) => {
+            trace!("Start setting up listener...");
+
             let ipstr = if inputs.print_v4 {
                 get_matching_ipstr(
                     & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
@@ -115,7 +117,6 @@ fn main() -> std::io::Result<()> {
                 )
             };
             let host = only_or_error(& ipstr);
-            info!("Listener started on:");
 
             let mut state: State = State::new();
             let handler =  |stream: &mut TcpStream| {
@@ -127,6 +128,7 @@ fn main() -> std::io::Result<()> {
                 port: inputs.bind_port
             };
 
+            info!("Starting listener started on: {}:{}", addr.host, addr.port);
             let _ = server(& addr, handler);
         }
 

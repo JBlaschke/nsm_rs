@@ -3,6 +3,8 @@ use std::net::{TcpListener, TcpStream};
 use std::fmt;
 use serde::{Serialize, Deserialize};
 
+#[allow(unused_imports)]
+use log::{debug, error, info, trace, warn};
 
 #[derive(Debug)]
 pub struct Addr<'a> {
@@ -133,13 +135,17 @@ pub fn server(
     addr: &Addr, 
     mut handler: impl FnMut(&mut TcpStream) -> std::io::Result<()>
 ) -> std::io::Result<()> {
+    trace!("Starting server process on: {:?}", addr);
+
     let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
+    trace!("Bind to {:?} successful", addr);
 
     // accept connections and process them serially
     for stream in listener.incoming() {
+        info!("Request received on {:?}, processing...", stream);
         match stream {
             Ok(mut stream) => {
-                // pass the handle_connection function as a function pointer
+                trace!("Passing TCP connection to handler...");
                 let _ = handler(&mut stream);
             }
             Err(e) => {
