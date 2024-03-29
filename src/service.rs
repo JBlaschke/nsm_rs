@@ -124,17 +124,19 @@ pub fn request_handler(
 
 
 pub fn heartbeat_handler(stream: & mut TcpStream) -> std::io::Result<()> {
+    trace!("Starting heartbeat handler");
 
     let request = receive(stream)?;
-
     if matches!(request.header, MessageHeader::HB) {
-        panic!(
-            "Non-heartbeat request {} sent to heartbeat_handler: {}",
-            request.header, request.body
+        warn!(
+            "Non-heartbeat request sent to heartbeat_handler: {}",
+            request.header
         );
+        info!("Dropping non-heartbeat request");
+    } else {
+        info!("Heatbeat handler received {:?}", request);
+        send(stream, & Message{header: MessageHeader::HB, body: request.body})?;
+        trace!("Heartbeat handler has returned heartbeat request");
     }
-
-    send(stream, & Message{header: MessageHeader::HB, body: request.body})?;
-
     Ok(())
 }
