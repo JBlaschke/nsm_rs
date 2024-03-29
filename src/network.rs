@@ -71,10 +71,16 @@ pub fn get_matching_ipstr(
     ips: & Vec<LocalInterface>,
     interface_name: & str, starting_octets: & Option<String>
 ) -> Vec<String> {
-    trace!(
-        "Selecting IP addresses starting with: {:?} on interface: {:?}",
-        starting_octets, interface_name
-    );
+    match starting_octets {
+        Some(ip) => trace!(
+            "Selecting IP addresses starting with: {:?} on interface: {:?}",
+            ip, interface_name
+        ),
+        None => trace!(
+            "Selecting all IP addresses on interface: {:?}",
+            interface_name
+        )
+    }
 
     let mut ipstr = Vec::new();
     let target_name = Some(interface_name.to_string());
