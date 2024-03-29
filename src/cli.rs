@@ -2,10 +2,10 @@ use clap::{Arg, Command, ArgAction, ArgMatches};
 
 
 pub fn init() -> ArgMatches {
-    let args = Command::new("ParaView Server Cluster")
+    let args = Command::new("NERSC Service Mesh")
         .version("1.0")
         .author("Johannes Blaschke")
-        .about("Manages a cluster of ParaView Servers")
+        .about("Manages services meshes with an eye towards HPC")
         .arg(
             Arg::new("operation")
             .short('o')
@@ -102,6 +102,7 @@ pub fn init() -> ArgMatches {
 }
 
 
+#[derive(Debug)]
 pub struct ListInterfaces {
     pub verbose: bool,
     pub print_v4: bool,
@@ -109,6 +110,7 @@ pub struct ListInterfaces {
 }
 
 
+#[derive(Debug)]
 pub struct ListIPs {
     pub verbose: bool,
     pub print_v4: bool,
@@ -118,6 +120,7 @@ pub struct ListIPs {
 }
 
 
+#[derive(Debug)]
 pub struct Listen {
     pub print_v4: bool,
     pub print_v6: bool,
@@ -127,6 +130,7 @@ pub struct Listen {
 }
 
 
+#[derive(Debug)]
 pub struct Claim {
     pub print_v4: bool,
     pub print_v6: bool,
@@ -136,6 +140,7 @@ pub struct Claim {
 }
 
 
+#[derive(Debug)]
 pub struct Publish {
     pub print_v4: bool,
     pub print_v6: bool,
@@ -149,6 +154,7 @@ pub struct Publish {
 }
 
 
+#[derive(Debug)]
 pub enum CLIOperation {
     ListInterfaces(ListInterfaces),
     ListIPs(ListIPs),

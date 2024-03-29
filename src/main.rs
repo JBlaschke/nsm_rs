@@ -17,13 +17,29 @@ use cli::{
 
 use std::net::TcpStream;
 
+use log::{debug, error, info, trace, warn};
+use env_logger::Env;
+
 
 fn main() -> std::io::Result<()> {
-    let args = init();
+    let args = parse(& init());
     let ips = get_local_ips();
 
-    match parse(& args) {
+    let logging_env = Env::default()
+        .filter_or("NSM_LOG_LEVEL", "warn")
+        .write_style_or("NSM_LOG_STYLE", "always");
+    env_logger::init_from_env(logging_env);
+
+    info!("Started NERSC Service MESH");
+    trace!("Input args: {:?}", args);
+    trace!("Local IP Addresses: {:?}", ips);
+    trace!("Ready");
+
+    match args {
         CLIOperation::ListInterfaces(inputs) => {
+            if inputs.print_v4 {info!("Listing Matching IPv4 Interfaces");}
+            if inputs.print_v6 {info!("Listing Matching IPv6 Interfaces");}
+
             let mut ipv4_names = Vec::new();
             let mut ipv6_names = Vec::new();
 
@@ -59,6 +75,8 @@ fn main() -> std::io::Result<()> {
         }
 
         CLIOperation::ListIPs(inputs) => {
+            if inputs.print_v4 {info!("Listing Matching IPv4 Addresses");}
+            if inputs.print_v6 {info!("Listing Matching IPv6 Addresses");}
             if inputs.print_v4 {
                 let ipstr = get_matching_ipstr(
                     & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
