@@ -11,19 +11,17 @@ mod utils;
 use utils::{only_or_error, epoch};
 
 mod cli;
-use cli::{
-    init, parse, CLIOperation, ListInterfaces, ListIPs, Listen, Claim, Publish
-};
+use cli::{init, parse, CLIOperation};
 
 use std::net::TcpStream;
 
+#[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 use env_logger::Env;
 
 
 fn main() -> std::io::Result<()> {
     let args = parse(& init());
-    let ips = get_local_ips();
 
     let logging_env = Env::default()
         .filter_or("NSM_LOG_LEVEL", "warn")
@@ -32,8 +30,8 @@ fn main() -> std::io::Result<()> {
 
     info!("Started NERSC Service MESH");
     trace!("Input args: {:?}", args);
-    trace!("Local IP Addresses: {:?}", ips);
-    trace!("Ready");
+
+    let ips = get_local_ips();
 
     match args {
         CLIOperation::ListInterfaces(inputs) => {
@@ -117,6 +115,7 @@ fn main() -> std::io::Result<()> {
                 )
             };
             let host = only_or_error(& ipstr);
+            info!("Listener started on:");
 
             let mut state: State = State::new();
             let handler =  |stream: &mut TcpStream| {
@@ -128,11 +127,11 @@ fn main() -> std::io::Result<()> {
                 port: inputs.bind_port
             };
 
-            server(& addr, handler);
+            let _ = server(& addr, handler);
         }
 
         CLIOperation::Claim(inputs) => {
-            let payload = serialize(& Payload {
+            let _payload = serialize(& Payload {
                 service_addr: Vec::new(),
                 service_port: inputs.port,
                 service_claim: epoch(),
@@ -169,7 +168,7 @@ fn main() -> std::io::Result<()> {
             let mut stream = connect(& Addr{
                 host: & inputs.host, port: inputs.port
             })?;
-            send(&mut stream, & Message{
+            let _ = send(&mut stream, & Message{
                 header: MessageHeader::PUB,
                 body: payload
             });
@@ -180,7 +179,7 @@ fn main() -> std::io::Result<()> {
                 port: inputs.bind_port
             };
 
-            server(& addr, heartbeat_handler);
+            let _ = server(& addr, heartbeat_handler);
         }
     }
 

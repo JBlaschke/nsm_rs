@@ -1,4 +1,4 @@
-use std::io::Write;
+// use std::io::Write;
 use std::net::TcpStream;
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
@@ -44,6 +44,7 @@ impl State {
         self.seq += 1;
     }
 
+    #[allow(dead_code)]
     pub fn claim(&mut self, k:u64) -> Result<&mut Payload, u64> {
         match self.clients.get_mut(& k) {
 
@@ -61,7 +62,7 @@ impl State {
             _ => return Err(2)
         }
 
-        return Err(3);
+        // return Err(3);
     }
 
     pub fn print(&mut self) {

@@ -88,7 +88,7 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
 
 pub fn send(stream: &mut TcpStream, msg: & Message) -> std::io::Result<Message> {
 
-    stream_write(stream, & serialize_message(msg));
+    let _ = stream_write(stream, & serialize_message(msg));
 
     if matches!(msg.header, MessageHeader::ACK)
     || matches!(msg.header, MessageHeader::HB) {
@@ -118,7 +118,7 @@ pub fn receive(stream: &mut TcpStream) -> std::io::Result<Message> {
         return Ok(response);
     }
 
-    stream_write(stream, & serialize_message(
+    let _ = stream_write(stream, & serialize_message(
         & Message {
             header: MessageHeader::ACK,
             body: "".to_string()
@@ -140,7 +140,7 @@ pub fn server(
         match stream {
             Ok(mut stream) => {
                 // pass the handle_connection function as a function pointer
-                handler(&mut stream);
+                let _ = handler(&mut stream);
             }
             Err(e) => {
                 println!("Error: {}", e);
