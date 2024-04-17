@@ -106,7 +106,7 @@ pub fn request_handler(
     info!("Reqest handler received: {:?}", payload);
     match message.header {
         MessageHeader::PUB => {
-            println!("Publishing Service: {:?}", payload);
+            info!("Publishing Service: {:?}", payload);
             state.add(payload);
         }
         _ => {panic!("This should not be reached!");}
