@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::fmt;
 use serde::{Serialize, Deserialize};
+use std::sync::{Arc, Mutex};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -88,9 +89,10 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
     Ok(message)
 }
 
-pub fn send(stream: &mut TcpStream, msg: & Message) -> std::io::Result<Message> {
+pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
 
-    let _ = stream_write(stream, & serialize_message(msg));
+    let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+    let _ = stream_write(loc_stream, & serialize_message(msg));
 
     if matches!(msg.header, MessageHeader::ACK)
     || matches!(msg.header, MessageHeader::HB) {
@@ -100,7 +102,7 @@ pub fn send(stream: &mut TcpStream, msg: & Message) -> std::io::Result<Message> 
         })
     }
 
-    let response = match stream_read(stream) {
+    let response = match stream_read(loc_stream) {
         Ok(message) => deserialize_message(& message),
         Err(err) => {return Err(err);}
     };
@@ -108,9 +110,11 @@ pub fn send(stream: &mut TcpStream, msg: & Message) -> std::io::Result<Message> 
     Ok(response)
 }
 
-pub fn receive(stream: &mut TcpStream) -> std::io::Result<Message> {
+pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 
-    let response = match stream_read(stream) {
+    let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+
+    let response = match stream_read(loc_stream) {
         Ok(message) => deserialize_message(& message),
         Err(err) => {return Err(err);}
     };
@@ -120,7 +124,7 @@ pub fn receive(stream: &mut TcpStream) -> std::io::Result<Message> {
         return Ok(response);
     }
 
-    let _ = stream_write(stream, & serialize_message(
+    let _ = stream_write(loc_stream, & serialize_message(
         & Message {
             header: MessageHeader::ACK,
             body: "".to_string()
@@ -133,7 +137,7 @@ pub fn receive(stream: &mut TcpStream) -> std::io::Result<Message> {
 
 pub fn server(
     addr: &Addr, 
-    mut handler: impl FnMut(&mut TcpStream) -> std::io::Result<()>
+    mut handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()>
 ) -> std::io::Result<()> {
     trace!("Starting server process on: {:?}", addr);
 
@@ -144,9 +148,10 @@ pub fn server(
     for stream in listener.incoming() {
         info!("Request received on {:?}, processing...", stream);
         match stream {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 trace!("Passing TCP connection to handler...");
-                let _ = handler(&mut stream);
+                let shared_stream = Arc::new(Mutex::new(stream));
+                let _ = handler(& shared_stream);
             }
             Err(e) => {
                 println!("Error: {}", e);

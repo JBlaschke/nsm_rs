@@ -122,7 +122,7 @@ fn main() -> std::io::Result<()> {
             let state: State = State::new();
             let shared_state = Arc::new(Mutex::new(state));
 
-            let handler =  |stream: &mut TcpStream| {
+            let handler =  |stream: &Arc<Mutex<TcpStream>>| {
                 return request_handler(& shared_state, stream);
             };
 
@@ -168,10 +168,11 @@ fn main() -> std::io::Result<()> {
                 id: 0
             });
 
-            let mut stream = connect(& Addr{
+            let stream = connect(& Addr{
                 host: & inputs.host, port: inputs.port
             })?;
-            let ack = send(&mut stream, & Message{
+            let stream_mut = Arc::new(Mutex::new(stream));
+            let ack = send(& stream_mut, & Message{
                 header: MessageHeader::PUB,
                 body: payload
             });

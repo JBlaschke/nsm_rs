@@ -92,7 +92,7 @@ pub fn deserialize(payload: & String) -> Payload {
 }
 
 pub fn request_handler(
-    state: & Arc<Mutex<State>>, stream: & mut TcpStream
+    state: & Arc<Mutex<State>>, stream: & Arc<Mutex<TcpStream>>
 ) -> std::io::Result<()> {
     trace!("Starting request handler");
 
@@ -148,7 +148,7 @@ pub fn request_handler(
 //     sleep(Duration::from_millis(60000));
 // }
 
-pub fn heartbeat_handler(stream: & mut TcpStream) -> std::io::Result<()> {
+pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()> {
     trace!("Starting heartbeat handler");
 
     let request = receive(stream)?;
