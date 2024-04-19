@@ -1,7 +1,11 @@
-// use std::io::Write;
 use std::net::TcpStream;
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
+use std::sync::{Arc, Mutex};
+// use std::thread::sleep;
+// use std::time::Duration;
+// use std::thread;
+
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -87,41 +91,62 @@ pub fn deserialize(payload: & String) -> Payload {
     serde_json::from_str(payload).unwrap()
 }
 
-
 pub fn request_handler(
-    state: & mut State, stream: & mut TcpStream
+    state: & Arc<Mutex<State>>, stream: & mut TcpStream
 ) -> std::io::Result<()> {
     trace!("Starting request handler");
 
     let message = receive(stream)?;
 
     let payload = match message.header {
-        MessageHeader::HB => panic!("Heartbeat message encountered!"),
-        MessageHeader::ACK => panic!("ACK message encountered!"),
+        MessageHeader::HB => panic!("Unexpected HB message encountered!"),
+        MessageHeader::ACK => panic!("Unexpected ACK message encountered!"),
         MessageHeader::PUB => deserialize(& message.body),
         MessageHeader::CLAIM => deserialize(& message.body),
-        MessageHeader::NULL => panic!("NULL message encountered!"),
+        MessageHeader::NULL => panic!("Unexpected NULL message encountered!"),
     };
 
     info!("Reqest handler received: {:?}", payload);
     match message.header {
         MessageHeader::PUB => {
             info!("Publishing Service: {:?}", payload);
-            state.add(payload);
+            let mut state_loc = state.lock().unwrap();
+            state_loc.add(payload);
+
+            println!("Now state:");
+            state_loc.print();
         }
         _ => {panic!("This should not be reached!");}
     }
 
-    // let response = "HTTP/1.1 200 OK\r\n\r\n";
-    // stream.write(response.as_bytes())?;
-    // stream.flush()?;
-
-    println!("Now state:");
-    state.print();
+    // match message.header {
+    //     MessageHeader::PUB => {
+    //         info!("Starting HB monitor thread");
+    //         let thread_state = Arc::clone(& state);
+    //         let thread_stream = Arc::new(stream);
+    //         let monitor = thread::spawn(move || {
+    //                 heartbeat_monitor(&thread_state, & thread_stream);
+    //         });
+    //     }
+    //     _ => {}
+    // }
 
     Ok(())
 }
 
+
+// pub fn heartbeat_monitor(
+//     state: & Arc<Mutex<State>>, stream: & Arc<&mut TcpStream>
+// ) {
+//     info!("HB Monitor is checking for a HB.");
+//     let mut data = state.lock().unwrap();
+//     let ack = send(state, & Message{
+//         header: MessageHeader::HB,
+//         body: "".to_string()
+//     });
+//     info!("HB returned: {:?}", ack);
+//     sleep(Duration::from_millis(60000));
+// }
 
 pub fn heartbeat_handler(stream: & mut TcpStream) -> std::io::Result<()> {
     trace!("Starting heartbeat handler");

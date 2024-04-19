@@ -14,6 +14,7 @@ mod cli;
 use cli::{init, parse, CLIOperation};
 
 use std::net::TcpStream;
+use std::sync::{Arc, Mutex};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -118,9 +119,11 @@ fn main() -> std::io::Result<()> {
             };
             let host = only_or_error(& ipstr);
 
-            let mut state: State = State::new();
+            let state: State = State::new();
+            let shared_state = Arc::new(Mutex::new(state));
+
             let handler =  |stream: &mut TcpStream| {
-                return request_handler(&mut state, stream);
+                return request_handler(& shared_state, stream);
             };
 
             let addr = Addr {
@@ -141,8 +144,6 @@ fn main() -> std::io::Result<()> {
                 key: inputs.key,
                 id: 0
             });
-
-            // let _rec = cwrite(& inputs.host, inputs.port, & payload);
         }
 
         CLIOperation::Publish(inputs) => {
@@ -170,10 +171,27 @@ fn main() -> std::io::Result<()> {
             let mut stream = connect(& Addr{
                 host: & inputs.host, port: inputs.port
             })?;
-            let _ = send(&mut stream, & Message{
+            let ack = send(&mut stream, & Message{
                 header: MessageHeader::PUB,
                 body: payload
             });
+
+            match ack {
+                Ok(m) => {
+                    trace!("Received response: {:?}", m);
+                    match m.header {
+                        MessageHeader::ACK => {
+                            info!("Server acknowledged PUB.")
+                        }
+                        _ => {
+                            warn!("Server responds with unexpected message: {:?}", m)
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Encountered error: {:?}", e);
+                }
+            }
 
             let host = only_or_error(& ipstr);
             let addr = Addr {
