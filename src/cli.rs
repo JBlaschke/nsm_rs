@@ -136,6 +136,9 @@ pub struct Claim {
     pub print_v6: bool,
     pub host: String,
     pub port: i32,
+    pub name: String,
+    pub starting_octets: Option<String>,
+    pub bind_port: i32,
     pub key: u64
 }
 
@@ -228,16 +231,23 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
             assert!(args.contains_id("interface_name"));
+            assert!(args.contains_id("bind_port"));
             assert!(args.contains_id("key"));
             let host =   args.get_one::<String>("host").unwrap();
             let port = * args.get_one::<i32>("port").unwrap();
             let key  = * args.get_one::<u64>("key").unwrap();
+            let name = args.get_one::<String>("interface_name").unwrap();
+            let starting_octets =   args.get_one::<String>("ip_start");
+            let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
             return CLIOperation::Claim(
                 Claim{
                     print_v4: print_v4,
-                    print_v6:print_v6,
+                    print_v6: print_v6,
                     host: host.to_string(),
                     port: port,
+                    name: name.to_string(),
+                    starting_octets: starting_octets.cloned(),
+                    bind_port: bind_port,
                     key: key
                 }
             )

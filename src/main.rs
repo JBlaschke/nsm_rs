@@ -141,6 +141,7 @@ fn main() -> std::io::Result<()> {
                 service_port: inputs.port,
                 service_claim: epoch(),
                 interface_addr: Vec::new(),
+                bind_port: inputs.bind_port,
                 key: inputs.key,
                 id: 0
             });
@@ -164,6 +165,7 @@ fn main() -> std::io::Result<()> {
                 service_port: inputs.service_port,
                 service_claim: 0,
                 interface_addr: all_ipstr,
+                bind_port: inputs.bind_port,
                 key: inputs.key,
                 id: 0
             });

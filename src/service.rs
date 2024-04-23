@@ -22,6 +22,7 @@ pub struct Payload {
     pub service_port: i32,
     pub service_claim: u64,
     pub interface_addr: Vec<String>,
+    pub bind_port: i32,
     pub key: u64,
     pub id: u64
 }
@@ -30,6 +31,7 @@ pub struct Payload {
 #[derive(Debug)]
 pub struct State {
     pub clients: HashMap<u64, Vec<Payload>>,
+    pub claims: HashMap<u64, Vec<Payload>>,
     pub timeout: u64,
     pub seq: u64
 }
@@ -39,6 +41,7 @@ impl State {
     pub fn new() -> State {
         State{
             clients: HashMap::new(),
+            claims: HashMap::new(),
             timeout: 60,
             seq: 1
         }
