@@ -17,7 +17,7 @@ pub struct Addr<'a> {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageHeader {
     HB,
-    ACK,
+    ACK, //acknowledgement
     PUB,
     CLAIM,
     NULL
@@ -39,13 +39,15 @@ impl fmt::Display for MessageHeader {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
-    pub header: MessageHeader,
+    pub header: MessageHeader, //tells how to interprate message
     pub body: String
 }
 
 
 pub fn serialize_message(payload: & Message) -> String {
-    serde_json::to_string(payload).unwrap()
+    serde_json::to_string(payload).unwrap()  //serializes any struct into a string
+                                             //sending messages across message as a string
+                                             //flexibility
 }
 
 
@@ -89,6 +91,8 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
     Ok(message)
 }
 
+//writes to stream with TCP object
+//looks at stream and reads answer back to make sure other side got message
 pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
 
     let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -110,6 +114,7 @@ pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<
     Ok(response)
 }
 
+//receives data from stream and writes acknowledgment message
 pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 
     let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -150,8 +155,9 @@ pub fn server(
         match stream {
             Ok(stream) => {
                 trace!("Passing TCP connection to handler...");
-                let shared_stream = Arc::new(Mutex::new(stream));
-                let _ = handler(& shared_stream);
+                //mutex avoids race conditions
+                let shared_stream = Arc::new(Mutex::new(stream)); //multiple servers can listen in the same place
+                let _ = handler(& shared_stream); 
             }
             Err(e) => {
                 println!("Error: {}", e);

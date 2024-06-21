@@ -94,6 +94,8 @@ pub fn deserialize(payload: & String) -> Payload {
     serde_json::from_str(payload).unwrap()
 }
 
+//only wants to receive PUB and CLAIM
+//only used in listen
 pub fn request_handler(
     state: & Arc<Mutex<State>>, stream: & Arc<Mutex<TcpStream>>
 ) -> std::io::Result<()> {
@@ -113,6 +115,16 @@ pub fn request_handler(
     match message.header {
         MessageHeader::PUB => {
             info!("Publishing Service: {:?}", payload);
+            let mut state_loc = state.lock().unwrap();
+            state_loc.add(payload);
+
+            println!("Now state:");
+            state_loc.print();
+        },
+        MessageHeader::CLAIM => {
+            info!("Claiming Service: {:?}", payload);
+            //hold mutex on shared state
+            //mutex is released once out of scope
             let mut state_loc = state.lock().unwrap();
             state_loc.add(payload);
 

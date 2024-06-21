@@ -121,7 +121,8 @@ fn main() -> std::io::Result<()> {
 
             let state: State = State::new();
             let shared_state = Arc::new(Mutex::new(state));
-
+            
+            //create closure around shared state
             let handler =  |stream: &Arc<Mutex<TcpStream>>| {
                 return request_handler(& shared_state, stream);
             };
@@ -132,10 +133,27 @@ fn main() -> std::io::Result<()> {
             };
 
             info!("Starting listener started on: {}:{}", addr.host, addr.port);
+            //one thread
             let _ = server(& addr, handler);
+            //needs multithreading
+            //set up a worker pool
+            //rest of threads deal with heartbeat
+            //DEAL WITH HEARTBEAT
         }
 
         CLIOperation::Claim(inputs) => {
+            let (ipstr, all_ipstr) = if inputs.print_v4 {(
+                get_matching_ipstr(
+                    & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
+                ),
+                get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None)
+            )} else {(
+                get_matching_ipstr(
+                    & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
+                ),
+                get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None)
+            )};
+
             let _payload = serialize(& Payload {
                 service_addr: Vec::new(),
                 service_port: inputs.port,
@@ -145,6 +163,38 @@ fn main() -> std::io::Result<()> {
                 key: inputs.key,
                 id: 0
             });
+            let stream = connect(& Addr{
+                host: & inputs.host, port: inputs.port
+            })?;
+            let stream_mut = Arc::new(Mutex::new(stream));
+            let ack = send(& stream_mut, & Message{
+                header: MessageHeader::CLAIM,
+                body: _payload
+            });
+            match ack {
+                Ok(m) => {
+                    trace!("Received response: {:?}", m);
+                    match m.header {
+                        MessageHeader::ACK => {
+                            info!("Server acknowledged CLAIM.")
+                        }
+                        _ => {
+                            warn!("Server responds with unexpected message: {:?}", m)
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Encountered error: {:?}", e);
+                }
+            }
+
+            let host = only_or_error(& ipstr);
+            let addr = Addr {
+                host: host,
+                port: inputs.bind_port
+            };
+            //needs to be heartbeat
+            let _ = server(& addr, heartbeat_handler);
         }
 
         CLIOperation::Publish(inputs) => {
@@ -203,6 +253,10 @@ fn main() -> std::io::Result<()> {
             };
 
             let _ = server(& addr, heartbeat_handler);
+            //pub;isher does not need to be multithreaded
+            //only listen
+            //transactions for setting up service should be set up once
+
         }
     }
 
