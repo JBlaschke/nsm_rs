@@ -1,5 +1,5 @@
-mod connection;
-use connection::stream_read;
+mod hb_connection;
+use hb_connection::stream_read;
 
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
