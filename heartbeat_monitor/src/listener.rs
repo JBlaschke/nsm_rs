@@ -23,8 +23,8 @@ fn listener(host: &str) -> std::io::Result<()>{
     
     let pool = ThreadPool::new(10); //change to any thread limit
     let deque = Arc::new(Mutex::new(VecDeque::new()));
+
     let deque_clone = Arc::clone(& deque);
-    
     let _ = thread::spawn(move|| {
 
         println!("Deque thread entered");
@@ -56,35 +56,34 @@ fn listener(host: &str) -> std::io::Result<()>{
     });
     
     let deque_clone = Arc::clone(& deque);
-
     loop {
 
-        //println!("Popping client from VecDeque");
+        // println!("Popping client from VecDeque");
         let popped_client = {
             let mut loc_deque = deque_clone.lock().unwrap();
             loc_deque.pop_front()
         };
 
-        let popped_client = match popped_client {
+        let mut popped_client = match popped_client {
             Some(client) => client,
             None => continue
         };
 
-        let deque_clone2 = Arc::clone(& deque_clone);
-
+        let deque_clone2 = Arc::clone(& deque);
         pool.execute(move || {
 
             //println!("Passing TCP connection to handler...");
-            let _ = handle_connection(popped_client.clone()).unwrap();
+            let _ = handle_connection(&mut popped_client);
             //println!("Connection handled");
 
             if popped_client.fail_count < 10 {
-                let deque_clone3 = Arc::clone(& deque_clone2);
-                //println!("Adding client back to VecDeque");
+                //println!("Adding client back to VecDeque: {:?}", popped_client.fail_count);
                 {
-                    let mut loc_deque = deque_clone3.lock().unwrap();
+                    let mut loc_deque = deque_clone2.lock().unwrap();
                     let _ = loc_deque.push_back(popped_client.clone());
                 }
+            } else {
+                println!("Dropping client")
             }
 
         });
@@ -93,7 +92,7 @@ fn listener(host: &str) -> std::io::Result<()>{
     Ok(())
 }
 
-fn handle_connection(mut cli: Client) -> std::io::Result<()>{
+fn handle_connection(cli: &mut Client) -> std::io::Result<()>{
     //println!("Starting heartbeat handler");
 
     let failure_duration = Duration::from_secs(10); //change to any failure limit
@@ -103,13 +102,19 @@ fn handle_connection(mut cli: Client) -> std::io::Result<()>{
 
     let received = match stream_read(loc_stream) {
         Ok(message) => message,
-        Err(err) => {return Err(err);}
+        Err(err) => {
+            println!("Failed to receive data from stream");
+            return Err(err);
+        }
     };
 
     if received == "" {
         cli.fail_count += 1;
-    }
-    else {    
+        // println!("Failed to receive HB. {:?}", cli.fail_count);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "HB Failed")
+        );
+    } else {    
         let ack = "Received message";
         cli.fail_count = 0;
         let _ = loc_stream.write(ack.as_bytes());
