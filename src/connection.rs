@@ -3,6 +3,9 @@ use std::net::{TcpListener, TcpStream};
 use std::fmt;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use threadpool::ThreadPool;
+use std::collections::VecDeque;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -93,6 +96,7 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
 
 //writes to stream with TCP object
 //looks at stream and reads answer back to make sure other side got message
+//maybe multithreaded
 pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
 
     let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -115,6 +119,7 @@ pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<
 }
 
 //receives data from stream and writes acknowledgment message
+//not multithreaded
 pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 
     let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -164,5 +169,81 @@ pub fn server(
             }
         }
     }
+    Ok(())
+}
+
+
+pub fn listen_server(
+    addr: &Addr, 
+    handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()>
+        + std::marker::Send + 'static
+) -> std::io::Result<()> {
+    trace!("Starting server process on: {:?}", addr);
+
+    let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
+    trace!("Bind to {:?} successful", addr);
+
+    let pool = ThreadPool::new(30);
+
+    trace!("Setting up VecDeque");
+    let deque = Arc::new(Mutex::new(VecDeque::new()));
+    let deque_clone = Arc::clone(& deque);
+
+    let _ = thread::spawn(move|| {
+        // accept connections and process them serially
+        for stream in listener.incoming() {
+            info!("Request received on {:?}, processing...", stream);
+            match stream {
+                Ok(stream) => {
+                    trace!("Passing TCP connection to handler...");
+                    //mutex avoids race conditions
+                    let shared_stream = Arc::new(Mutex::new(stream)); //multiple servers can listen in the same place
+                    {
+                        let mut loc_deque = deque_clone.lock().unwrap();
+                        let _ = loc_deque.push_back(shared_stream);
+                    }  
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
+        }
+    });
+
+    let deque_clone = Arc::clone(& deque);
+    let dyn_handler = Arc::new(Mutex::new(handler));
+
+    //set up heartbeat handler here
+    loop {
+
+        let popped_client = {
+            let mut loc_deque = deque_clone.lock().unwrap();
+            loc_deque.pop_front()
+        };
+
+        let popped_client = match popped_client {
+            Some(client) => client,
+            None => continue
+        };
+
+        let deque_clone2 = Arc::clone(& deque_clone);
+        let handler_clone = Arc::clone(& dyn_handler);
+
+        pool.execute(move || {
+            
+            let mut handler = handler_clone.lock().unwrap();
+            let _ = handler(& popped_client.clone()).unwrap();
+
+            //if popped_client.fail_count < 10 {
+                let deque_clone3 = Arc::clone(& deque_clone2);
+                {
+                    let mut loc_deque = deque_clone3.lock().unwrap();
+                    let _ = loc_deque.push_back(popped_client.clone());
+                }
+            //}
+
+        });
+    }
+
     Ok(())
 }

@@ -2,7 +2,7 @@ mod network;
 use network::{get_local_ips, get_matching_ipstr};
 
 mod connection;
-use connection::{Message, MessageHeader, connect, Addr, server, send};
+use connection::{Message, MessageHeader, connect, Addr, server, send, listen_server};
 
 mod service;
 use service::{Payload, State, serialize, request_handler, heartbeat_handler};
@@ -123,7 +123,7 @@ fn main() -> std::io::Result<()> {
             let shared_state = Arc::new(Mutex::new(state));
             
             //create closure around shared state
-            let handler =  |stream: &Arc<Mutex<TcpStream>>| {
+            let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
                 return request_handler(& shared_state, stream);
             };
 
@@ -134,7 +134,7 @@ fn main() -> std::io::Result<()> {
 
             info!("Starting listener started on: {}:{}", addr.host, addr.port);
             //one thread
-            let _ = server(& addr, handler);
+            let _ = listen_server(& addr, handler);
             //needs multithreading
             //set up a worker pool
             //rest of threads deal with heartbeat
@@ -253,7 +253,7 @@ fn main() -> std::io::Result<()> {
             };
 
             let _ = server(& addr, heartbeat_handler);
-            //pub;isher does not need to be multithreaded
+            //publisher does not need to be multithreaded
             //only listen
             //transactions for setting up service should be set up once
 

@@ -1,5 +1,5 @@
-mod connection;
-use connection::stream_read;
+mod hb_connection;
+use hb_connection::stream_read;
 
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -107,6 +107,7 @@ fn handle_connection(mut cli: Client) -> std::io::Result<()>{
     };
 
     if received == "" {
+        println!("Increasing failcount")
         cli.fail_count += 1;
     }
     else {    
