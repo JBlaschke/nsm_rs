@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 threadpool = "1.8"
+rand = "0.8"
 
 [[bin]]
 name = "heartbeats"

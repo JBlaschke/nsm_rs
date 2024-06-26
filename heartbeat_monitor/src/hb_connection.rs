@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{self, Read};
 use std::net::TcpStream;
 
 pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
@@ -9,6 +9,7 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
 
         let bytes_read = match stream.read(&mut buf) {
             Ok(n) => n,
+            // Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => 0,
             Err(err) => { return Err(err); }
         };
         let s = std::str::from_utf8(&buf[..bytes_read]).unwrap();

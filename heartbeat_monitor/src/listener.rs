@@ -3,11 +3,12 @@ use hb_connection::stream_read;
 
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
-use std::io::Write;
-use std::thread;
+use std::io::{self, Write};
+use std::{thread, time};
 use std::time::Duration;
 use threadpool::ThreadPool;
 use std::collections::VecDeque;
+
 use std::env;
 
 #[derive(Clone)]
@@ -23,8 +24,8 @@ fn listener(host: &str) -> std::io::Result<()>{
     
     let pool = ThreadPool::new(10); //change to any thread limit
     let deque = Arc::new(Mutex::new(VecDeque::new()));
-
     let deque_clone = Arc::clone(& deque);
+
     let _ = thread::spawn(move|| {
 
         println!("Deque thread entered");
@@ -36,10 +37,23 @@ fn listener(host: &str) -> std::io::Result<()>{
                 Ok(stream) => {
 
                     let shared_stream = Arc::new(Mutex::new(stream));
+                    let loc_stream: &mut TcpStream = &mut *shared_stream.lock().unwrap();
+                    let bind_port = match stream_read(loc_stream) {
+                        Ok(message) => message,
+                        Err(err) => err.to_string()
+                    };
+                    println!("Attempting to connect to: {}", bind_port);
+                    let hb_stream = TcpStream::connect(bind_port).unwrap();
+                    println!("Connection successful");
+
+                    let _ = loc_stream.write(b"Connected to bind_port");
+
+                    let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
                     let client = Client {
-                        conn: shared_stream,
+                        conn: shared_hb_stream,
                         fail_count: 0
                     };
+
                     println!("Adding new connection to queue");
                     {
                         let mut loc_deque = deque_clone.lock().unwrap();
@@ -58,7 +72,7 @@ fn listener(host: &str) -> std::io::Result<()>{
     let deque_clone = Arc::clone(& deque);
     loop {
 
-        // println!("Popping client from VecDeque");
+        //println!("Popping client from VecDeque");
         let popped_client = {
             let mut loc_deque = deque_clone.lock().unwrap();
             loc_deque.pop_front()
@@ -87,6 +101,7 @@ fn listener(host: &str) -> std::io::Result<()>{
             }
 
         });
+        thread::sleep(time::Duration::from_secs(1)); //change to any rate
     }
 
     Ok(())
@@ -95,31 +110,48 @@ fn listener(host: &str) -> std::io::Result<()>{
 fn handle_connection(cli: &mut Client) -> std::io::Result<()>{
     //println!("Starting heartbeat handler");
 
-    let failure_duration = Duration::from_secs(10); //change to any failure limit
-
-    let loc_stream: &mut TcpStream = &mut *cli.conn.lock().unwrap();
-    loc_stream.set_read_timeout(Some(failure_duration))?;
-
-    let received = match stream_read(loc_stream) {
-        Ok(message) => message,
+    let mut loc_stream = match cli.conn.lock() {
+        Ok(guard) => guard,
         Err(err) => {
-            println!("Failed to receive data from stream");
-            return Err(err);
+            cli.fail_count += 1;
+            return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
         }
     };
 
+    // let loc_stream: &mut TcpStream = &mut *cli.conn.lock().unwrap();
+
+    let hb_msg = "lub";
+    println!("Writing to stream: {}", hb_msg);
+    let _ = loc_stream.write(hb_msg.as_bytes());
+    println!("Message sent");
+
+    let failure_duration = Duration::from_secs(3); //change to any failure limit
+    match loc_stream.set_read_timeout(Some(failure_duration)) {
+        Ok(x) => println!("set_read_timeout OK"),
+        Err(e) => println!("set_read_timeout Error")
+    }
+
+    let received = match stream_read(&mut loc_stream) {
+        Ok(message) => message,
+        Err(err) => {
+            println!("Failed to receive data from stream");
+            cli.fail_count += 1;
+            println!("Failed to receive HB. {:?}", cli.fail_count);
+            return Err(err);
+        }
+    };
+    //println!("Message received");
+
     if received == "" {
-        println!("Increasing failcount")
+        //println!("Increasing failcount");
         cli.fail_count += 1;
-        // println!("Failed to receive HB. {:?}", cli.fail_count);
+        println!("Failed to receive HB. {:?}", cli.fail_count);
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "HB Failed")
         );
     } else {    
-        let ack = "Received message";
         cli.fail_count = 0;
-        let _ = loc_stream.write(ack.as_bytes());
-        println!("{}", received);
+        println!("Resetting failcount. {}", cli.fail_count);
     }
 
     Ok(())
