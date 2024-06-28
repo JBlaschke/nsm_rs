@@ -2,7 +2,7 @@ mod network;
 use network::{get_local_ips, get_matching_ipstr};
 
 mod connection;
-use connection::{Message, MessageHeader, connect, Addr, server, send, listen_server};
+use connection::{Message, MessageHeader, connect, Addr, server, send};
 
 mod service;
 use service::{Payload, State, serialize, request_handler, heartbeat_handler};
@@ -15,6 +15,9 @@ use cli::{init, parse, CLIOperation};
 
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use threadpool::ThreadPool;
+use std::collections::VecDeque;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -121,20 +124,27 @@ fn main() -> std::io::Result<()> {
 
             let state: State = State::new();
             let shared_state = Arc::new(Mutex::new(state));
+
+            let pool = ThreadPool::new(30);
+            let deque = Arc::new(Mutex::new(VecDeque::new()));
             
             //create closure around shared state
             let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
-                return request_handler(& shared_state, stream);
+                return request_handler(& shared_state, &pool, &deque, stream);
             };
 
             let addr = Addr {
-                host: host,
+                host: host.to_string(),
                 port: inputs.bind_port
             };
 
             info!("Starting listener started on: {}:{}", addr.host, addr.port);
             //one thread
-            let _ = listen_server(& addr, handler);
+            let queuer = thread::spawn(move|| {
+                trace!("entered thread");
+                let _ = server(& addr, handler);
+            });
+            queuer.join().unwrap();
             //needs multithreading
             //set up a worker pool
             //rest of threads deal with heartbeat
@@ -164,7 +174,7 @@ fn main() -> std::io::Result<()> {
                 id: 0
             });
             let stream = connect(& Addr{
-                host: & inputs.host, port: inputs.port
+                host: inputs.host, port: inputs.port
             })?;
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
@@ -190,7 +200,7 @@ fn main() -> std::io::Result<()> {
 
             let host = only_or_error(& ipstr);
             let addr = Addr {
-                host: host,
+                host: host.to_string(),
                 port: inputs.bind_port
             };
             //needs to be heartbeat
@@ -221,7 +231,7 @@ fn main() -> std::io::Result<()> {
             });
 
             let stream = connect(& Addr{
-                host: & inputs.host, port: inputs.port
+                host: inputs.host, port: inputs.port
             })?;
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
@@ -248,7 +258,7 @@ fn main() -> std::io::Result<()> {
 
             let host = only_or_error(& ipstr);
             let addr = Addr {
-                host: host,
+                host: host.to_string(),
                 port: inputs.bind_port
             };
 
