@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::io::Read;
 use std::net::TcpStream;
 
 pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{

@@ -17,6 +17,72 @@ pub struct Client{
     pub fail_count: i32
 }
 
+pub trait Event {
+    fn monitor(&mut self) -> std::io::Result<()>;
+}
+
+#[derive(Clone)]
+pub struct Heartbeat {
+    pub stream: Arc<Mutex<TcpStream>>,
+    pub fail_count: i32
+}
+
+impl Event for Heartbeat {
+    fn monitor(&mut self) -> std::io::Result<()>{
+        //println!("Starting heartbeat handler");
+
+        let mut loc_stream = match self.stream.lock() {
+            Ok(guard) => guard,
+            Err(_err) => {
+                self.fail_count += 1;
+                return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
+            }
+        };
+
+        let hb_msg = "lub";
+        println!("Writing to stream: {}", hb_msg);
+        let _ = loc_stream.write(hb_msg.as_bytes());
+        println!("Message sent");
+
+        let failure_duration = Duration::from_secs(3); //change to any failure limit
+        match loc_stream.set_read_timeout(Some(failure_duration)) {
+            Ok(_x) => println!("set_read_timeout OK"),
+            Err(_e) => println!("set_read_timeout Error")
+        }
+
+        let received = match stream_read(&mut loc_stream) {
+            Ok(message) => message,
+            Err(err) => {
+                println!("Failed to receive data from stream");
+                self.fail_count += 1;
+                println!("Failed to receive HB. {:?}", self.fail_count);
+                return Err(err);
+            }
+        };
+        //println!("Message received");
+
+        if received == "" {
+            //println!("Increasing failcount");
+            self.fail_count += 1;
+            println!("Failed to receive HB. {:?}", self.fail_count);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput, "HB Failed")
+            );
+        } else {    
+            self.fail_count = 0;
+            println!("Resetting failcount. {}", self.fail_count);
+        }
+
+        Ok(())
+    }
+}
+
+pub fn event_monitor(event: &mut dyn Event) -> std::io::Result<()>{
+    event.monitor();
+    Ok(())
+}
+
+
 fn listener(host: &str) -> std::io::Result<()>{
 
     let listener = TcpListener::bind(host).unwrap();
@@ -49,15 +115,15 @@ fn listener(host: &str) -> std::io::Result<()>{
                     let _ = loc_stream.write(b"Connected to bind_port");
 
                     let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
-                    let client = Client {
-                        conn: shared_hb_stream,
+                    let heartbeat = Heartbeat {
+                        stream: shared_hb_stream,
                         fail_count: 0
                     };
 
                     println!("Adding new connection to queue");
                     {
                         let mut loc_deque = deque_clone.lock().unwrap();
-                        let _ = loc_deque.push_back(client);
+                        let _ = loc_deque.push_back(heartbeat);
                     }
 
                 }
@@ -87,7 +153,7 @@ fn listener(host: &str) -> std::io::Result<()>{
         pool.execute(move || {
 
             //println!("Passing TCP connection to handler...");
-            let _ = handle_connection(&mut popped_client);
+            let _ = event_monitor(&mut popped_client);
             //println!("Connection handled");
 
             if popped_client.fail_count < 10 {
@@ -112,7 +178,7 @@ fn handle_connection(cli: &mut Client) -> std::io::Result<()>{
 
     let mut loc_stream = match cli.conn.lock() {
         Ok(guard) => guard,
-        Err(err) => {
+        Err(_err) => {
             cli.fail_count += 1;
             return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
         }
@@ -127,8 +193,8 @@ fn handle_connection(cli: &mut Client) -> std::io::Result<()>{
 
     let failure_duration = Duration::from_secs(3); //change to any failure limit
     match loc_stream.set_read_timeout(Some(failure_duration)) {
-        Ok(x) => println!("set_read_timeout OK"),
-        Err(e) => println!("set_read_timeout Error")
+        Ok(_x) => println!("set_read_timeout OK"),
+        Err(_e) => println!("set_read_timeout Error")
     }
 
     let received = match stream_read(&mut loc_stream) {

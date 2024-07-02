@@ -15,9 +15,6 @@ use cli::{init, parse, CLIOperation};
 
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use threadpool::ThreadPool;
-use std::collections::VecDeque;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -124,32 +121,22 @@ fn main() -> std::io::Result<()> {
 
             let state: State = State::new();
             let shared_state = Arc::new(Mutex::new(state));
-
-            let pool = ThreadPool::new(30);
-            let deque = Arc::new(Mutex::new(VecDeque::new()));
             
             //create closure around shared state
             let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
-                return request_handler(& shared_state, &pool, &deque, stream);
+                return request_handler(& shared_state, stream);
             };
 
             let addr = Addr {
-                host: host.to_string(),
+                host: host,
                 port: inputs.bind_port
             };
 
             info!("Starting listener started on: {}:{}", addr.host, addr.port);
-            //one thread
-            let queuer = thread::spawn(move|| {
-                trace!("entered thread");
-                let _ = server(& addr, handler);
-            });
-            queuer.join().unwrap();
-            //needs multithreading
-            //set up a worker pool
-            //rest of threads deal with heartbeat
-            //DEAL WITH HEARTBEAT
-        }
+
+            let _ = server(& addr, handler);
+            
+            }
 
         CLIOperation::Claim(inputs) => {
             let (ipstr, all_ipstr) = if inputs.print_v4 {(
@@ -165,7 +152,7 @@ fn main() -> std::io::Result<()> {
             )};
 
             let _payload = serialize(& Payload {
-                service_addr: Vec::new(),
+                service_addr: ipstr.clone(),
                 service_port: inputs.port,
                 service_claim: epoch(),
                 interface_addr: Vec::new(),
@@ -173,8 +160,9 @@ fn main() -> std::io::Result<()> {
                 key: inputs.key,
                 id: 0
             });
+            println!("attempting to connect to host");
             let stream = connect(& Addr{
-                host: inputs.host, port: inputs.port
+                host: & inputs.host, port: inputs.port
             })?;
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
@@ -200,7 +188,7 @@ fn main() -> std::io::Result<()> {
 
             let host = only_or_error(& ipstr);
             let addr = Addr {
-                host: host.to_string(),
+                host: host,
                 port: inputs.bind_port
             };
             //needs to be heartbeat
@@ -231,7 +219,7 @@ fn main() -> std::io::Result<()> {
             });
 
             let stream = connect(& Addr{
-                host: inputs.host, port: inputs.port
+                host: & inputs.host, port: inputs.port
             })?;
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
@@ -258,7 +246,7 @@ fn main() -> std::io::Result<()> {
 
             let host = only_or_error(& ipstr);
             let addr = Addr {
-                host: host.to_string(),
+                host: host,
                 port: inputs.bind_port
             };
 
