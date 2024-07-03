@@ -167,61 +167,61 @@ fn listener(host: &str) -> std::io::Result<()>{
             }
 
         });
-        thread::sleep(time::Duration::from_secs(1)); //change to any rate
+        thread::sleep(time::Duration::from_secs(2)); //change to any rate
     }
 
     Ok(())
 }
 
-fn handle_connection(cli: &mut Client) -> std::io::Result<()>{
-    //println!("Starting heartbeat handler");
+// fn handle_connection(cli: &mut Client) -> std::io::Result<()>{
+//     //println!("Starting heartbeat handler");
 
-    let mut loc_stream = match cli.conn.lock() {
-        Ok(guard) => guard,
-        Err(_err) => {
-            cli.fail_count += 1;
-            return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
-        }
-    };
+//     let mut loc_stream = match cli.conn.lock() {
+//         Ok(guard) => guard,
+//         Err(_err) => {
+//             cli.fail_count += 1;
+//             return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
+//         }
+//     };
 
-    // let loc_stream: &mut TcpStream = &mut *cli.conn.lock().unwrap();
+//     // let loc_stream: &mut TcpStream = &mut *cli.conn.lock().unwrap();
 
-    let hb_msg = "lub";
-    println!("Writing to stream: {}", hb_msg);
-    let _ = loc_stream.write(hb_msg.as_bytes());
-    println!("Message sent");
+//     let hb_msg = "lub";
+//     println!("Writing to stream: {}", hb_msg);
+//     let _ = loc_stream.write(hb_msg.as_bytes());
+//     println!("Message sent");
 
-    let failure_duration = Duration::from_secs(3); //change to any failure limit
-    match loc_stream.set_read_timeout(Some(failure_duration)) {
-        Ok(_x) => println!("set_read_timeout OK"),
-        Err(_e) => println!("set_read_timeout Error")
-    }
+//     let failure_duration = Duration::from_secs(3); //change to any failure limit
+//     match loc_stream.set_read_timeout(Some(failure_duration)) {
+//         Ok(_x) => println!("set_read_timeout OK"),
+//         Err(_e) => println!("set_read_timeout Error")
+//     }
 
-    let received = match stream_read(&mut loc_stream) {
-        Ok(message) => message,
-        Err(err) => {
-            println!("Failed to receive data from stream");
-            cli.fail_count += 1;
-            println!("Failed to receive HB. {:?}", cli.fail_count);
-            return Err(err);
-        }
-    };
-    //println!("Message received");
+//     let received = match stream_read(&mut loc_stream) {
+//         Ok(message) => message,
+//         Err(err) => {
+//             println!("Failed to receive data from stream");
+//             cli.fail_count += 1;
+//             println!("Failed to receive HB. {:?}", cli.fail_count);
+//             return Err(err);
+//         }
+//     };
+//     //println!("Message received");
 
-    if received == "" {
-        //println!("Increasing failcount");
-        cli.fail_count += 1;
-        println!("Failed to receive HB. {:?}", cli.fail_count);
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput, "HB Failed")
-        );
-    } else {    
-        cli.fail_count = 0;
-        println!("Resetting failcount. {}", cli.fail_count);
-    }
+//     if received == "" {
+//         //println!("Increasing failcount");
+//         cli.fail_count += 1;
+//         println!("Failed to receive HB. {:?}", cli.fail_count);
+//         return Err(std::io::Error::new(
+//             std::io::ErrorKind::InvalidInput, "HB Failed")
+//         );
+//     } else {    
+//         cli.fail_count = 0;
+//         println!("Resetting failcount. {}", cli.fail_count);
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 
 fn main() {

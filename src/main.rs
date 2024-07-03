@@ -122,7 +122,6 @@ fn main() -> std::io::Result<()> {
             let state: State = State::new();
             let shared_state = Arc::new(Mutex::new(state));
             
-            //create closure around shared state
             let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
                 return request_handler(& shared_state, stream);
             };
@@ -191,7 +190,6 @@ fn main() -> std::io::Result<()> {
                 host: host,
                 port: inputs.bind_port
             };
-            //needs to be heartbeat
             let _ = server(& addr, heartbeat_handler);
         }
 
@@ -226,6 +224,7 @@ fn main() -> std::io::Result<()> {
                 header: MessageHeader::PUB,
                 body: payload
             });
+            drop(stream_mut);
 
             match ack {
                 Ok(m) => {
@@ -249,11 +248,8 @@ fn main() -> std::io::Result<()> {
                 host: host,
                 port: inputs.bind_port
             };
-
+                        
             let _ = server(& addr, heartbeat_handler);
-            //publisher does not need to be multithreaded
-            //only listen
-            //transactions for setting up service should be set up once
 
         }
     }

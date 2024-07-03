@@ -68,7 +68,7 @@ impl Event for Heartbeat {
             body: "".to_string()
         }));
     
-        let failure_duration = Duration::from_secs(3); //change to any failure limit
+        let failure_duration = Duration::from_secs(6); //change to any failure limit
         match loc_stream.set_read_timeout(Some(failure_duration)) {
             Ok(_x) => println!("set_read_timeout OK"),
             Err(_e) => println!("set_read_timeout Error")
@@ -108,7 +108,7 @@ pub struct State {
     pub pool: ThreadPool,
     pub timeout: u64, 
     pub seq: u64,
-    pub life: bool,
+    // pub life: bool,
     pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>
 }
 
@@ -121,7 +121,7 @@ impl State {
             pool: ThreadPool::new(30),
             timeout: 60,
             seq: 1,
-            life: true,
+            // life: true,
             deque: Arc::new(Mutex::new(VecDeque::new()))
         }
     }
@@ -213,7 +213,7 @@ impl State {
                             let _ = loc_deque.push_back(event);
                         }
                     } else {
-                        println!("Dropping tracker");
+                        trace!("Dropping event");
                     }
                 }
     
