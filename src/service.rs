@@ -15,11 +15,11 @@ use log::{debug, error, info, trace, warn};
 
 use crate::utils::{only_or_error, epoch};
 use crate::connection::{
-    MessageHeader, Message, send, receive, stream_read, stream_write, serialize_message
+    MessageHeader, Message, send, receive, stream_read, stream_write, serialize_message, deserialize_message
 };
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Payload {
     pub service_addr: Vec<String>,
     pub service_port: i32,
@@ -77,9 +77,8 @@ impl Event for Heartbeat {
         let received = match stream_read(&mut loc_stream) {
             Ok(message) => message,
             Err(err) => {
-                println!("Failed to receive data from stream");
                 self.fail_count += 1;
-                println!("Failed to receive HB. {:?}", self.fail_count);
+                println!("Failed to receive data from stream. {:?}", self.fail_count);
                 return Err(err);
             }
         };
@@ -87,13 +86,13 @@ impl Event for Heartbeat {
         if received == "" {
             //println!("Increasing failcount");
             self.fail_count += 1;
-            println!("Failed to receive HB. {:?}", self.fail_count);
+            trace!("Failed to receive HB. {:?}", self.fail_count);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput, "HB Failed")
             );
         } else {    
             self.fail_count = 0;
-            println!("Resetting failcount. {}", self.fail_count);
+            trace!("Resetting failcount. {}", self.fail_count);
         }
     
         sleep(Duration::from_millis(2000));
@@ -102,14 +101,15 @@ impl Event for Heartbeat {
     }
 }
 
+#[derive(Clone)]
 pub struct State {
     pub clients: HashMap<u64, Vec<Payload>>,
     pub claims: HashMap<u64, Vec<Payload>>,
     pub pool: ThreadPool,
     pub timeout: u64, 
     pub seq: u64,
-    // pub life: bool,
-    pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>
+    pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>,
+    pub life: Arc<Mutex<bool>>,
 }
 
 
@@ -121,9 +121,17 @@ impl State {
             pool: ThreadPool::new(30),
             timeout: 60,
             seq: 1,
-            // life: true,
-            deque: Arc::new(Mutex::new(VecDeque::new()))
+            deque: Arc::new(Mutex::new(VecDeque::new())),
+            life: Arc::new(Mutex::new(true)),
         }
+    }
+
+    pub fn stop_event(&self) {
+        *self.life.lock().unwrap() = false;
+    }
+
+    pub fn start_event(&self) {
+        *self.life.lock().unwrap() = true;
     }
 
     pub fn add(&mut self, mut p: Payload) {
@@ -131,7 +139,8 @@ impl State {
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
 
-        info!("Listener connecting to: {}", bind_address);
+        trace!("Listener connecting to: {}", bind_address);
+        sleep(Duration::from_millis(1000));
         let hb_stream = TcpStream::connect(bind_address).unwrap();
         let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
 
@@ -140,7 +149,7 @@ impl State {
             stream: shared_hb_stream,
             fail_count: 0
         };
-        println!("Adding new connection to queue");
+        trace!("Adding new connection to queue");
         {
             let mut loc_deque = self.deque.lock().unwrap();
             let _ = loc_deque.push_back(Box::new(heartbeat));
@@ -185,7 +194,10 @@ impl State {
 
         trace!("Starting event monitor");
         let deque_clone = Arc::clone(& self.deque);
-        loop {
+        let life = Arc::clone(&self.life);
+        self.start_event();
+
+        while *life.lock().unwrap() {
     
             //println!("Popping tracker from VecDeque");
             let event = {
@@ -199,21 +211,24 @@ impl State {
             };
 
             let deque_clone2 = Arc::clone(& self.deque);
+            let self_clone = self.clone();
             self.pool.execute(move || {
     
-                println!("Passing event to event monitor...");
+                trace!("Passing event to event monitor...");
                 let _ = event.monitor();
                 //println!("Connection handled");
 
                 if let Some(hb) = event.as_any().downcast_ref::<Heartbeat>() {
                     if hb.fail_count < 10 {
-                        println!("Adding client back to VecDeque: {:?}", hb.fail_count);
+                        trace!("Adding client back to VecDeque: {:?}", hb.fail_count);
                         {
                             let mut loc_deque = deque_clone2.lock().unwrap();
                             let _ = loc_deque.push_back(event);
                         }
                     } else {
-                        trace!("Dropping event");
+                        info!("Dropping event");
+                        self_clone.stop_event();
+                        return;
                     }
                 }
     
@@ -262,7 +277,10 @@ pub fn request_handler(
             println!("Now state:");
             state_loc.print();
 
-            state_loc.event_monitor();
+            let _ = match state_loc.event_monitor(){
+                Ok(()) => println!("exited event monitor"),
+                Err(_) => println!("error")
+            };
         },
         MessageHeader::CLAIM => {
             info!("Claiming Service: {:?}", payload);
@@ -278,7 +296,6 @@ pub fn request_handler(
         }
         _ => {panic!("This should not be reached!");}
     }
-
     Ok(())
 }
 
@@ -286,11 +303,14 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()>
     trace!("Starting heartbeat handler");
 
     loop{
-        let request = match receive(stream) {
-            Ok(message) => message,
-            Err(err) => return Err(err)
+        let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+
+        let request = match stream_read(loc_stream) {
+            Ok(message) => deserialize_message(& message),
+            Err(err) => {return Err(err);}
         };
-        println!("{:?}", request);
+
+        trace!("{:?}", request);
         if ! matches!(request.header, MessageHeader::HB) {
             warn!(
                 "Non-heartbeat request sent to heartbeat_handler: {}",
@@ -298,8 +318,11 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()>
             );
             info!("Dropping non-heartbeat request");
         } else {
-            info!("Heartbeat handler received {:?}", request);
-            send(stream, & Message{header: MessageHeader::HB, body: request.body})?;
+            trace!("Heartbeat handler received {:?}", request);
+            let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                header: MessageHeader::HB,
+                body: request.body
+            }));
             trace!("Heartbeat handler has returned heartbeat request");
         }
         sleep(Duration::from_millis(2000));

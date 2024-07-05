@@ -45,11 +45,11 @@ fn heartbeats(host: &str, bind_port: &str) -> std::io::Result<()> {
 
                     println!("Heartbeat received: {}", received);
 
-                    let n: u32 = rng.gen_range(0..2);
-                    if n == 1{
+                    //let n: u32 = rng.gen_range(0..2);
+                    //if n == 1{
                         println!("Acknowledging heartbeat");
                         let _ = loc_stream.write(received.as_bytes());
-                    }
+                    //}
 
                 }
             }

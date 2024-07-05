@@ -4,9 +4,6 @@ use std::fmt;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::os::unix::io::AsRawFd;
-use std::os::unix::prelude::RawFd;
-use nix::sys::socket::{setsockopt, sockopt};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -62,6 +59,7 @@ pub fn deserialize_message(payload: & String) -> Message {
 
 pub fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
     println!("Trying to connect");
+
     TcpStream::connect(format!("{}:{}", addr.host, addr.port))
 }
 
@@ -148,16 +146,12 @@ pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 
 pub fn server(
     addr: &Addr, 
-    mut handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static
+    handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
 ) -> std::io::Result<()> {
     trace!("Starting server process on: {:?}", addr);
 
     let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
     trace!("Bind to {:?} successful", addr);
-    let fd: RawFd = listener.as_raw_fd();
-    setsockopt(fd, sockopt::ReuseAddr, &true)?;
-
-    let shared_handler = Arc::new(Mutex::new(handler));
 
     // accept connections and process them serially
     for stream in listener.incoming() {
@@ -166,12 +160,10 @@ pub fn server(
             Ok(stream) => {
                 trace!("Passing TCP connection to handler...");
                 //mutex avoids race conditions
-                let handler_clone = Arc::clone(& shared_handler);
+                let mut handler_clone = handler.clone();
                 let shared_stream = Arc::new(Mutex::new(stream)); //multiple servers can listen in the same place
-                thread::spawn(move || { 
-                    println!("entered thread");
-                    let mut loc_handler = handler_clone.lock().unwrap();
-                    let _ = loc_handler(& shared_stream); 
+                let _thread_handler = thread::spawn(move || { 
+                    let _ = handler_clone(& shared_stream); 
                 });
             }
             Err(e) => {
