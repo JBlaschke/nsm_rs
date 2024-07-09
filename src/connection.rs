@@ -9,8 +9,8 @@ use std::thread;
 use log::{debug, error, info, trace, warn};
 
 #[derive(Debug)]
-pub struct Addr<'a> {
-    pub host: &'a String,
+pub struct Addr {
+    pub host: String,
     pub port: i32
 }
 
@@ -146,30 +146,30 @@ pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 
 pub fn server(
     addr: &Addr, 
-    handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
+    mut handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
 ) -> std::io::Result<()> {
     trace!("Starting server process on: {:?}", addr);
 
     let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
     trace!("Bind to {:?} successful", addr);
 
-    // accept connections and process them serially
-    for stream in listener.incoming() {
-        info!("Request received on {:?}, processing...", stream);
-        match stream {
-            Ok(stream) => {
-                trace!("Passing TCP connection to handler...");
-                //mutex avoids race conditions
-                let mut handler_clone = handler.clone();
-                let shared_stream = Arc::new(Mutex::new(stream)); //multiple servers can listen in the same place
-                let _thread_handler = thread::spawn(move || { 
-                    let _ = handler_clone(& shared_stream); 
-                });
-            }
-            Err(e) => {
-                println!("Error: {}", e);
+    //let thread_handler = thread::spawn(move || {
+        // accept connections and process them serially
+        for stream in listener.incoming() {
+            info!("Request received on {:?}, processing...", stream);
+            match stream {
+                Ok(stream) => {
+                    trace!("Passing TCP connection to handler...");
+                    //mutex avoids race conditions
+                    let shared_stream = Arc::new(Mutex::new(stream)); //multiple servers can listen in the same place
+                    let _ = handler(& shared_stream); 
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
             }
         }
-    }
+    //});
+    //thread_handler.join().unwrap();
     Ok(())
 }

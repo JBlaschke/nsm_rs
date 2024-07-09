@@ -5,7 +5,7 @@ mod connection;
 use connection::{Message, MessageHeader, connect, Addr, server, send};
 
 mod service;
-use service::{Payload, State, serialize, request_handler, heartbeat_handler};
+use service::{Payload, State, serialize, request_handler, heartbeat_handler, event_monitor};
 
 mod utils;
 use utils::{only_or_error, epoch};
@@ -14,7 +14,8 @@ mod cli;
 use cli::{init, parse, CLIOperation};
 
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Condvar};
+use std::thread;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -119,26 +120,36 @@ fn main() -> std::io::Result<()> {
             };
             let host = only_or_error(& ipstr);
 
-            let state: State = State::new();
-            let shared_state = Arc::new(Mutex::new(state));
-            
+            let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+            let state_clone = Arc::clone(& state);
+
             let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
-                return request_handler(& shared_state, stream);
+                return request_handler(& state_clone, stream);
             };
 
             let addr = Addr {
-                host: host,
+                host: host.to_string(),
                 port: inputs.bind_port
             };
 
-            info!("Starting listener started on: {}:{}", addr.host, addr.port);
+            info!("Starting listener started on: {}:{}", & addr.host, addr.port);
 
-            let _ = server(& addr, handler);
+            let thread_handler = thread::spawn(move || {
+                let _ = server(& addr, handler);
+            });
+
+            println!("moving to loop");
+
+            let _ = match event_monitor(state){
+                Ok(()) => println!("exited event monitor"),
+                Err(_) => println!("error")
+            };
             
+            thread_handler.join().unwrap();
             }
 
         CLIOperation::Claim(inputs) => {
-            let (ipstr, all_ipstr) = if inputs.print_v4 {(
+            let (ipstr, _all_ipstr) = if inputs.print_v4 {(
                 get_matching_ipstr(
                     & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
                 ),
@@ -161,7 +172,7 @@ fn main() -> std::io::Result<()> {
             });
             println!("attempting to connect to host");
             let stream = connect(& Addr{
-                host: & inputs.host, port: inputs.port
+                host: inputs.host, port: inputs.port
             })?;
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
@@ -187,7 +198,7 @@ fn main() -> std::io::Result<()> {
 
             let host = only_or_error(& ipstr);
             let addr = Addr {
-                host: host,
+                host: host.to_string(),
                 port: inputs.bind_port
             };
             let _ = server(& addr, heartbeat_handler);
@@ -217,14 +228,13 @@ fn main() -> std::io::Result<()> {
             });
 
             let stream = connect(& Addr{
-                host: & inputs.host, port: inputs.port
+                host: inputs.host, port: inputs.port
             })?;
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
                 header: MessageHeader::PUB,
                 body: payload
             });
-            drop(stream_mut);
 
             match ack {
                 Ok(m) => {
@@ -245,7 +255,7 @@ fn main() -> std::io::Result<()> {
 
             let host = only_or_error(& ipstr);
             let addr = Addr {
-                host: host,
+                host: host.to_string(),
                 port: inputs.bind_port
             };
                         
