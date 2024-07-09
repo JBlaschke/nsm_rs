@@ -15,7 +15,7 @@ use log::{debug, error, info, trace, warn};
 
 use crate::utils::{only_or_error, epoch};
 use crate::connection::{
-    MessageHeader, Message, send, receive, stream_read, stream_write, serialize_message, deserialize_message
+    MessageHeader, Message, receive, stream_read, stream_write, serialize_message, deserialize_message
 };
 
 
@@ -101,6 +101,59 @@ impl Event for Heartbeat {
     }
 }
 
+pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
+
+    trace!("Starting event monitor");
+
+    let deque_clone = {
+        let mut state_loc = state.lock().unwrap();
+        Arc::clone(& state_loc.deque)
+    };
+    // let life = Arc::clone(&self.life);
+    // self.start_event();
+
+    // while *life.lock().unwrap() {
+    loop {
+
+        //println!("Popping tracker from VecDeque");
+        let event = {
+            let mut loc_deque = deque_clone.lock().unwrap();
+            loc_deque.pop_front()
+        };
+
+        let mut event = match event {
+            Some(tracker) => tracker,
+            None => continue
+        };
+
+        let deque_clone2 = Arc::clone(& deque_clone);
+        //let self_clone = state_loc.clone();
+        let mut state_loc = state.lock().unwrap();
+        state_loc.pool.execute(move || {
+
+            trace!("Passing event to event monitor...");
+            let _ = event.monitor();
+            //println!("Connection handled");
+
+            if let Some(hb) = event.as_any().downcast_ref::<Heartbeat>() {
+                if hb.fail_count < 10 {
+                    trace!("Adding client back to VecDeque: {:?}", hb.fail_count);
+                    {
+                        let mut loc_deque = deque_clone2.lock().unwrap();
+                        let _ = loc_deque.push_back(event);
+                    }
+                } else {
+                    info!("Dropping event");
+                    // self_clone.stop_event();
+                    // return;
+                }
+            }
+
+        });
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct State {
     pub clients: HashMap<u64, Vec<Payload>>,
@@ -109,7 +162,7 @@ pub struct State {
     pub timeout: u64, 
     pub seq: u64,
     pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>,
-    pub life: Arc<Mutex<bool>>,
+    // pub life: Arc<Mutex<bool>>,
 }
 
 
@@ -122,17 +175,17 @@ impl State {
             timeout: 60,
             seq: 1,
             deque: Arc::new(Mutex::new(VecDeque::new())),
-            life: Arc::new(Mutex::new(true)),
+            // life: Arc::new(Mutex::new(true)),
         }
     }
 
-    pub fn stop_event(&self) {
-        *self.life.lock().unwrap() = false;
-    }
+    // pub fn stop_event(&self) {
+    //     *self.life.lock().unwrap() = false;
+    // }
 
-    pub fn start_event(&self) {
-        *self.life.lock().unwrap() = true;
-    }
+    // pub fn start_event(&self) {
+    //     *self.life.lock().unwrap() = true;
+    // }
 
     pub fn add(&mut self, mut p: Payload) {
 
@@ -190,53 +243,6 @@ impl State {
         }
     }
 
-    pub fn event_monitor(& self) -> std::io::Result<()>{
-
-        trace!("Starting event monitor");
-        let deque_clone = Arc::clone(& self.deque);
-        let life = Arc::clone(&self.life);
-        self.start_event();
-
-        while *life.lock().unwrap() {
-    
-            //println!("Popping tracker from VecDeque");
-            let event = {
-                let mut loc_deque = deque_clone.lock().unwrap();
-                loc_deque.pop_front()
-            };
-    
-            let mut event = match event {
-                Some(tracker) => tracker,
-                None => continue
-            };
-
-            let deque_clone2 = Arc::clone(& self.deque);
-            let self_clone = self.clone();
-            self.pool.execute(move || {
-    
-                trace!("Passing event to event monitor...");
-                let _ = event.monitor();
-                //println!("Connection handled");
-
-                if let Some(hb) = event.as_any().downcast_ref::<Heartbeat>() {
-                    if hb.fail_count < 10 {
-                        trace!("Adding client back to VecDeque: {:?}", hb.fail_count);
-                        {
-                            let mut loc_deque = deque_clone2.lock().unwrap();
-                            let _ = loc_deque.push_back(event);
-                        }
-                    } else {
-                        info!("Dropping event");
-                        self_clone.stop_event();
-                        return;
-                    }
-                }
-    
-            });
-        }
-        Ok(())
-    }
-
 }
 
 
@@ -277,10 +283,10 @@ pub fn request_handler(
             println!("Now state:");
             state_loc.print();
 
-            let _ = match state_loc.event_monitor(){
-                Ok(()) => println!("exited event monitor"),
-                Err(_) => println!("error")
-            };
+            // let _ = match state_loc.event_monitor(){
+            //     Ok(()) => println!("exited event monitor"),
+            //     Err(_) => println!("error")
+            // };
         },
         MessageHeader::CLAIM => {
             info!("Claiming Service: {:?}", payload);
@@ -292,7 +298,7 @@ pub fn request_handler(
             println!("Now state:");
             state_loc.print();
 
-            state_loc.event_monitor();
+            // state_loc.event_monitor();
         }
         _ => {panic!("This should not be reached!");}
     }

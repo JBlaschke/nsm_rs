@@ -9,8 +9,8 @@ use std::thread;
 use log::{debug, error, info, trace, warn};
 
 #[derive(Debug)]
-pub struct Addr<'a> {
-    pub host: &'a String,
+pub struct Addr {
+    pub host: String,
     pub port: i32
 }
 
