@@ -4,7 +4,6 @@ use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
-// use std::thread;
 use threadpool::ThreadPool;
 use std::collections::VecDeque;
 use std::io::{self};
@@ -29,12 +28,6 @@ pub struct Payload {
     pub key: u64,
     pub id: u64
 }
-
-// #[derive(Clone)]
-// pub struct Tracker {
-//     pub stream: Arc<Mutex<TcpStream>>,
-//     pub fail_count: i32  
-// }
 
 pub trait Event: Any + Send + Sync{
     fn monitor(&mut self) -> std::io::Result<()>;
@@ -106,13 +99,10 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
     trace!("Starting event monitor");
 
     let deque_clone = {
-        let mut state_loc = state.lock().unwrap();
+        let state_loc = state.lock().unwrap();
         Arc::clone(& state_loc.deque)
     };
-    // let life = Arc::clone(&self.life);
-    // self.start_event();
 
-    // while *life.lock().unwrap() {
     loop {
 
         //println!("Popping tracker from VecDeque");
@@ -127,8 +117,7 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
         };
 
         let deque_clone2 = Arc::clone(& deque_clone);
-        //let self_clone = state_loc.clone();
-        let mut state_loc = state.lock().unwrap();
+        let state_loc = state.lock().unwrap();
         state_loc.pool.execute(move || {
 
             trace!("Passing event to event monitor...");
@@ -144,14 +133,11 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
                     }
                 } else {
                     info!("Dropping event");
-                    // self_clone.stop_event();
-                    // return;
                 }
             }
 
         });
     }
-    Ok(())
 }
 
 #[derive(Clone)]
@@ -162,7 +148,6 @@ pub struct State {
     pub timeout: u64, 
     pub seq: u64,
     pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>,
-    // pub life: Arc<Mutex<bool>>,
 }
 
 
@@ -175,17 +160,8 @@ impl State {
             timeout: 60,
             seq: 1,
             deque: Arc::new(Mutex::new(VecDeque::new())),
-            // life: Arc::new(Mutex::new(true)),
         }
     }
-
-    // pub fn stop_event(&self) {
-    //     *self.life.lock().unwrap() = false;
-    // }
-
-    // pub fn start_event(&self) {
-    //     *self.life.lock().unwrap() = true;
-    // }
 
     pub fn add(&mut self, mut p: Payload) {
 
@@ -231,8 +207,6 @@ impl State {
 
             _ => return Err(2)
         }
-
-        // return Err(3);
     }
 
     pub fn print(&mut self) {
@@ -282,11 +256,6 @@ pub fn request_handler(
 
             println!("Now state:");
             state_loc.print();
-
-            // let _ = match state_loc.event_monitor(){
-            //     Ok(()) => println!("exited event monitor"),
-            //     Err(_) => println!("error")
-            // };
         },
         MessageHeader::CLAIM => {
             info!("Claiming Service: {:?}", payload);
@@ -297,8 +266,6 @@ pub fn request_handler(
 
             println!("Now state:");
             state_loc.print();
-
-            // state_loc.event_monitor();
         }
         _ => {panic!("This should not be reached!");}
     }
@@ -333,5 +300,4 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()>
         }
         sleep(Duration::from_millis(2000));
     }
-    Ok(())
 }

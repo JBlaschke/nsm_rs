@@ -135,7 +135,7 @@ fn main() -> std::io::Result<()> {
 
             info!("Starting listener started on: {}:{}", & addr.host, addr.port);
 
-            let thread_handler = thread::spawn(move || {
+            let _thread_handler = thread::spawn(move || {
                 let _ = server(& addr, handler);
             });
 
@@ -149,7 +149,7 @@ fn main() -> std::io::Result<()> {
             }
 
         CLIOperation::Claim(inputs) => {
-            let (ipstr, all_ipstr) = if inputs.print_v4 {(
+            let (ipstr, _all_ipstr) = if inputs.print_v4 {(
                 get_matching_ipstr(
                     & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
                 ),
