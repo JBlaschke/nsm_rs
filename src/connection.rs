@@ -3,7 +3,6 @@ use std::net::{TcpListener, TcpStream};
 use std::fmt;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
-use std::thread;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -18,7 +17,7 @@ pub struct Addr {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageHeader {
     HB,
-    ACK, //acknowledgement
+    ACK,
     PUB,
     CLAIM,
     NULL
@@ -40,15 +39,13 @@ impl fmt::Display for MessageHeader {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
-    pub header: MessageHeader, //tells how to interprate message
+    pub header: MessageHeader,
     pub body: String
 }
 
 
 pub fn serialize_message(payload: & Message) -> String {
-    serde_json::to_string(payload).unwrap()  //serializes any struct into a string
-                                             //sending messages across message as a string
-                                             //flexibility
+    serde_json::to_string(payload).unwrap()
 }
 
 
@@ -58,14 +55,11 @@ pub fn deserialize_message(payload: & String) -> Message {
 
 
 pub fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
-    println!("Trying to connect");
-
     TcpStream::connect(format!("{}:{}", addr.host, addr.port))
 }
 
 
 pub fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result<usize> {
-    // stream.write_all(msg.as_bytes())?;
     match stream.write(msg.as_bytes()) {
         Ok(n) => Ok(n),
         Err(err) => Err(err)
@@ -76,9 +70,7 @@ pub fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result<usize
 pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
     let mut buf = [0; 1024];
     let mut message = String::new();
-    // println!("reading stream");
     loop {
-        // let bytes_read = stream.read(&mut buf)?;
         let bytes_read = match stream.read(&mut buf) {
             Ok(n) => n,
             Err(err) => { return Err(err); }
@@ -94,9 +86,7 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
     Ok(message)
 }
 
-//writes to stream with TCP object
-//looks at stream and reads answer back to make sure other side got message
-//maybe multithreaded
+
 pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
 
     let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -117,8 +107,7 @@ pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<
     Ok(response)
 }
 
-//receives data from stream and writes acknowledgment message
-//not multithreaded
+
 pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 
     let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -146,25 +135,20 @@ pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 
 pub fn server(
     addr: &Addr, 
-    handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
+    mut handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
 ) -> std::io::Result<()> {
     trace!("Starting server process on: {:?}", addr);
 
     let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
     trace!("Bind to {:?} successful", addr);
 
-    // accept connections and process them serially
     for stream in listener.incoming() {
         info!("Request received on {:?}, processing...", stream);
         match stream {
             Ok(stream) => {
                 trace!("Passing TCP connection to handler...");
-                //mutex avoids race conditions
-                let mut handler_clone = handler.clone();
-                let shared_stream = Arc::new(Mutex::new(stream)); //multiple servers can listen in the same place
-                let _thread_handler = thread::spawn(move || { 
-                    let _ = handler_clone(& shared_stream); 
-                });
+                let shared_stream = Arc::new(Mutex::new(stream));
+                let _ = handler(& shared_stream); 
             }
             Err(e) => {
                 println!("Error: {}", e);

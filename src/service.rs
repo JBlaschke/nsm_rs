@@ -26,7 +26,8 @@ pub struct Payload {
     pub interface_addr: Vec<String>,
     pub bind_port: i32,
     pub key: u64,
-    pub id: u64
+    pub id: u64,
+    pub life: bool,
 }
 
 pub trait Event: Any + Send + Sync{
@@ -36,6 +37,8 @@ pub trait Event: Any + Send + Sync{
 
 #[derive(Clone)]
 pub struct Heartbeat {
+    pub key: u64,
+    pub id: u64,
     pub stream: Arc<Mutex<TcpStream>>,
     pub fail_count: i32
 }
@@ -47,7 +50,6 @@ impl Event for Heartbeat {
     }
 
     fn monitor(&mut self) -> std::io::Result<()>{
-        //println!("Starting heartbeat handler");
         let mut loc_stream = match self.stream.lock() {
             Ok(guard) => guard,
             Err(_err) => {
@@ -77,7 +79,6 @@ impl Event for Heartbeat {
         };
     
         if received == "" {
-            //println!("Increasing failcount");
             self.fail_count += 1;
             trace!("Failed to receive HB. {:?}", self.fail_count);
             return Err(std::io::Error::new(
@@ -103,9 +104,35 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
         Arc::clone(& state_loc.deque)
     };
 
-    loop {
+    let data = Arc::new(Mutex::new((0, 0, 0))); // (fail_count, key, id)
+    let mut remove_key: i64 = -1;
+    let mut remove_id: i64 = -1;
 
-        //println!("Popping tracker from VecDeque");
+    loop {
+        
+        let mut shared_data = data.lock().unwrap();
+        if shared_data.0 == 10{
+            let mut state_loc = state.lock().unwrap();
+            match state_loc.rmv(shared_data.1, shared_data.2){
+                Ok(m) => {
+                    match m.header {
+                        MessageHeader::PUB => {
+                            trace!("Removing all clients with same key from deque.");
+                            remove_key = shared_data.1 as i64;
+                            remove_id = shared_data.2 as i64;
+                        },
+                        MessageHeader::CLAIM => trace!("Removed client from Vec"),
+                        _ => warn!("Unexpected message returned from remove()"),
+                    }
+                },
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,"Unable to remove item from Vec"));
+                }
+            }
+            shared_data.0 = 0;
+        }
+
         let event = {
             let mut loc_deque = deque_clone.lock().unwrap();
             loc_deque.pop_front()
@@ -117,26 +144,38 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
         };
 
         let deque_clone2 = Arc::clone(& deque_clone);
+        let data_clone = Arc::clone(&data);
         let state_loc = state.lock().unwrap();
+
         state_loc.pool.execute(move || {
 
             trace!("Passing event to event monitor...");
             let _ = event.monitor();
-            //println!("Connection handled");
 
             if let Some(hb) = event.as_any().downcast_ref::<Heartbeat>() {
-                if hb.fail_count < 10 {
-                    trace!("Adding client back to VecDeque: {:?}", hb.fail_count);
+                if (hb.key as i64) == remove_key {
+                    info!("Dropping all clients with key: {:?}", remove_key);
+                }
+                else{
                     {
-                        let mut loc_deque = deque_clone2.lock().unwrap();
-                        let _ = loc_deque.push_back(event);
+                        let mut data = data_clone.lock().unwrap();
+                        data.0 = hb.fail_count;
+                        data.1 = hb.key;
+                        data.2 = hb.id;
                     }
-                } else {
-                    info!("Dropping event");
+                    if hb.fail_count < 10 {
+                        trace!("Adding client back to VecDeque: {:?}", hb.fail_count);
+                        {
+                            let mut loc_deque = deque_clone2.lock().unwrap();
+                            let _ = loc_deque.push_back(event);
+                        }
+                    } else {
+                        info!("Dropping event");
+                    }
                 }
             }
-
         });
+        // state_loc.pool.join();
     }
 }
 
@@ -173,8 +212,9 @@ impl State {
         let hb_stream = TcpStream::connect(bind_address).unwrap();
         let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
 
-        //add to queue here
         let heartbeat = Heartbeat {
+            key: p.key,
+            id: self.seq,
             stream: shared_hb_stream,
             fail_count: 0
         };
@@ -186,8 +226,35 @@ impl State {
 
         let cl: &mut Vec<Payload> = self.clients.entry(p.key).or_insert(Vec::new());
         p.id = self.seq;
+        p.life = true;
         cl.push(p);
         self.seq += 1;
+    }
+
+    pub fn rmv(&mut self, k: u64, id: u64) -> std::io::Result<Message>{
+        println!("{:?}", self.clients);
+        if let Some(vec) = self.clients.get_mut(&k) {
+            if let Some(pos) = vec.iter().position(|item| item.id == id) {
+                if pos == 0{
+                    self.clients.remove(&k);
+                    println!("\n{:?}", self.clients);
+                    return Ok(Message {
+                        header: MessageHeader::PUB,
+                        body: "".to_string()
+                    });
+                }
+                else{
+                    vec.remove(pos);
+                    println!("\n{:?}", self.clients);
+                    return Ok(Message {
+                        header: MessageHeader::CLAIM,
+                        body: "".to_string()
+                    });
+                }
+            }
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Failed to remove item from state"));
     }
 
     #[allow(dead_code)]
@@ -229,8 +296,7 @@ pub fn deserialize(payload: & String) -> Payload {
     serde_json::from_str(payload).unwrap()
 }
 
-//only wants to receive PUB and CLAIM
-//only used in listen
+
 pub fn request_handler(
     state: & Arc<Mutex<State>>, stream: & Arc<Mutex<TcpStream>>
 ) -> std::io::Result<()> {
@@ -252,6 +318,7 @@ pub fn request_handler(
             info!("Publishing Service: {:?}", payload);
             let mut state_loc = state.lock().unwrap();
             //decide later how to make add apply to different messages/objects
+            //currently adds heartbeat event
             state_loc.add(payload);
 
             println!("Now state:");
@@ -259,9 +326,25 @@ pub fn request_handler(
         },
         MessageHeader::CLAIM => {
             info!("Claiming Service: {:?}", payload);
-            //hold mutex on shared state
-            //mutex is released once out of scope
+
             let mut state_loc = state.lock().unwrap();
+            let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+            match state_loc.claim(payload.key){
+                Ok(_payload) => {
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                    header: MessageHeader::ACK,
+                    body: "".to_string()
+                }));
+                },
+                _ => {
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: MessageHeader::NULL,
+                        body: "".to_string()
+                    }));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput, "Failed to claim key"));
+                },
+            }
             state_loc.add(payload);
 
             println!("Now state:");

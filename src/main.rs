@@ -2,7 +2,7 @@ mod network;
 use network::{get_local_ips, get_matching_ipstr};
 
 mod connection;
-use connection::{Message, MessageHeader, connect, Addr, server, send};
+use connection::{Message, MessageHeader, connect, Addr, server, send, stream_read, deserialize_message};
 
 mod service;
 use service::{Payload, State, serialize, request_handler, heartbeat_handler, event_monitor};
@@ -139,11 +139,9 @@ fn main() -> std::io::Result<()> {
                 let _ = server(& addr, handler);
             });
 
-            println!("moving to loop");
-
             let _ = match event_monitor(&state_clone){
                 Ok(()) => println!("exited event monitor"),
-                Err(_) => println!("error")
+                Err(_) => println!("event monitor error")
             };
             
             }
@@ -168,9 +166,10 @@ fn main() -> std::io::Result<()> {
                 interface_addr: Vec::new(),
                 bind_port: inputs.bind_port,
                 key: inputs.key,
-                id: 0
+                id: 0,
+                life: false,
             });
-            println!("attempting to connect to host");
+
             let stream = connect(& Addr{
                 host: inputs.host, port: inputs.port
             })?;
@@ -184,10 +183,25 @@ fn main() -> std::io::Result<()> {
                     trace!("Received response: {:?}", m);
                     match m.header {
                         MessageHeader::ACK => {
-                            info!("Server acknowledged CLAIM.")
+                            let loc_stream: &mut TcpStream = &mut stream_mut.lock().unwrap();
+                            let claim_key = match stream_read(loc_stream) {
+                                Ok(message) => deserialize_message(& message),
+                                Err(err) => {return Err(err);}
+                            };
+                            println!("{:?}", claim_key);
+                            if matches!(claim_key.header, MessageHeader::ACK){
+                                info!("Server acknowledged CLAIM.");
+                            }
+                            else{
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput,"Key not found"));
+                            }
                         }
                         _ => {
-                            warn!("Server responds with unexpected message: {:?}", m)
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                format!("Server responds with unexpected message: {:?}", m),
+                            ));
                         }
                     }
                 }
@@ -224,7 +238,8 @@ fn main() -> std::io::Result<()> {
                 interface_addr: all_ipstr,
                 bind_port: inputs.bind_port,
                 key: inputs.key,
-                id: 0
+                id: 0,
+                life: false,
             });
 
             let stream = connect(& Addr{
@@ -235,7 +250,6 @@ fn main() -> std::io::Result<()> {
                 header: MessageHeader::PUB,
                 body: payload
             });
-            // drop(stream_mut);
 
             match ack {
                 Ok(m) => {
