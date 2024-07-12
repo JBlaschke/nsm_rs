@@ -55,6 +55,7 @@ pub fn deserialize_message(payload: & String) -> Message {
 
 
 pub fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
+
     TcpStream::connect(format!("{}:{}", addr.host, addr.port))
 }
 

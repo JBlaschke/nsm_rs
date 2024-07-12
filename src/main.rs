@@ -167,12 +167,16 @@ fn main() -> std::io::Result<()> {
                 bind_port: inputs.bind_port,
                 key: inputs.key,
                 id: 0,
-                life: false,
             });
 
-            let stream = connect(& Addr{
-                host: inputs.host, port: inputs.port
-            })?;
+            let stream = match connect(& Addr{
+                host: inputs.host, port: inputs.port}){
+                    Ok(s) => s,
+                    Err(_e) => {
+                        return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,"Connection unsuccessful> Try another key"));
+                        }
+            };
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
                 header: MessageHeader::CLAIM,
@@ -206,7 +210,10 @@ fn main() -> std::io::Result<()> {
                     }
                 }
                 Err(e) => {
-                    error!("Encountered error: {:?}", e);
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Encountered error: {:?}", e),
+                    ));
                 }
             }
 
@@ -239,12 +246,16 @@ fn main() -> std::io::Result<()> {
                 bind_port: inputs.bind_port,
                 key: inputs.key,
                 id: 0,
-                life: false,
             });
 
-            let stream = connect(& Addr{
-                host: inputs.host, port: inputs.port
-            })?;
+            let stream = match connect(& Addr{
+                host: inputs.host, port: inputs.port}){
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
+                        }
+            };
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
                 header: MessageHeader::PUB,
@@ -267,6 +278,8 @@ fn main() -> std::io::Result<()> {
                     error!("Encountered error: {:?}", e);
                 }
             }
+
+            drop(stream_mut);
 
             let host = only_or_error(& ipstr);
             let addr = Addr {

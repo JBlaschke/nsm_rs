@@ -27,7 +27,6 @@ pub struct Payload {
     pub bind_port: i32,
     pub key: u64,
     pub id: u64,
-    pub life: bool,
 }
 
 pub trait Event: Any + Send + Sync{
@@ -65,15 +64,15 @@ impl Event for Heartbeat {
     
         let failure_duration = Duration::from_secs(6); //change to any failure limit
         match loc_stream.set_read_timeout(Some(failure_duration)) {
-            Ok(_x) => println!("set_read_timeout OK"),
-            Err(_e) => println!("set_read_timeout Error")
+            Ok(_x) => trace!("set_read_timeout OK"),
+            Err(_e) => trace!("set_read_timeout Error")
         }
     
         let received = match stream_read(&mut loc_stream) {
             Ok(message) => message,
             Err(err) => {
                 self.fail_count += 1;
-                println!("Failed to receive data from stream. {:?}", self.fail_count);
+                trace!("Failed to receive data from stream. {:?}", self.fail_count);
                 return Err(err);
             }
         };
@@ -106,7 +105,7 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
 
     let data = Arc::new(Mutex::new((0, 0, 0))); // (fail_count, key, id)
     let mut remove_key: i64 = -1;
-    let mut remove_id: i64 = -1;
+    // let mut remove_id: i64 = -1;
 
     loop {
         
@@ -119,7 +118,7 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
                         MessageHeader::PUB => {
                             trace!("Removing all clients with same key from deque.");
                             remove_key = shared_data.1 as i64;
-                            remove_id = shared_data.2 as i64;
+                            // remove_id = shared_data.2 as i64;
                         },
                         MessageHeader::CLAIM => trace!("Removed client from Vec"),
                         _ => warn!("Unexpected message returned from remove()"),
@@ -226,26 +225,28 @@ impl State {
 
         let cl: &mut Vec<Payload> = self.clients.entry(p.key).or_insert(Vec::new());
         p.id = self.seq;
-        p.life = true;
         cl.push(p);
         self.seq += 1;
     }
 
     pub fn rmv(&mut self, k: u64, id: u64) -> std::io::Result<Message>{
-        println!("{:?}", self.clients);
+        trace!("{:?}", self.clients);
         if let Some(vec) = self.clients.get_mut(&k) {
             if let Some(pos) = vec.iter().position(|item| item.id == id) {
                 if pos == 0{
-                    self.clients.remove(&k);
-                    println!("\n{:?}", self.clients);
+                    if let Some(value) = self.clients.remove(&k){
+                        println!("Removed publish: {:?}", value);
+                    }
+                    trace!("\n{:?}", self.clients);
                     return Ok(Message {
                         header: MessageHeader::PUB,
                         body: "".to_string()
                     });
                 }
                 else{
-                    vec.remove(pos);
-                    println!("\n{:?}", self.clients);
+                    let value = vec.remove(pos);
+                    println!("Removed client: {:?}", value);
+                    trace!("\n{:?}", self.clients);
                     return Ok(Message {
                         header: MessageHeader::CLAIM,
                         body: "".to_string()
@@ -330,11 +331,14 @@ pub fn request_handler(
             let mut state_loc = state.lock().unwrap();
             let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
             match state_loc.claim(payload.key){
-                Ok(_payload) => {
-                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: MessageHeader::ACK,
-                    body: "".to_string()
-                }));
+                Ok(payload) => {
+                    sleep(Duration::from_millis(1000));
+                    let _ = stream_write(loc_stream, & serialize_message(
+                        & Message {
+                            header: MessageHeader::ACK,
+                            body: "".to_string()
+                        }
+                    ));
                 },
                 _ => {
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
