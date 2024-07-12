@@ -15,7 +15,7 @@ use cli::{init, parse, CLIOperation};
 use std::thread;
 
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Condvar};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -120,12 +120,11 @@ fn main() -> std::io::Result<()> {
             };
             let host = only_or_error(& ipstr);
 
-            let state: State = State::new();
-            let shared_state = Arc::new(Mutex::new(state));
-            let state_clone = Arc::clone(& shared_state);
+            let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+            let state_clone = Arc::clone(& state);
             
             let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
-                return request_handler(& shared_state, stream);
+                return request_handler(& state_clone, stream);
             };
 
             let addr = Addr {
@@ -138,8 +137,8 @@ fn main() -> std::io::Result<()> {
             let _thread_handler = thread::spawn(move || {
                 let _ = server(& addr, handler);
             });
-
-            let _ = match event_monitor(&state_clone){
+            println!("entering event_monitor");
+            let _ = match event_monitor(state){
                 Ok(()) => println!("exited event monitor"),
                 Err(_) => println!("event monitor error")
             };

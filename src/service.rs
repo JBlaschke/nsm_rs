@@ -1,7 +1,7 @@
 use std::net::TcpStream;
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Condvar};
 use std::thread::sleep;
 use std::time::Duration;
 use threadpool::ThreadPool;
@@ -94,12 +94,13 @@ impl Event for Heartbeat {
     }
 }
 
-pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
+pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>{
 
     trace!("Starting event monitor");
+    let (lock, cvar) = &*state;
 
     let deque_clone = {
-        let state_loc = state.lock().unwrap();
+        let state_loc = lock.lock().unwrap();
         Arc::clone(& state_loc.deque)
     };
 
@@ -108,10 +109,17 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
     // let mut remove_id: i64 = -1;
 
     loop {
-        
+        {
+            let mut state_loc = lock.lock().unwrap();
+            while !state_loc.running {
+                println!("waiting to run");
+                state_loc = cvar.wait(state_loc).unwrap();
+            }
+        }
+
         let mut shared_data = data.lock().unwrap();
         if shared_data.0 == 10{
-            let mut state_loc = state.lock().unwrap();
+            let mut state_loc = lock.lock().unwrap();
             match state_loc.rmv(shared_data.1, shared_data.2){
                 Ok(m) => {
                     match m.header {
@@ -139,12 +147,17 @@ pub fn event_monitor(state: &Arc<Mutex<State>>) -> std::io::Result<()>{
 
         let mut event = match event {
             Some(tracker) => tracker,
-            None => continue
+            None => {
+                let mut state_loc = lock.lock().unwrap();
+                state_loc.running = true;
+                cvar.notify_one();
+                continue;
+            }
         };
 
         let deque_clone2 = Arc::clone(& deque_clone);
         let data_clone = Arc::clone(&data);
-        let state_loc = state.lock().unwrap();
+        let state_loc = lock.lock().unwrap();
 
         state_loc.pool.execute(move || {
 
@@ -186,6 +199,7 @@ pub struct State {
     pub timeout: u64, 
     pub seq: u64,
     pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>,
+    running: bool,
 }
 
 
@@ -198,6 +212,7 @@ impl State {
             timeout: 60,
             seq: 1,
             deque: Arc::new(Mutex::new(VecDeque::new())),
+            running: false,
         }
     }
 
@@ -299,7 +314,7 @@ pub fn deserialize(payload: & String) -> Payload {
 
 
 pub fn request_handler(
-    state: & Arc<Mutex<State>>, stream: & Arc<Mutex<TcpStream>>
+    state: &Arc<(Mutex<State>, Condvar)>, stream: & Arc<Mutex<TcpStream>>
 ) -> std::io::Result<()> {
     trace!("Starting request handler");
 
@@ -317,10 +332,13 @@ pub fn request_handler(
     match message.header {
         MessageHeader::PUB => {
             info!("Publishing Service: {:?}", payload);
-            let mut state_loc = state.lock().unwrap();
+            let (lock, cvar) = &**state;
+            let mut state_loc = lock.lock().unwrap();
             //decide later how to make add apply to different messages/objects
             //currently adds heartbeat event
             state_loc.add(payload);
+            state_loc.running = true;
+            cvar.notify_one();
 
             println!("Now state:");
             state_loc.print();
@@ -328,7 +346,8 @@ pub fn request_handler(
         MessageHeader::CLAIM => {
             info!("Claiming Service: {:?}", payload);
 
-            let mut state_loc = state.lock().unwrap();
+            let (lock, cvar) = &**state;
+            let mut state_loc = lock.lock().unwrap();
             let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
             match state_loc.claim(payload.key){
                 Ok(payload) => {
