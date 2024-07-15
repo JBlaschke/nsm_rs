@@ -18,7 +18,7 @@ use crate::connection::{
 };
 
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Payload {
     pub service_addr: Vec<String>,
     pub service_port: i32,
@@ -27,24 +27,26 @@ pub struct Payload {
     pub bind_port: i32,
     pub key: u64,
     pub id: u64,
+    pub service_id: u64,
 }
 
 pub trait Event: Any + Send + Sync{
     fn monitor(&mut self) -> std::io::Result<()>;
-    fn as_any(&self) -> &dyn Any;
+    fn as_any(&mut self) -> &mut dyn Any;
 }
 
 #[derive(Clone)]
 pub struct Heartbeat {
     pub key: u64,
     pub id: u64,
+    pub service_id: u64,
     pub stream: Arc<Mutex<TcpStream>>,
-    pub fail_count: i32
+    pub fail_count: i32,
 }
 
 impl Event for Heartbeat {
 
-    fn as_any(&self) -> &dyn Any {
+    fn as_any(&mut self) -> &mut dyn Any {
         self
     }
 
@@ -105,8 +107,8 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
     };
 
     let data = Arc::new(Mutex::new((0, 0, 0))); // (fail_count, key, id)
-    let mut remove_key: i64 = -1;
-    // let mut remove_id: i64 = -1;
+    let mut service_id: i64 = -1;
+    let mut failed_client = 0;
 
     loop {
         {
@@ -122,15 +124,9 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
             let mut state_loc = lock.lock().unwrap();
             match state_loc.rmv(shared_data.1, shared_data.2){
                 Ok(m) => {
-                    match m.header {
-                        MessageHeader::PUB => {
-                            trace!("Removing all clients with same key from deque.");
-                            remove_key = shared_data.1 as i64;
-                            // remove_id = shared_data.2 as i64;
-                        },
-                        MessageHeader::CLAIM => trace!("Removed client from Vec"),
-                        _ => warn!("Unexpected message returned from remove()"),
-                    }
+                        trace!("Removed item from Vec.");
+                        service_id = m.parse().unwrap();
+                        println!("{:}", service_id);
                 },
                 Err(_e) => {
                     return Err(std::io::Error::new(
@@ -158,32 +154,49 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
         let deque_clone2 = Arc::clone(& deque_clone);
         let data_clone = Arc::clone(&data);
         let state_loc = lock.lock().unwrap();
+        let mut state_clone = state_loc.clone();
 
         state_loc.pool.execute(move || {
 
             trace!("Passing event to event monitor...");
             let _ = event.monitor();
 
-            if let Some(hb) = event.as_any().downcast_ref::<Heartbeat>() {
-                if (hb.key as i64) == remove_key {
-                    info!("Dropping all clients with key: {:?}", remove_key);
-                }
-                else{
-                    {
-                        let mut data = data_clone.lock().unwrap();
-                        data.0 = hb.fail_count;
-                        data.1 = hb.key;
-                        data.2 = hb.id;
-                    }
-                    if hb.fail_count < 10 {
-                        trace!("Adding client back to VecDeque: {:?}", hb.fail_count);
-                        {
-                            let mut loc_deque = deque_clone2.lock().unwrap();
-                            let _ = loc_deque.push_back(event);
+            if let Some(hb) = event.as_any().downcast_mut::<Heartbeat>() {
+                let mut data = data_clone.lock().unwrap();
+                *data = (hb.fail_count, hb.key, hb.id);
+                if data.0 < 10 {
+                    trace!("Adding back to VecDeque: {:?}", data.0);
+                    println!("{:}", hb.service_id);
+                    println!("{:}", service_id);
+                    if hb.service_id == (service_id as u64){
+                        trace!("Connecting to new service");
+                        match state_clone.claim(hb.key){
+                            Ok(p) => {
+                                println!("{:}", hb.service_id);
+                                event = Box::new(Heartbeat {
+                                    key: hb.key,
+                                    id: hb.id,
+                                    service_id: (*p).service_id,
+                                    stream: Arc::clone(&hb.stream),
+                                    fail_count: 0
+                                });
+                                {
+                                    let mut loc_deque = deque_clone2.lock().unwrap();
+                                    let _ = loc_deque.push_back(event);
+                                }
+                            }
+                            Err(_err) => {
+                                trace!("Could not connect to new service");
+                                data.0 = 10;
+                            }
                         }
-                    } else {
-                        info!("Dropping event");
                     }
+                    else{
+                        let mut loc_deque = deque_clone2.lock().unwrap();
+                        let _ = loc_deque.push_back(event);
+                    }
+                } else {
+                    info!("Dropping event");
                 }
             }
         });
@@ -216,7 +229,7 @@ impl State {
         }
     }
 
-    pub fn add(&mut self, mut p: Payload) {
+    pub fn add(&mut self, mut p: Payload, service_id: u64) -> std::io::Result<Heartbeat>{
 
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
@@ -225,48 +238,43 @@ impl State {
         sleep(Duration::from_millis(1000));
         let hb_stream = TcpStream::connect(bind_address).unwrap();
         let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
-
+        
+        let mut temp_id = self.seq;
+        if service_id != 0{
+            temp_id = service_id;
+        }
         let heartbeat = Heartbeat {
             key: p.key,
             id: self.seq,
+            service_id: temp_id,
             stream: shared_hb_stream,
             fail_count: 0
         };
         trace!("Adding new connection to queue");
         {
             let mut loc_deque = self.deque.lock().unwrap();
-            let _ = loc_deque.push_back(Box::new(heartbeat));
+            let _ = loc_deque.push_back(Box::new(heartbeat.clone()));
         }
 
         let cl: &mut Vec<Payload> = self.clients.entry(p.key).or_insert(Vec::new());
         p.id = self.seq;
+        p.service_id = temp_id;
         cl.push(p);
         self.seq += 1;
+        return Ok(heartbeat);
     }
 
-    pub fn rmv(&mut self, k: u64, id: u64) -> std::io::Result<Message>{
+    pub fn rmv(&mut self, k: u64, id: u64) -> std::io::Result<String>{
         trace!("{:?}", self.clients);
         if let Some(vec) = self.clients.get_mut(&k) {
             if let Some(pos) = vec.iter().position(|item| item.id == id) {
-                if pos == 0{
-                    if let Some(value) = self.clients.remove(&k){
-                        println!("Removed publish: {:?}", value);
-                    }
-                    trace!("\n{:?}", self.clients);
-                    return Ok(Message {
-                        header: MessageHeader::PUB,
-                        body: "".to_string()
-                    });
+                let item = vec.remove(pos);
+                println!("Removed client: {:?}", item);
+                if vec.is_empty(){
+                    self.clients.remove(&k);
                 }
-                else{
-                    let value = vec.remove(pos);
-                    println!("Removed client: {:?}", value);
-                    trace!("\n{:?}", self.clients);
-                    return Ok(Message {
-                        header: MessageHeader::CLAIM,
-                        body: "".to_string()
-                    });
-                }
+                trace!("\n{:?}", self.clients);
+                return Ok(item.service_id.to_string());
             }
         }
         return Err(std::io::Error::new(
@@ -336,7 +344,7 @@ pub fn request_handler(
             let mut state_loc = lock.lock().unwrap();
             //decide later how to make add apply to different messages/objects
             //currently adds heartbeat event
-            state_loc.add(payload);
+            state_loc.add(payload, 0);
             state_loc.running = true;
             cvar.notify_one();
 
@@ -346,12 +354,14 @@ pub fn request_handler(
         MessageHeader::CLAIM => {
             info!("Claiming Service: {:?}", payload);
 
-            let (lock, cvar) = &**state;
+            let (lock, _cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
             let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+            let mut service_id = 0;
             match state_loc.claim(payload.key){
-                Ok(payload) => {
+                Ok(p) => {
                     sleep(Duration::from_millis(1000));
+                    service_id = (*p).service_id;
                     let _ = stream_write(loc_stream, & serialize_message(
                         & Message {
                             header: MessageHeader::ACK,
@@ -368,7 +378,8 @@ pub fn request_handler(
                         std::io::ErrorKind::InvalidInput, "Failed to claim key"));
                 },
             }
-            state_loc.add(payload);
+            println!("{:}", service_id);
+            state_loc.add(payload, service_id);
 
             println!("Now state:");
             state_loc.print();

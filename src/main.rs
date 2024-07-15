@@ -166,6 +166,7 @@ fn main() -> std::io::Result<()> {
                 bind_port: inputs.bind_port,
                 key: inputs.key,
                 id: 0,
+                service_id: 0,
             });
 
             let stream = match connect(& Addr{
@@ -245,12 +246,13 @@ fn main() -> std::io::Result<()> {
                 bind_port: inputs.bind_port,
                 key: inputs.key,
                 id: 0,
+                service_id: 0,
             });
 
             let stream = match connect(& Addr{
                 host: inputs.host, port: inputs.port}){
                     Ok(s) => s,
-                    Err(e) => {
+                    Err(_e) => {
                         return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
                         }
