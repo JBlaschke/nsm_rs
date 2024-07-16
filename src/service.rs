@@ -21,10 +21,10 @@ use crate::connection::{
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Payload {
     pub service_addr: Vec<String>,
-    pub service_port: i32,
+    pub service_port: i32, //client - publish connection
     pub service_claim: u64,
     pub interface_addr: Vec<String>,
-    pub bind_port: i32,
+    pub bind_port: i32, //heartbeat
     pub key: u64,
     pub id: u64,
     pub service_id: u64,
@@ -124,8 +124,14 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
             let mut state_loc = lock.lock().unwrap();
             match state_loc.rmv(shared_data.1, shared_data.2){
                 Ok(m) => {
-                        trace!("Removed item from Vec.");
-                        service_id = m.parse().unwrap();
+                    match m.header {
+                        MessageHeader::PUB => {
+                            trace!("Removed service from Vec.");
+                            service_id = m.body.parse().unwrap();
+                        },
+                        MessageHeader::CLAIM => trace!("Removed client from Vec"),
+                        _ => warn!("Unexpected message returned from remove()"),
+                    }
                 },
                 Err(_e) => {
                     return Err(std::io::Error::new(
@@ -231,13 +237,12 @@ impl State {
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
 
         trace!("Listener connecting to: {}", bind_address);
-        sleep(Duration::from_millis(1000));
-
         let hb_stream = loop {
             match TcpStream::connect(bind_address.clone()) {
                 Ok(stream) => break stream,
                 Err(err) => {
-                    trace!("{}",format!("Failed to connect: {}", err));
+                    trace!("{}",format!("Retrying connection: {}", err));
+                    sleep(Duration::from_millis(1000));
                     continue;
                 }
             }
@@ -269,7 +274,7 @@ impl State {
         return Ok(heartbeat);
     }
 
-    pub fn rmv(&mut self, k: u64, id: u64) -> std::io::Result<String>{
+    pub fn rmv(&mut self, k: u64, id: u64) -> std::io::Result<Message>{
         trace!("{:?}", self.clients);
         if let Some(vec) = self.clients.get_mut(&k) {
             if let Some(pos) = vec.iter().position(|item| item.id == id) {
@@ -279,7 +284,16 @@ impl State {
                     self.clients.remove(&k);
                 }
                 trace!("\n{:?}", self.clients);
-                return Ok(item.service_id.to_string());
+                if item.service_id == item.id{
+                    return Ok(Message {
+                        header: MessageHeader::PUB,
+                        body: item.service_id.to_string()
+                    });
+                }
+                return Ok(Message {
+                    header: MessageHeader::CLAIM,
+                    body: "".to_string()
+                });
             }
         }
         return Err(std::io::Error::new(
@@ -363,25 +377,33 @@ pub fn request_handler(
             let mut state_loc = lock.lock().unwrap();
             let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
             let mut service_id = 0;
-            match state_loc.claim(payload.key){
-                Ok(p) => {
-                    sleep(Duration::from_millis(1000));
-                    service_id = (*p).service_id;
-                    let _ = stream_write(loc_stream, & serialize_message(
-                        & Message {
-                            header: MessageHeader::ACK,
-                            body: "".to_string()
+            let mut claim_fail = 0;
+            loop {
+                match state_loc.claim(payload.key){
+                    Ok(p) => {
+                        service_id = (*p).service_id;
+                        let _ = stream_write(loc_stream, & serialize_message(
+                            & Message {
+                                header: MessageHeader::ACK,
+                                body: serialize(p) //send address and port
+                            }
+                        ));
+                        break;
+                    },
+                    _ => {
+                        claim_fail += 1;
+                        if claim_fail < 5{
+                            sleep(Duration::from_millis(1000));
+                            continue;
                         }
-                    ));
-                },
-                _ => {
-                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                        header: MessageHeader::NULL,
-                        body: "".to_string()
-                    }));
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput, "Failed to claim key"));
-                },
+                        let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                            header: MessageHeader::NULL,
+                            body: "".to_string()
+                        }));
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput, "Failed to claim key"));
+                    },
+                }
             }
             let _ = state_loc.add(payload, service_id);
 
