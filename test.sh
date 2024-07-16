@@ -14,79 +14,163 @@ echo "Running list_ips for IP version 4"
 ip_address=$(./target/debug/nsm -n en0 -o list_ips --ip-version 4 | tee /dev/tty)
 
 #sample listen + publish + claim
-#quit claim, then publish, then listen
-
+#quit listen 
 echo "Running listen with publish and claim"
 ./target/debug/nsm -n en0 --ip-version 4 --ip-start "$ip_address" --operation listen --bind-port 8000 &
+listener_pid=$!
 
 ./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 8000 --bind-port 8010 --service-port 8020 --key 1234 &
+publisher_pid=$!
 
-sleep 1 &
+sleep 5
 ./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 8000 --bind-port 8011 --key 1234 &
+claimer_pid=$!
 
 sleep 3
 
-kill -9 %4
+kill -9 $claimer_pid
 
 sleep 3
 
-kill -9 %2 
+kill -9 $publisher_pid
 
-sleep 3 
+sleep 3
 
-kill -9 %1 
+kill -9 $listener_pid
 
 wait
 
 
-#sample listen + publish + claim
-#quit publish, then claim, then listen
-echo "Running listen with publish and claim"
+#sample listen + 2 publish + claim
+#quit claim, then publish, then publish, then listen
+sleep 1
+
+echo "Running listen with 2 services and 1 client"
 ./target/debug/nsm -n en0 --ip-version 4 --ip-start "$ip_address" --operation listen --bind-port 8000 &
-
-./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 8000 --bind-port 8010 --service-port 8020 --key 1234 &
-
-sleep 1 &
-./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 8000 --bind-port 8011 --key 1234 &
-
-sleep 3
-
-kill -9 %2
-
-sleep 3
-
-kill -9 %4 
-
-sleep 3 
-
-kill -9 %1 
-
-wait
-
-#sample listen + publish + publish + claim
-#quit claim, then publish, then listen
-echo "Running listen with publish and claim"
-./target/debug/nsm -n en0 --ip-version 4 --ip-start "$ip_address" --operation listen --bind-port 8000 &
+listener_pid=$! 
 
 ./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 8000 --bind-port 8010 --service-port 8011 --key 1234 &
+publisher1_pid=$!
 
 ./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 8000 --bind-port 8020 --service-port 8021 --key 1234 &
+publisher2_pid=$!
 
-sleep 1 &
+sleep 3
 ./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 8000 --bind-port 8015 --key 1234 &
+claimer_pid=$!
 
 sleep 3
 
-kill -9 %2
+kill -9 $claimer_pid
 
 sleep 3
 
-kill -9 %4 
+kill -9 $publisher2_pid
 
 sleep 3 
 
-kill -9 %1 
+kill -9 $publisher1_pid
+
+sleep 3 
+
+kill -9 $listener_pid
+
+wait
+
+#sample listen + 2 publish + 2 claim
+#quit publish, then claim, then listen
+
+sleep 1
+echo "Running listen with 2 services and 2 clients"
+./target/debug/nsm -n en0 --ip-version 4 --ip-start "$ip_address" --operation listen --bind-port 8000 &
+listener_pid=$! 
+
+./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 8000 --bind-port 8010 --service-port 8011 --key 1234 &
+publisher1_pid=$!
+
+./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 8000 --bind-port 8020 --service-port 8021 --key 1234 &
+publisher2_pid=$!
+
+sleep 3
+./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 8000 --bind-port 8015 --key 1234 &
+claimer1_pid=$!
+
+sleep 3
+./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 8000 --bind-port 8025 --key 1234 &
+claimer2_pid=$!
+
+sleep 3
+
+kill -9 $claimer2_pid
+
+sleep 3
+
+kill -9 $claimer1_pid
+
+sleep 3
+
+kill -9 $publisher2_pid
+
+sleep 3 
+
+kill -9 $publisher1_pid
+
+sleep 3 
+
+kill -9 $listener_pid
 
 wait
 
 #sample listen + publish + 2 claims
+
+sleep 1
+echo "Running listen with 1 service and 2 clients"
+./target/debug/nsm -n en0 --ip-version 4 --ip-start "$ip_address" --operation listen --bind-port 8000 &
+listener_pid=$! 
+
+./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 8000 --bind-port 8010 --service-port 8011 --key 1234 &
+publisher1_pid=$!
+
+sleep 3
+./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 8000 --bind-port 8015 --key 1234 &
+claimer1_pid=$!
+
+sleep 3
+./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 8000 --bind-port 8025 --key 1234 &
+claimer2_pid=$!
+
+sleep 3
+
+kill -9 $claimer2_pid
+
+sleep 3
+
+kill -9 $claimer1_pid
+
+sleep 3 
+
+kill -9 $publisher1_pid
+
+sleep 3 
+
+kill -9 $listener_pid
+
+wait
+
+#sample listen + publish + 2 claims
+
+sleep 1
+echo "Running listen with 1 client"
+
+./target/debug/nsm -n en0 --ip-version 4 --ip-start "$ip_address" --operation listen --bind-port 8000 &
+listener_pid=$! 
+
+sleep 3 &
+./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 8000 --bind-port 8015 --key 1234 &
+claimer_pid=$!
+
+sleep 3 
+
+kill -9 $listener_pid
+
+wait

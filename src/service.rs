@@ -114,7 +114,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
         {
             let mut state_loc = lock.lock().unwrap();
             while !state_loc.running {
-                println!("waiting to run");
+                trace!("waiting to run");
                 state_loc = cvar.wait(state_loc).unwrap();
             }
         }
@@ -126,7 +126,6 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                 Ok(m) => {
                         trace!("Removed item from Vec.");
                         service_id = m.parse().unwrap();
-                        println!("{:}", service_id);
                 },
                 Err(_e) => {
                     return Err(std::io::Error::new(
@@ -166,13 +165,10 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                 *data = (hb.fail_count, hb.key, hb.id);
                 if data.0 < 10 {
                     trace!("Adding back to VecDeque: {:?}", data.0);
-                    println!("{:}", hb.service_id);
-                    println!("{:}", service_id);
                     if hb.service_id == (service_id as u64){
                         trace!("Connecting to new service");
                         match state_clone.claim(hb.key){
                             Ok(p) => {
-                                println!("{:}", hb.service_id);
                                 event = Box::new(Heartbeat {
                                     key: hb.key,
                                     id: hb.id,
@@ -236,7 +232,16 @@ impl State {
 
         trace!("Listener connecting to: {}", bind_address);
         sleep(Duration::from_millis(1000));
-        let hb_stream = TcpStream::connect(bind_address).unwrap();
+
+        let hb_stream = loop {
+            match TcpStream::connect(bind_address.clone()) {
+                Ok(stream) => break stream,
+                Err(err) => {
+                    trace!("{}",format!("Failed to connect: {}", err));
+                    continue;
+                }
+            }
+        };
         let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
         
         let mut temp_id = self.seq;
@@ -269,7 +274,7 @@ impl State {
         if let Some(vec) = self.clients.get_mut(&k) {
             if let Some(pos) = vec.iter().position(|item| item.id == id) {
                 let item = vec.remove(pos);
-                println!("Removed client: {:?}", item);
+                println!("Removed item: {:?}", item);
                 if vec.is_empty(){
                     self.clients.remove(&k);
                 }
@@ -344,7 +349,7 @@ pub fn request_handler(
             let mut state_loc = lock.lock().unwrap();
             //decide later how to make add apply to different messages/objects
             //currently adds heartbeat event
-            state_loc.add(payload, 0);
+            let _ = state_loc.add(payload, 0);
             state_loc.running = true;
             cvar.notify_one();
 
@@ -378,8 +383,7 @@ pub fn request_handler(
                         std::io::ErrorKind::InvalidInput, "Failed to claim key"));
                 },
             }
-            println!("{:}", service_id);
-            state_loc.add(payload, service_id);
+            let _ = state_loc.add(payload, service_id);
 
             println!("Now state:");
             state_loc.print();

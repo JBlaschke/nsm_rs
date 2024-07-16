@@ -137,7 +137,7 @@ fn main() -> std::io::Result<()> {
             let _thread_handler = thread::spawn(move || {
                 let _ = server(& addr, handler);
             });
-            println!("entering event_monitor");
+            trace!("entering event_monitor");
             let _ = match event_monitor(state){
                 Ok(()) => println!("exited event monitor"),
                 Err(_) => println!("event monitor error")
@@ -192,7 +192,7 @@ fn main() -> std::io::Result<()> {
                                 Ok(message) => deserialize_message(& message),
                                 Err(err) => {return Err(err);}
                             };
-                            println!("{:?}", claim_key);
+                            trace!("{:?}", claim_key);
                             if matches!(claim_key.header, MessageHeader::ACK){
                                 info!("Server acknowledged CLAIM.");
                             }
