@@ -237,10 +237,16 @@ impl State {
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
 
         trace!("Listener connecting to: {}", bind_address);
+        let mut bind_fail = 0;
         let hb_stream = loop {
             match TcpStream::connect(bind_address.clone()) {
                 Ok(stream) => break stream,
                 Err(err) => {
+                    bind_fail += 1;
+                    if bind_fail > 5{
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput, "Service failed to connect to bind port"));
+                    }
                     trace!("{}",format!("Retrying connection: {}", err));
                     sleep(Duration::from_millis(1000));
                     continue;
@@ -385,7 +391,7 @@ pub fn request_handler(
                         let _ = stream_write(loc_stream, & serialize_message(
                             & Message {
                                 header: MessageHeader::ACK,
-                                body: serialize(p) //send address and port
+                                body: serialize(p)
                             }
                         ));
                         break;

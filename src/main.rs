@@ -5,7 +5,7 @@ mod connection;
 use connection::{Message, MessageHeader, connect, Addr, server, send, stream_read, deserialize_message};
 
 mod service;
-use service::{Payload, State, serialize, deserialize, request_handler, heartbeat_handler, event_monitor};
+use service::{Payload, State, serialize, request_handler, heartbeat_handler, event_monitor};
 
 mod utils;
 use utils::{only_or_error, epoch};
@@ -14,7 +14,7 @@ mod cli;
 use cli::{init, parse, CLIOperation};
 
 use std::thread;
-use std::net::TcpStream;
+use std::net::{TcpStream, TcpListener};
 use std::sync::{Arc, Mutex, Condvar};
 use std::time::Duration;
 use std::thread::sleep;
@@ -193,15 +193,13 @@ fn main() -> std::io::Result<()> {
                             let loc_stream: &mut TcpStream = &mut stream_mut.lock().unwrap();
                             loop {
                                 let message = match stream_read(loc_stream) {
-                                    Ok(m) => deserialize_message(& m), //print out address and port - future: print json to use jq
+                                    Ok(m) => deserialize_message(& m),
                                     Err(err) => {return Err(err);}
                                 };
                                 trace!("{:?}", message);
                                 if matches!(message.header, MessageHeader::ACK){
                                     info!("Server acknowledged CLAIM.");
-                                    let pub_payload = deserialize(& message.body);
-                                    println!("{:}", only_or_error(& pub_payload.service_addr));
-                                    println!("{:}", pub_payload.service_port);
+                                    println!("{}", message.body);
                                     break;
                                 }
                                 else{
@@ -214,7 +212,7 @@ fn main() -> std::io::Result<()> {
                                 }
                             }
                         }
-                        _ => { //retry loop with sleep and counter 
+                        _ => {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::InvalidInput,
                                 format!("Server responds with unexpected message: {:?}", m),
@@ -299,6 +297,12 @@ fn main() -> std::io::Result<()> {
             let addr = Addr {
                 host: host.to_string(),
                 port: inputs.bind_port
+            };
+
+            let _binded_service = match TcpListener::bind(format!("{}:{}", host.to_string(), inputs.service_port)){
+                Ok(s) => s,
+                Err(_err) => return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput, "Failed to bind to service port"))
             };
                         
             let _ = server(& addr, heartbeat_handler);

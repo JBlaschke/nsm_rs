@@ -1,0 +1,15 @@
+[package]
+name = "test_program"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+
+[[bin]]
+name = "my_server"
+path = "src/my_server.rs"
+
+[[bin]]
+name = "my_client"
+path = "src/my_client.rs"
