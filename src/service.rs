@@ -398,7 +398,7 @@ pub fn request_handler(
                     },
                     _ => {
                         claim_fail += 1;
-                        if claim_fail < 5{
+                        if claim_fail <= 5{
                             sleep(Duration::from_millis(1000));
                             continue;
                         }

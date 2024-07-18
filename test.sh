@@ -23,7 +23,7 @@ listener_pid=$!
 ./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 11000 --bind-port 11010 --service-port 11020 --key 5555 &
 publisher_pid=$!
 
-sleep 5
+sleep 3
 
 output_file=$(mktemp)
 ./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 11000 --bind-port 11015 --key 5555 > $output_file &
@@ -41,13 +41,13 @@ echo $claim_port
 
 rm $output_file
 
-./test_program/target/debug/my_client "$claim_ip" "$claim_port" &
-my_client_pid=$!
-
-sleep 1
-
 ./test_program/target/debug/my_server "$claim_ip" "$claim_port" &
 my_server_pid=$!
+
+sleep 2
+
+./test_program/target/debug/my_client "$claim_ip" "$claim_port" &
+my_client_pid=$!
 
 sleep 3
 
@@ -59,11 +59,11 @@ kill -9 $publisher_pid
 
 sleep 3
 
-kill -9 $my_server_pid
+kill -9 $listener_pid
 
 sleep 3
 
-kill -9 $listener_pid
+kill -9 $my_client_pid
 
 wait
 

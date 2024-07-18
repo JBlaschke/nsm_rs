@@ -192,6 +192,7 @@ fn main() -> std::io::Result<()> {
                             let mut read_fail = 0;
                             let loc_stream: &mut TcpStream = &mut stream_mut.lock().unwrap();
                             loop {
+                                sleep(Duration::from_millis(1000));
                                 let message = match stream_read(loc_stream) {
                                     Ok(m) => deserialize_message(& m),
                                     Err(err) => {return Err(err);}
@@ -204,7 +205,6 @@ fn main() -> std::io::Result<()> {
                                 }
                                 else{
                                     read_fail += 1;
-                                    sleep(Duration::from_millis(1000));
                                     if read_fail > 5 {
                                         return Err(std::io::Error::new(
                                             std::io::ErrorKind::InvalidInput,"Key not found"));
@@ -299,11 +299,11 @@ fn main() -> std::io::Result<()> {
                 port: inputs.bind_port
             };
 
-            let _binded_service = match TcpListener::bind(format!("{}:{}", host.to_string(), inputs.service_port)){
-                Ok(s) => s,
-                Err(_err) => return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput, "Failed to bind to service port"))
-            };
+            // let _binded_service = match TcpListener::bind(format!("{}:{}", host.to_string(), inputs.service_port)){
+            //     Ok(s) => s,
+            //     Err(_err) => return Err(std::io::Error::new(
+            //         std::io::ErrorKind::InvalidInput, "Failed to bind to service port"))
+            // };
                         
             let _ = server(& addr, heartbeat_handler);
 
