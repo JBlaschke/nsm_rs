@@ -2,21 +2,14 @@
 
 set -euo pipefail
 
-echo "Compiling program"
-cargo build
-
-echo "Running list_interfaces"
-./target/debug/nsm -o list_interfaces
-
-echo "Running list_ips for IP version 4"
-ip_address=$(./target/debug/nsm -n en0 -o list_ips --ip-version 4 | tee /dev/tty)
+ip_address=$(echo ) #fill in with listener address
 
 echo "Starting client"
 
 sleep 3
 
 output_file=$(mktemp)
-./target/debug/nsm -n en0 --ip-start "$ip_address" --operation claim --host "$ip_address" --port 11000 --bind-port 11015 --key 5555 > $output_file &
+./target/debug/nsm -n en0 --operation claim --host "$ip_address" --port 11000 --bind-port 11015 --key 5555 > $output_file &
 claimer_pid=$!
 
 sleep 2

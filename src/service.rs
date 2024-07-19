@@ -106,7 +106,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
         Arc::clone(& state_loc.deque)
     };
 
-    let data = Arc::new(Mutex::new((0, 0, 0))); // (fail_count, key, id)
+    let data = Arc::new(Mutex::new((0, 0, 0, 0))); // (fail_count, key, id, service_id)
     let mut service_id: i64 = -1;
     let mut failed_client = 0;
 
@@ -122,7 +122,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
         let mut shared_data = data.lock().unwrap();
         if shared_data.0 == 10{
             let mut state_loc = lock.lock().unwrap();
-            match state_loc.rmv(shared_data.1, shared_data.2){
+            match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3){
                 Ok(m) => {
                     match m.header {
                         MessageHeader::PUB => {
@@ -168,7 +168,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
 
             if let Some(hb) = event.as_any().downcast_mut::<Heartbeat>() {
                 let mut data = data_clone.lock().unwrap();
-                *data = (hb.fail_count, hb.key, hb.id);
+                *data = (hb.fail_count, hb.key, hb.id, hb.service_id);
                 if data.0 < 10 {
                     trace!("Adding back to VecDeque: {:?}", data.0);
                     if hb.service_id == (service_id as u64){
@@ -178,7 +178,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                                 event = Box::new(Heartbeat {
                                     key: hb.key,
                                     id: hb.id,
-                                    service_id: (*p).service_id,
+                                    service_id: hb.service_id,
                                     stream: Arc::clone(&hb.stream),
                                     fail_count: 0
                                 });
@@ -280,8 +280,11 @@ impl State {
         return Ok(heartbeat);
     }
 
-    pub fn rmv(&mut self, k: u64, id: u64) -> std::io::Result<Message>{
+    pub fn rmv(&mut self, k: u64, id: u64, service_id: u64) -> std::io::Result<Message>{
         trace!("{:?}", self.clients);
+
+        let mut removed_item = None;
+
         if let Some(vec) = self.clients.get_mut(&k) {
             if let Some(pos) = vec.iter().position(|item| item.id == id) {
                 let item = vec.remove(pos);
@@ -289,18 +292,28 @@ impl State {
                 if vec.is_empty(){
                     self.clients.remove(&k);
                 }
-                trace!("\n{:?}", self.clients);
-                if item.service_id == item.id{
-                    return Ok(Message {
-                        header: MessageHeader::PUB,
-                        body: item.service_id.to_string()
-                    });
-                }
+                removed_item = Some(item);
+            }
+        }
+        if let Some(item) = removed_item {
+            trace!("\n{:?}", self.clients);
+            if item.service_id == item.id{
                 return Ok(Message {
-                    header: MessageHeader::CLAIM,
-                    body: "".to_string()
+                    header: MessageHeader::PUB,
+                    body: item.service_id.to_string()
                 });
             }
+            if let Some(vec) = self.clients.get_mut(&k) {
+                if let Some(pos) = vec.iter().position(|publish| publish.service_id == service_id) {
+                    if let Some(publish) = vec.get_mut(pos) {
+                        publish.service_claim = 0;
+                    }
+                }
+            }
+            return Ok(Message {
+                header: MessageHeader::CLAIM,
+                body: "".to_string()
+            }); 
         }
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Failed to remove item from state"));

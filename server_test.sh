@@ -2,18 +2,10 @@
 
 set -euo pipefail
 
-echo "Compiling program"
-cargo build
-
-echo "Running list_interfaces"
-./target/debug/nsm -o list_interfaces
-
-echo "Running list_ips for IP version 4"
-ip_address=$(./target/debug/nsm -n en0 -o list_ips --ip-version 4 | tee /dev/tty)
-
+ip_address=$(echo ) #fill in with listener address
 echo "Starting server"
 
-./target/debug/nsm -n en0 --ip-start "$ip_address" --operation publish --host "$ip_address" --port 11000 --bind-port 11010 --service-port 11020 --key 5555 &
+./target/debug/nsm -n en0 --operation publish --host "$ip_address" --port 11000 --bind-port 11010 --service-port 11020 --key 5555 &
 publisher_pid=$!
 
 ./test_program/target/debug/my_server "$ip_address" 11020 &
