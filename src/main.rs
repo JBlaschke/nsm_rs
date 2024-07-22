@@ -298,12 +298,6 @@ fn main() -> std::io::Result<()> {
                 host: host.to_string(),
                 port: inputs.bind_port
             };
-
-            // let _binded_service = match TcpListener::bind(format!("{}:{}", host.to_string(), inputs.service_port)){
-            //     Ok(s) => s,
-            //     Err(_err) => return Err(std::io::Error::new(
-            //         std::io::ErrorKind::InvalidInput, "Failed to bind to service port"))
-            // };
                         
             let _ = server(& addr, heartbeat_handler);
 
