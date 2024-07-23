@@ -533,3 +533,39 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()>
         sleep(Duration::from_millis(2000)); // change to any time interval, must match time in monitor()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_event_monitor() {
+
+    }
+
+    #[test]
+    fn test_add{
+
+    }
+
+    #[test]
+    fn test_remove{
+
+    }
+
+    #[test]
+    fn test_claim{
+
+    }
+    
+    #[test]
+    fn test_request_handler{
+
+    }
+
+    #[test]
+    fn test_heartbeat_handler{
+        
+    }
+
+}

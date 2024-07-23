@@ -121,7 +121,7 @@ pub struct ListInterfaces {
 ///
 /// ## Example 
 /// Run from command line:
-/// $ ./target/debug/nsm -n en0 -o list_ips --ip-version 4
+/// ``` $ ./target/debug/nsm -n en0 -o list_ips --ip-version 4 ```
 #[derive(Debug)]
 pub struct ListIPs {
     /// output helpful messages for debugging
@@ -141,7 +141,7 @@ pub struct ListIPs {
 ///
 /// ## Example 
 /// Run from command line:
-/// $ ./target/debug/nsm -n en0 --ip-version 4 --operation listen --bind-port 8000
+/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation listen --bind-port 8000 ```
 ///
 /// Port # info:
 /// - 8000 : listens for incoming connections from services and clients
@@ -164,7 +164,7 @@ pub struct Listen {
 ///
 /// ## Example 
 /// Run from command line:
-/// $ ./target/debug/nsm -n en0 --ip-version 4 --operation claim --host 127.0.0.1 --port 8000 --bind-port 8015 --key 1234
+/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation claim --host 127.0.0.1 --port 8000 --bind-port 8015 --key 1234 ```
 ///
 /// Address info:
 /// - use broker's fixed address
@@ -201,7 +201,7 @@ pub struct Claim {
 ///
 /// ## Example 
 /// Run from command line:
-/// $ ./target/debug/nsm -n en0 --ip-version 4 --operation publish --host 127.0.0.1 --port 8000 --bind-port 8010 --service-port 8020 --key 1234
+/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation publish --host 127.0.0.1 --port 8000 --bind-port 8010 --service-port 8020 --key 1234 ```
 ///
 /// Address info:
 /// - use broker's fixed address
