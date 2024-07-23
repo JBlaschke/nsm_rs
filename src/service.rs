@@ -1,3 +1,5 @@
+/// Track clients and services and handle events (heartbeats)
+
 use std::net::TcpStream;
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
@@ -17,39 +19,60 @@ use crate::connection::{
     MessageHeader, Message, receive, stream_read, stream_write, serialize_message, deserialize_message
 };
 
-
+/// Store client or service metadata
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Payload {
+    /// local IP address
     pub service_addr: Vec<String>,
-    pub service_port: i32, //client - publish connection
+    /// used for service-client data connection
+    pub service_port: i32,
+    /// epoch time of when service was claimed
     pub service_claim: u64,
+    /// 
     pub interface_addr: Vec<String>,
-    pub bind_port: i32, //heartbeat
+    /// used for sending/receiving heartbeats
+    pub bind_port: i32,
+    /// unique key identifies system
     pub key: u64,
+    /// unique identification of each connection to broker
     pub id: u64,
+    /// identifies unique service, clients assume id from connected service
     pub service_id: u64,
 }
 
+/// Parent trait of objects added to event queue/loop
 pub trait Event: Any + Send + Sync{
+    /// call from event_monitor for specific Event type
     fn monitor(&mut self) -> std::io::Result<()>;
+    /// allows Event object to be downcasted
     fn as_any(&mut self) -> &mut dyn Any;
 }
 
+/// Heartbeat Event struct holds metadata for a service/client with a heartbeat
 #[derive(Clone)]
 pub struct Heartbeat {
+    /// same key as payload, needed for rmv()
     pub key: u64,
+    /// same id as payload, needed for rmv()
     pub id: u64,
+    /// same service_id, used to trace and reassigned a client whose service dropped from system
     pub service_id: u64,
+    /// stream used to send heartbeats to client/service
     pub stream: Arc<Mutex<TcpStream>>,
+    /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_count: i32,
 }
 
+/// Heartbeats are treated as an Event to handle other types of events in the same queue
 impl Event for Heartbeat {
 
+    /// downcast an Event as a Heartbeat
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
 
+    /// send a heartbeat to the service/client and check if entity sent one back,
+    /// increment fail_count if heartbeat not received when expected
     fn monitor(&mut self) -> std::io::Result<()>{
         let mut loc_stream = match self.stream.lock() {
             Ok(guard) => guard,
@@ -65,6 +88,7 @@ impl Event for Heartbeat {
         }));
     
         let failure_duration = Duration::from_secs(6); //change to any failure limit
+        // allots time for reading from stream
         match loc_stream.set_read_timeout(Some(failure_duration)) {
             Ok(_x) => trace!("set_read_timeout OK"),
             Err(_e) => trace!("set_read_timeout Error")
@@ -90,12 +114,13 @@ impl Event for Heartbeat {
             trace!("Resetting failcount. {}", self.fail_count);
         }
     
-        sleep(Duration::from_millis(2000));
+        sleep(Duration::from_millis(2000)); //change to any time interval, must match time in heartbeat_handler()
 
         Ok(())
     }
 }
 
+/// Function loops through State's deque (event queue) to handle events using multithreading 
 pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>{
 
     trace!("Starting event monitor");
@@ -110,9 +135,11 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
     let mut service_id: i64 = -1;
     let mut failed_client = 0;
 
+    // loop runs while events are in the queue
     loop {
         {
             let mut state_loc = lock.lock().unwrap();
+            // loop is paused while there are no events to handle
             while !state_loc.running {
                 trace!("waiting to run");
                 state_loc = cvar.wait(state_loc).unwrap();
@@ -120,6 +147,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
         }
 
         let mut shared_data = data.lock().unwrap();
+        // if connection is dead, remove it
         if shared_data.0 == 10{
             let mut state_loc = lock.lock().unwrap();
             match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3){
@@ -127,6 +155,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                     match m.header {
                         MessageHeader::PUB => {
                             trace!("Removed service from Vec.");
+                            // set service_id to track client and claim new service
                             service_id = m.body.parse().unwrap();
                         },
                         MessageHeader::CLAIM => trace!("Removed client from Vec"),
@@ -141,6 +170,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
             shared_data.0 = 0;
         }
 
+        // pop event from queue 
         let event = {
             let mut loc_deque = deque_clone.lock().unwrap();
             loc_deque.pop_front()
@@ -149,8 +179,9 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
         let mut event = match event {
             Some(tracker) => tracker,
             None => {
+                // pause loop to wait for new events
                 let mut state_loc = lock.lock().unwrap();
-                state_loc.running = true;
+                state_loc.running = false;
                 cvar.notify_one();
                 continue;
             }
@@ -161,11 +192,14 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
         let state_loc = lock.lock().unwrap();
         let mut state_clone = state_loc.clone();
 
+        // use a worker from threadpool to handle events with multithreading
         state_loc.pool.execute(move || {
 
             trace!("Passing event to event monitor...");
             let _ = event.monitor();
 
+            // check heartbeat metadata to see if entity should be added back to event queue 
+            // or if client should be claim a new service
             if let Some(hb) = event.as_any().downcast_mut::<Heartbeat>() {
                 let mut data = data_clone.lock().unwrap();
                 *data = (hb.fail_count, hb.key, hb.id, hb.service_id);
@@ -175,6 +209,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                         trace!("Connecting to new service");
                         match state_clone.claim(hb.key){
                             Ok(p) => {
+                                // create new Heartbeat object with new service_id
                                 event = Box::new(Heartbeat {
                                     key: hb.key,
                                     id: hb.id,
@@ -183,42 +218,52 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                                     fail_count: 0
                                 });
                                 {
+                                    // add updated client back to queue 
                                     let mut loc_deque = deque_clone2.lock().unwrap();
                                     let _ = loc_deque.push_back(event);
                                 }
                             }
                             Err(_err) => {
+                                // no more available services to claim
                                 trace!("Could not connect to new service");
                                 data.0 = 10;
                             }
                         }
                     }
                     else{
+                        // add event back to queue 
                         let mut loc_deque = deque_clone2.lock().unwrap();
                         let _ = loc_deque.push_back(event);
                     }
                 } else {
+                    // service or client no longer connected to broker
                     info!("Dropping event");
                 }
             }
         });
-        // state_loc.pool.join();
     }
 }
 
+/// Keep track of all connected clients/services, holds event loop and threadpool
 #[derive(Clone)]
 pub struct State {
+    /// hashmap - key: key, value: clients/services payloads
     pub clients: HashMap<u64, Vec<Payload>>,
     pub claims: HashMap<u64, Vec<Payload>>,
+    /// pool of threads to handle events in event queue
     pub pool: ThreadPool,
     pub timeout: u64, 
+    /// increments for each new connection to broker, used for id in payload
     pub seq: u64,
+    /// event queue
     pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>,
+    /// true when event queue contains events to handle, false when event queue is empty
     running: bool,
 }
 
 
 impl State {
+    /// inititates State struct with empty and default variables
     pub fn new() -> State {
         State{
             clients: HashMap::new(),
@@ -231,6 +276,7 @@ impl State {
         }
     }
 
+    /// adds new services/clients to State struct and creates Event object to add to event loop 
     pub fn add(&mut self, mut p: Payload, service_id: u64) -> std::io::Result<Heartbeat>{
 
         let ipstr = only_or_error(& p.service_addr);
@@ -238,6 +284,8 @@ impl State {
 
         trace!("Listener connecting to: {}", bind_address);
         let mut bind_fail = 0;
+        // broker connects to service/client bind_port for heartbeats
+        // loop solves connection race case 
         let hb_stream = loop {
             match TcpStream::connect(bind_address.clone()) {
                 Ok(stream) => break stream,
@@ -256,6 +304,8 @@ impl State {
         let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
         
         let mut temp_id = self.seq;
+        // service_id is same as id for a service - unclaimed service starts with service_id = 0
+        // client inherits its service's id for service_id
         if service_id != 0{
             temp_id = service_id;
         }
@@ -268,41 +318,50 @@ impl State {
         };
         trace!("Adding new connection to queue");
         {
+            // push Heartbeat event to event queue
             let mut loc_deque = self.deque.lock().unwrap();
             let _ = loc_deque.push_back(Box::new(heartbeat.clone()));
         }
 
+        // check key with clients hashmap in State
+        // add new key if key does not exist or set cl to exising key
         let cl: &mut Vec<Payload> = self.clients.entry(p.key).or_insert(Vec::new());
         p.id = self.seq;
         p.service_id = temp_id;
-        cl.push(p);
-        self.seq += 1;
+        cl.push(p); // push payload to cl key in clients hashmap
+        self.seq += 1; // set up seq for next connection
         return Ok(heartbeat);
     }
 
+    /// remove service/client from clients hashmap in State when Heartbeat fails
     pub fn rmv(&mut self, k: u64, id: u64, service_id: u64) -> std::io::Result<Message>{
         trace!("{:?}", self.clients);
 
         let mut removed_item = None;
-
+        // find key in hashmap
         if let Some(vec) = self.clients.get_mut(&k) {
+            // find value in clients with matching id
             if let Some(pos) = vec.iter().position(|item| item.id == id) {
-                let item = vec.remove(pos);
+                let item = vec.remove(pos); // remove item with matching idi
                 println!("Removed item: {:?}", item);
+                // if no entities in key entry, remove key from clients
                 if vec.is_empty(){
-                    self.clients.remove(&k);
+                    self.clients.remove(&k); 
                 }
                 removed_item = Some(item);
             }
         }
         if let Some(item) = removed_item {
             trace!("\n{:?}", self.clients);
+            // check if a service was removed from clients
             if item.service_id == item.id{
                 return Ok(Message {
                     header: MessageHeader::PUB,
                     body: item.service_id.to_string()
                 });
             }
+            // if a client was removed, reset service's service_claim to 0
+            // makes service available for a new client
             if let Some(vec) = self.clients.get_mut(&k) {
                 if let Some(pos) = vec.iter().position(|publish| publish.service_id == service_id) {
                     if let Some(publish) = vec.get_mut(pos) {
@@ -319,6 +378,8 @@ impl State {
             std::io::ErrorKind::InvalidInput, "Failed to remove item from state"));
     }
 
+    /// search clients hashmap for an available service with matching key,
+    /// set service's service_claim equal to ecpoch time to match the new client
     #[allow(dead_code)]
     pub fn claim(&mut self, k:u64) -> Result<&mut Payload, u64> {
         match self.clients.get_mut(& k) {
@@ -338,6 +399,7 @@ impl State {
         }
     }
 
+    /// print all entries in clients hashmap
     pub fn print(&mut self) {
         for (key, values) in & self.clients {
             for v in values {
@@ -348,24 +410,27 @@ impl State {
 
 }
 
-
+/// Serialize Payload struct into JSON String
 pub fn serialize(payload: & Payload) -> String {
     serde_json::to_string(payload).unwrap()
 }
 
-
+/// Deserialize JSON String into Payload struct
 pub fn deserialize(payload: & String) -> Payload {
     serde_json::from_str(payload).unwrap()
 }
 
-
+/// Broker handles incoming connections, adds entity to its State struct,
+/// connects client to available services, and notifies event loop of new Events
 pub fn request_handler(
     state: &Arc<(Mutex<State>, Condvar)>, stream: & Arc<Mutex<TcpStream>>
 ) -> std::io::Result<()> {
     trace!("Starting request handler");
 
+    // receive Payload from incoming connection
     let message = receive(stream)?;
 
+    // check type of Message, only want to handle PUB or CLAIM Message
     let payload = match message.header {
         MessageHeader::HB => panic!("Unexpected HB message encountered!"),
         MessageHeader::ACK => panic!("Unexpected ACK message encountered!"),
@@ -375,19 +440,19 @@ pub fn request_handler(
     };
 
     info!("Request handler received: {:?}", payload);
+    // handle services (PUB) and clients (CLAIM) appropriately
     match message.header {
         MessageHeader::PUB => {
             info!("Publishing Service: {:?}", payload);
             let (lock, cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
-            //decide later how to make add apply to different messages/objects
-            //currently adds heartbeat event
-            let _ = state_loc.add(payload, 0);
-            state_loc.running = true;
-            cvar.notify_one();
+
+            let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
+            state_loc.running = true; // set running to true for event loop
+            cvar.notify_one(); // notify event loop of new Event
 
             println!("Now state:");
-            state_loc.print();
+            state_loc.print(); // print state of clients hashmap
         },
         MessageHeader::CLAIM => {
             info!("Claiming Service: {:?}", payload);
@@ -396,15 +461,18 @@ pub fn request_handler(
             let mut state_loc = lock.lock().unwrap();
             let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
             let mut service_id = 0;
-            let mut claim_fail = 0;
+            let mut claim_fail = 0; // initiate counter for connection failure
+            // loop solves race case when client starts faster than service can be published
             loop {
+                // 
                 match state_loc.claim(payload.key){
                     Ok(p) => {
-                        service_id = (*p).service_id;
+                        service_id = (*p).service_id; // capture claimed service's service_id for add()
+                        // send acknowledgment of successful service claim with service's payload containing its address
                         let _ = stream_write(loc_stream, & serialize_message(
                             & Message {
                                 header: MessageHeader::ACK,
-                                body: serialize(p)
+                                body: serialize(p) // address extracted in main to print to client
                             }
                         ));
                         break;
@@ -415,6 +483,7 @@ pub fn request_handler(
                             sleep(Duration::from_millis(1000));
                             continue;
                         }
+                        // notifty main() of failure to claim an available service
                         let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                             header: MessageHeader::NULL,
                             body: "".to_string()
@@ -424,16 +493,17 @@ pub fn request_handler(
                     },
                 }
             }
-            let _ = state_loc.add(payload, service_id);
+            let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
 
             println!("Now state:");
-            state_loc.print();
+            state_loc.print(); // print state of clients hashmap
         }
         _ => {panic!("This should not be reached!");}
     }
     Ok(())
 }
 
+/// receive a heartbeat from broker and send one back to show life of connection
 pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()> {
     trace!("Starting heartbeat handler");
 
@@ -460,6 +530,6 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()>
             }));
             trace!("Heartbeat handler has returned heartbeat request");
         }
-        sleep(Duration::from_millis(2000));
+        sleep(Duration::from_millis(2000)); // change to any time interval, must match time in monitor()
     }
 }

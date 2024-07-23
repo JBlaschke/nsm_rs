@@ -1,3 +1,5 @@
+/// Validates existance of Interfaces and IP Addresses
+
 use pnet::datalink;
 use pnet::ipnetwork::IpNetwork;
 use std::net::IpAddr;
@@ -5,19 +7,22 @@ use std::net::IpAddr;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-
+/// Represents an Interface on running device
 #[derive(Debug)]
 pub struct LocalInterface {
     pub ip:   IpAddr,
     pub name: Option<String>
 }
 
+/// Represents IP Addresses on a given interface
 #[derive(Debug)]
 pub struct LocalIpAddresses {
     pub ipv4_addrs: Vec<LocalInterface>,
     pub ipv6_addrs: Vec<LocalInterface>
 }
 
+/// Search interface for an available IP Address - both versions 4 and 6 
+///  - Returns LocalIpAddresses struct
 pub fn get_local_ips() -> LocalIpAddresses {
     trace!("Searching for network interfaces and IP addresses");
 
@@ -58,6 +63,7 @@ pub fn get_local_ips() -> LocalIpAddresses {
     }
 }
 
+/// Used with ip-start in Listen, if several IP addresses of same version available 
 pub fn ipstr_starts_with(
     ip: & IpAddr, starting_octets: & Option<String>
 ) -> bool {
@@ -67,6 +73,8 @@ pub fn ipstr_starts_with(
     }
 }
 
+/// Returns IP addresses on an interface
+///  - Listen - uses starting_octets to return a unique address
 pub fn get_matching_ipstr(
     ips: & Vec<LocalInterface>,
     interface_name: & str, starting_octets: & Option<String>

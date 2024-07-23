@@ -1,3 +1,9 @@
+//! # Introduction
+//! 
+//! NERSC Service Mesh manages traffic between service clusters and compute nodes.
+//! A "connection broker" with a fixed address passes the address of a service cluster
+//! for compute nodes to connect to and run a job.
+
 mod network;
 use network::{get_local_ips, get_matching_ipstr};
 
@@ -24,6 +30,16 @@ use log::{debug, error, info, trace, warn};
 use env_logger::Env;
 
 
+/// Entry point for service mesh operations
+///
+/// ## CLIOperations
+/// - ListInterfaces - outputs the interfaces on a given device
+/// - ListIPs - outputs the IP addresses on some interface
+/// - Listen - initiates connection broker, keeps track of services and clients
+/// - Claim - connect to broker to receive the address of an available service
+/// - Publish - connect to broker to publish address of a new service
+/// ### Note
+///  see cli module for more details
 fn main() -> std::io::Result<()> {
     let args = parse(& init());
 
@@ -38,6 +54,12 @@ fn main() -> std::io::Result<()> {
     let ips = get_local_ips();
 
     match args {
+
+        /// # ListInterfaces
+        /// Lists available interfaces on device
+        ///
+        /// Run from command line:
+        /// $ ./target/debug/nsm -o list_interfaces
         CLIOperation::ListInterfaces(inputs) => {
             if inputs.print_v4 {info!("Listing Matching IPv4 Interfaces");}
             if inputs.print_v6 {info!("Listing Matching IPv6 Interfaces");}
@@ -75,7 +97,11 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
-
+        /// #List IPs
+        /// Lists available IP addresses on interface
+        ///
+        /// Run from command line:
+        /// $ ./target/debug/nsm -n <interface> -o list_ips --ip-version <'4' or '6'>
         CLIOperation::ListIPs(inputs) => {
             if inputs.print_v4 {info!("Listing Matching IPv4 Addresses");}
             if inputs.print_v6 {info!("Listing Matching IPv6 Addresses");}
@@ -108,6 +134,14 @@ fn main() -> std::io::Result<()> {
             }
         }
 
+        /// # Listen
+        /// Inititate broker
+        ///
+        /// Run from command line:
+        /// $ ./target/debug/nsm -n <interface> --ip-version <'4' or '6'> --operation listen --bind-port <port #1>
+        ///
+        /// Port # info:
+        /// - #1 : listens for incoming connections from services and clients
         CLIOperation::Listen(inputs) => {
             trace!("Start setting up listener...");
 
@@ -122,6 +156,7 @@ fn main() -> std::io::Result<()> {
             };
             let host = only_or_error(& ipstr);
 
+            // initialize State struct
             let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
             let state_clone = Arc::clone(& state);
             
@@ -136,16 +171,35 @@ fn main() -> std::io::Result<()> {
 
             info!("Starting listener started on: {}:{}", & addr.host, addr.port);
 
+            // thread handles incoming connections and adds them to State and event queue
             let _thread_handler = thread::spawn(move || {
                 let _ = server(& addr, handler);
             });
+
             trace!("entering event_monitor");
+            // send State struct holding event queue into event monitor to handle heartbeats
             let _ = match event_monitor(state){
                 Ok(()) => println!("exited event monitor"),
                 Err(_) => println!("event monitor error")
             };
             
             }
+
+        /// # Claim
+        /// Connect to broker and discover available address for data connection.
+        ///
+        /// Run from command line:
+        /// $ ./target/debug/nsm -n <interface> --ip-version <'4' or '6'> --operation claim --host <fixed IP address> --port <port #1> --bind-port <port #4> --key <unique key>
+        ///
+        /// Address info:
+        /// - use broker's fixed address
+        ///
+        /// Port # info:
+        /// - #1: same port as Listen's #1
+        /// - #4: port for sending heartbeats to broker
+        /// 
+        /// Key info:
+        /// - use same key as a published service
 
         CLIOperation::Claim(inputs) => {
             let (ipstr, _all_ipstr) = if inputs.print_v4 {(
@@ -171,6 +225,7 @@ fn main() -> std::io::Result<()> {
                 service_id: 0,
             });
 
+            // connect to broker
             let stream = match connect(& Addr{
                 host: inputs.host, port: inputs.port}){
                     Ok(s) => s,
@@ -184,6 +239,7 @@ fn main() -> std::io::Result<()> {
                 header: MessageHeader::CLAIM,
                 body: _payload
             });
+            // check for successful connection to a published service
             match ack {
                 Ok(m) => {
                     trace!("Received response: {:?}", m);
@@ -191,6 +247,7 @@ fn main() -> std::io::Result<()> {
                         MessageHeader::ACK => {
                             let mut read_fail = 0;
                             let loc_stream: &mut TcpStream = &mut stream_mut.lock().unwrap();
+                            // loop handles connection race case
                             loop {
                                 sleep(Duration::from_millis(1000));
                                 let message = match stream_read(loc_stream) {
@@ -198,6 +255,7 @@ fn main() -> std::io::Result<()> {
                                     Err(err) => {return Err(err);}
                                 };
                                 trace!("{:?}", message);
+                                // print service's address to client
                                 if matches!(message.header, MessageHeader::ACK){
                                     info!("Server acknowledged CLAIM.");
                                     println!("{}", message.body);
@@ -233,9 +291,23 @@ fn main() -> std::io::Result<()> {
                 host: host.to_string(),
                 port: inputs.bind_port
             };
+
+            // send/receive heartbeats to/from broker
             let _ = server(& addr, heartbeat_handler);
         }
-
+        /// # Publish
+        /// Connect to broker and publish address for data connection.
+        ///
+        /// Run from command line:
+        /// $ ./target/debug/nsm -n <interface> --ip-version <'4' or '6'> --operation publish --host <fixed IP address> --port <port #1> --bind-port <port #2> --service-port <port #3> --key <unique key>
+        ///
+        /// Address info:
+        /// - use broker's fixed address
+        ///
+        /// Port # info:
+        /// - #1: same port as Listen's #1
+        /// - #2: port for sending heartbeats to broker
+        /// - #3: port for client connection
         CLIOperation::Publish(inputs) => {
             let (ipstr, all_ipstr) = if inputs.print_v4 {(
                 get_matching_ipstr(
@@ -260,6 +332,7 @@ fn main() -> std::io::Result<()> {
                 service_id: 0,
             });
 
+            // connect to broker
             let stream = match connect(& Addr{
                 host: inputs.host, port: inputs.port}){
                     Ok(s) => s,
@@ -274,6 +347,7 @@ fn main() -> std::io::Result<()> {
                 body: payload
             });
 
+            // check for successful connection
             match ack {
                 Ok(m) => {
                     trace!("Received response: {:?}", m);
@@ -298,7 +372,8 @@ fn main() -> std::io::Result<()> {
                 host: host.to_string(),
                 port: inputs.bind_port
             };
-                        
+
+            // send/receive heartbeats to/from broker
             let _ = server(& addr, heartbeat_handler);
 
         }

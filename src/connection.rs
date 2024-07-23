@@ -1,3 +1,5 @@
+/// Handles incoming connections and sending/receiving messages
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::fmt;
@@ -7,19 +9,27 @@ use std::sync::{Arc, Mutex};
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
+/// Store host and port for new connections
 #[derive(Debug)]
 pub struct Addr {
+    /// IP Address
     pub host: String,
+    /// Port number
     pub port: i32
 }
 
-
+/// Identify type of Message to handle it properly
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageHeader {
+    /// heartbeat
     HB,
+    /// acknowledgement
     ACK,
+    /// body contains Publish payload
     PUB,
+    /// body contains Claim payload
     CLAIM,
+    /// empty message
     NULL
 }
 
@@ -36,30 +46,32 @@ impl fmt::Display for MessageHeader {
     }
 }
 
-
+/// Send messages in body that are identified by MessageHeader
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
+    /// Specify type of Message
     pub header: MessageHeader,
+    /// Contains contents of Message
     pub body: String
 }
 
-
+/// Serialize Message struct into JSON String 
 pub fn serialize_message(payload: & Message) -> String {
     serde_json::to_string(payload).unwrap()
 }
 
-
+/// Deserialize JSON String into Message struct
 pub fn deserialize_message(payload: & String) -> Message {
     serde_json::from_str(payload).unwrap()
 }
 
-
+/// Connect to address using Addr struct, returns Result of connected TCPStream
 pub fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
 
     TcpStream::connect(format!("{}:{}", addr.host, addr.port))
 }
 
-
+/// Write a message through a TCPStream, returns Result of # of bytes written or err
 pub fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result<usize> {
     match stream.write(msg.as_bytes()) {
         Ok(n) => Ok(n),
@@ -67,7 +79,7 @@ pub fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result<usize
     }
 }
 
-
+/// Read a message from TCPStream, returns Result of # of bytes read or err
 pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
     let mut buf = [0; 1024];
     let mut message = String::new();
@@ -87,7 +99,8 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
     Ok(message)
 }
 
-
+/// Sends a message in a TCPStream using stream_write(), checks for response
+/// if message not an ACK, returns Result of Message received
 pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
 
     let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -108,7 +121,8 @@ pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<
     Ok(response)
 }
 
-
+/// Receives a message through a TCPStream using stream_read(), writes an ACK
+/// if received message not a HB or ACK
 pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 
     let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -133,7 +147,7 @@ pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
     Ok(response)
 }
 
-
+/// Binds to stream and listens for incoming connections, then handles connection using specified handler
 pub fn server(
     addr: &Addr, 
     mut handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
