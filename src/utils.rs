@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
+/// Vec must contain only one item or returns error
 pub fn only_or_error(vec: & Vec<String>) -> & String {
     match vec.as_slice() {
         [element] => element,
@@ -8,7 +8,7 @@ pub fn only_or_error(vec: & Vec<String>) -> & String {
     }
 }
 
-
+/// Vec must contain one element or None for success
 #[allow(unused)]
 pub fn only_or_none(vec: & Vec<String>) -> Option<& String> {
     match vec.as_slice() {
@@ -17,7 +17,7 @@ pub fn only_or_none(vec: & Vec<String>) -> Option<& String> {
     }
 }
 
-
+/// returns current epoch time
 #[allow(unused)]
 pub fn epoch() -> u64 {
     let now = SystemTime::now();
