@@ -1,6 +1,6 @@
 /// Track clients and services and handle events (heartbeats)
 
-use std::net::TcpStream;
+use std::net::{TcpStream, TcpListener};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex, Condvar};
@@ -41,6 +41,7 @@ pub struct Payload {
 }
 
 /// Parent trait of objects added to event queue/loop
+/// Intended to encapsulated different types of Events
 pub trait Event: Any + Send + Sync{
     /// call from event_monitor for specific Event type
     fn monitor(&mut self) -> std::io::Result<()>;
@@ -49,7 +50,7 @@ pub trait Event: Any + Send + Sync{
 }
 
 /// Heartbeat Event struct holds metadata for a service/client with a heartbeat
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Heartbeat {
     /// same key as payload, needed for rmv()
     pub key: u64,
@@ -208,7 +209,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                     if hb.service_id == (service_id as u64){
                         trace!("Connecting to new service");
                         match state_clone.claim(hb.key){
-                            Ok(p) => {
+                            Ok(_p) => {
                                 // create new Heartbeat object with new service_id
                                 event = Box::new(Heartbeat {
                                     key: hb.key,
@@ -483,7 +484,7 @@ pub fn request_handler(
                             sleep(Duration::from_millis(1000));
                             continue;
                         }
-                        // notifty main() of failure to claim an available service
+                        // notify main() of failure to claim an available service
                         let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                             header: MessageHeader::NULL,
                             body: "".to_string()
@@ -534,38 +535,356 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()>
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // #[test]
+    // fn test_event_monitor() {
+
+    //     let listener = TcpListener::Bind("127.0.0.1:12000");
+
+    //     let mut state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+    //     let (lock, _cvar) = &**state;
+
+    //     for x in 0..20{
+    //         let pub_payload = serialize(& Payload {
+    //             service_addr: 127.0.0.1,
+    //             service_port: 12020,
+    //             service_claim: epoch(),
+    //             interface_addr: Vec::new(),
+    //             bind_port: 12010,
+    //             key: 1234,
+    //             id: 0,
+    //             service_id: 0,
+    //         });
+
+    //         let stream = TCPStream::connect("127.0.0.1:12000");
+    //         let shared_stream = Arc::new(Mutex::new(stream));
+
+    //         let mut state_loc = lock.lock().unwrap();
+    //         state_loc.add(pub_payload, 0);
+
+    //     }   
+
+    //     for x in 0..20{
+    //         let claim_payload = serialize(& Payload {
+    //             service_addr: 127.0.0.1,
+    //             service_port: 12000,
+    //             service_claim: epoch(),
+    //             interface_addr: Vec::new(),
+    //             bind_port: 12015,
+    //             key: 1234,
+    //             id: 0,
+    //             service_id: 0,
+    //         });
+
+    //         let stream = TCPStream::connect("127.0.0.1:12000");
+    //         let shared_stream = Arc::new(Mutex::new(stream));
+        
+    //         let mut state_loc = lock.lock().unwrap();
+    //         let pub_pl = match state_loc.claim(claim_payload.key){
+    //             Ok(p) => p,
+    //             _ => err
+    //         }
+    //         state_loc.add(claim_payload, (*pub_p).service_id);
+    //     }
+
+    //     let _ = match event_monitor(state){
+    //         Ok(()) => println!("exited event monitor"),
+    //         Err(_) => println!("event monitor error")
+    //     };
+    // }
+
+    /// check if function returns an error when a client claims an unused key
     #[test]
-    fn test_event_monitor() {
+    fn test_claim_key_DNE() {
+
+        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+        let (lock, _cvar) = &*state;
+        
+        // add published services to State struct with two copies of 10 keys
+        for x in 1..21{
+            let k: f64 = (1000 + x/2) as f64;
+            let mut p = Payload {
+                service_addr: vec!["127.0.0.1".to_string()],
+                service_port: 12020,
+                service_claim: 0,
+                interface_addr: Vec::new(),
+                bind_port: 12010,
+                key: k.floor() as u64,
+                id: 0,
+                service_id: 0,
+            };
+            let mut state_loc = lock.lock().unwrap();
+            let seq = state_loc.seq;
+            let cl: &mut Vec<Payload> = state_loc.clients.entry(p.key).or_insert(Vec::new());
+            p.id = seq;
+            p.service_id = seq;
+            cl.push(p);
+            state_loc.seq += 1;
+        }
+        // claim published services with matching keys
+        for x in 1..21{
+            let k: f64 = (1000 + x/2) as f64;
+            let mut state_loc = lock.lock().unwrap();
+            let result = state_loc.claim(k.floor() as u64);
+        }
+        // try to claim a key that does not exist in State
+        let mut state_loc = lock.lock().unwrap();
+        let result = state_loc.claim(2000);
+        assert!(result.is_err());
+    }
+
+    /// check if function returns an error when a client claims a used key with no more available services
+    #[test]
+    fn test_claim_filled_services() {
+
+        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+        let (lock, _cvar) = &*state;
+        
+        // add published services to State struct with two copies of 10 keys
+        for x in 1..21{
+            let k: f64 = (1000 + x/2) as f64;
+            let mut p = Payload {
+                service_addr: vec!["127.0.0.1".to_string()],
+                service_port: 12020,
+                service_claim: 0,
+                interface_addr: Vec::new(),
+                bind_port: 12010,
+                key: k.floor() as u64,
+                id: 0,
+                service_id: 0,
+            };
+            let mut state_loc = lock.lock().unwrap();
+            let seq = state_loc.seq;
+            let cl: &mut Vec<Payload> = state_loc.clients.entry(p.key).or_insert(Vec::new());
+            p.id = seq;
+            p.service_id = seq;
+            cl.push(p);
+            state_loc.seq += 1;
+        }
+        // claim published services with matching keys
+        for x in 1..21{
+            let k: f64 = (1000 + x/2) as f64;
+            let mut state_loc = lock.lock().unwrap();
+            let result = state_loc.claim(k.floor() as u64);
+        }
+        // try to claim existing key without available service
+        let mut state_loc = lock.lock().unwrap();
+        let result = state_loc.claim(1000);
+        assert!(result.is_err());
+    }
+
+    /// Test adding services and clients to State
+    #[test]
+    fn test_add() {
+
+        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+        let (lock, _cvar) = &*state;
+
+        let listener = TcpListener::bind("127.0.0.1:12010");
+        
+        // add published services to State struct with two copies of 10 keys
+        for x in 1..21{
+            let k: f64 = (1000 + x/2) as f64;
+            let mut p = Payload {
+                service_addr: vec!["127.0.0.1".to_string()],
+                service_port: 12020,
+                service_claim: 0,
+                interface_addr: Vec::new(),
+                bind_port: 12010,
+                key: k.floor() as u64,
+                id: 0,
+                service_id: 0,
+            };
+            let mut state_loc = lock.lock().unwrap();
+            let result = state_loc.add(p, 0);
+            assert!(result.is_ok());
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:12015");
+    
+        // add clients to State struct with two copies of 10 keys
+        for x in 1..21{
+            let k: f64 = (1000 + x/2) as f64;
+            let mut p = Payload {
+                service_addr: vec!["127.0.0.1".to_string()],
+                service_port: 12000,
+                service_claim: epoch(),
+                interface_addr: Vec::new(),
+                bind_port: 12015,
+                key: k.floor() as u64,
+                id: 0,
+                service_id: 0,
+            };
+            let mut state_loc = lock.lock().unwrap();
+            let mut service_id = 0;
+            match state_loc.claim(p.key){
+                Ok(pl) => service_id = (*pl).service_id,
+                _ => panic!("Error: Failed to claim key")
+            };
+            let result = state_loc.add(p, service_id);
+            assert!(result.is_ok());
+        }
 
     }
 
+    /// test if rmv() properly removes a client when exits event queue
     #[test]
-    fn test_add{
-
-    }
-
-    #[test]
-    fn test_remove{
-
-    }
-
-    #[test]
-    fn test_claim{
-
+    fn test_rmv_client() {
+        #[test]
+        fn test_rmv_service() {
+    
+            let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+            let (lock, _cvar) = &*state;
+    
+            let listener = TcpListener::bind("127.0.0.1:12010");
+            
+            // add published services to State struct with two copies of 10 keys
+            for x in 1..21{
+                let k: f64 = (1000 + x/2) as f64;
+                let mut p = Payload {
+                    service_addr: vec!["127.0.0.1".to_string()],
+                    service_port: 12020,
+                    service_claim: 0,
+                    interface_addr: Vec::new(),
+                    bind_port: 12010,
+                    key: k.floor() as u64,
+                    id: 0,
+                    service_id: 0,
+                };
+                let mut state_loc = lock.lock().unwrap();
+                state_loc.add(p, 0);
+            }
+    
+            let listener = TcpListener::bind("127.0.0.1:12015");
+        
+            // add clients to State struct with two copies of 10 keys
+            for x in 1..21{
+                let k: f64 = (1000 + x/2) as f64;
+                let mut p = Payload {
+                    service_addr: vec!["127.0.0.1".to_string()],
+                    service_port: 12000,
+                    service_claim: epoch(),
+                    interface_addr: Vec::new(),
+                    bind_port: 12015,
+                    key: k.floor() as u64,
+                    id: 0,
+                    service_id: 0,
+                };
+                let mut state_loc = lock.lock().unwrap();
+                let mut service_id = 0;
+                match state_loc.claim(p.key){
+                    Ok(pl) => service_id = (*pl).service_id,
+                    _ => panic!("Error: Failed to claim key")
+                };
+                state_loc.add(p, service_id);
+            }
+            {
+                // State contains all services and clients
+                let mut state_loc = lock.lock().unwrap();
+                state_loc.print();
+            }
+            // remove all clients from State
+            for x in 1..21{
+                let mut state_loc = lock.lock().unwrap();
+                let k: f64 = (1000 + x/2) as f64;
+                // id = x+20 : services' ids are 1-21
+                // service_id = x : client's service_ids match services' ids
+                let result = state_loc.rmv(k.floor() as u64, x + 20, x);
+                assert!(result.is_ok());
+            }
+            {
+                // State only contains clients
+                let mut state_loc = lock.lock().unwrap();
+                state_loc.print();
+            }
+        }
     }
     
-    #[test]
-    fn test_request_handler{
+    // test if rmv() properly removes service when exits event queue
+    // #[test]
+    // fn test_rmv_service() {
+        #[test]
+    fn test_rmv_service() {
 
-    }
+        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+        let (lock, _cvar) = &*state;
 
-    #[test]
-    fn test_heartbeat_handler{
+        let listener = TcpListener::bind("127.0.0.1:12010");
         
+        // add published services to State struct with two copies of 10 keys
+        for x in 1..21{
+            let k: f64 = (1000 + x/2) as f64;
+            let mut p = Payload {
+                service_addr: vec!["127.0.0.1".to_string()],
+                service_port: 12020,
+                service_claim: 0,
+                interface_addr: Vec::new(),
+                bind_port: 12010,
+                key: k.floor() as u64,
+                id: 0,
+                service_id: 0,
+            };
+            let mut state_loc = lock.lock().unwrap();
+            state_loc.add(p, 0);
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:12015");
+    
+        // add clients to State struct with two copies of 10 keys
+        for x in 1..21{
+            let k: f64 = (1000 + x/2) as f64;
+            let mut p = Payload {
+                service_addr: vec!["127.0.0.1".to_string()],
+                service_port: 12000,
+                service_claim: epoch(),
+                interface_addr: Vec::new(),
+                bind_port: 12015,
+                key: k.floor() as u64,
+                id: 0,
+                service_id: 0,
+            };
+            let mut state_loc = lock.lock().unwrap();
+            let mut service_id = 0;
+            match state_loc.claim(p.key){
+                Ok(pl) => service_id = (*pl).service_id,
+                _ => panic!("Error: Failed to claim key")
+            };
+            state_loc.add(p, service_id);
+        }
+        {
+            // State contains all services and clients
+            let mut state_loc = lock.lock().unwrap();
+            state_loc.print();
+        }
+        // remove all services from State
+        for x in 1..21{
+            let mut state_loc = lock.lock().unwrap();
+            let k: f64 = (1000 + x/2) as f64;
+            // id = x: services' ids are 1-21
+            // service_id = x : id == service_id
+            let result = state_loc.rmv(k.floor() as u64, x, x);
+            assert!(result.is_ok());
+        }
+        {
+            // State only contains clients
+            let mut state_loc = lock.lock().unwrap();
+            state_loc.print();
+        }
     }
+    //}
+
+    // #[test]
+    // fn test_request_handler() {
+
+    // }
+
+    // #[test]
+    // fn test_heartbeat_handler() {
+
+    // }
 
 }

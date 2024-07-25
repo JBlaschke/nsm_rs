@@ -20,7 +20,7 @@ mod cli;
 use cli::{init, parse, CLIOperation};
 
 use std::thread;
-use std::net::{TcpStream, TcpListener};
+use std::net::TcpStream;
 use std::sync::{Arc, Mutex, Condvar};
 use std::time::Duration;
 use std::thread::sleep;
@@ -55,11 +55,8 @@ fn main() -> std::io::Result<()> {
 
     match args {
 
-        /// # ListInterfaces
-        /// Lists available interfaces on device
-        ///
-        /// Run from command line:
-        /// $ ./target/debug/nsm -o list_interfaces
+        // # ListInterfaces
+        // Lists available interfaces on device
         CLIOperation::ListInterfaces(inputs) => {
             if inputs.print_v4 {info!("Listing Matching IPv4 Interfaces");}
             if inputs.print_v6 {info!("Listing Matching IPv6 Interfaces");}
@@ -97,11 +94,9 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
-        /// #List IPs
-        /// Lists available IP addresses on interface
-        ///
-        /// Run from command line:
-        /// $ ./target/debug/nsm -n <interface> -o list_ips --ip-version <'4' or '6'>
+
+        // Lists available IP addresses on interface
+        // Match command line entries with variables in struct
         CLIOperation::ListIPs(inputs) => {
             if inputs.print_v4 {info!("Listing Matching IPv4 Addresses");}
             if inputs.print_v6 {info!("Listing Matching IPv6 Addresses");}
@@ -134,14 +129,8 @@ fn main() -> std::io::Result<()> {
             }
         }
 
-        /// # Listen
-        /// Inititate broker
-        ///
-        /// Run from command line:
-        /// $ ./target/debug/nsm -n <interface> --ip-version <'4' or '6'> --operation listen --bind-port <port #1>
-        ///
-        /// Port # info:
-        /// - #1 : listens for incoming connections from services and clients
+        // Inititate broker
+        // Match command line entries with variables in struct
         CLIOperation::Listen(inputs) => {
             trace!("Start setting up listener...");
 
@@ -185,22 +174,8 @@ fn main() -> std::io::Result<()> {
             
             }
 
-        /// # Claim
-        /// Connect to broker and discover available address for data connection.
-        ///
-        /// Run from command line:
-        /// $ ./target/debug/nsm -n <interface> --ip-version <'4' or '6'> --operation claim --host <fixed IP address> --port <port #1> --bind-port <port #4> --key <unique key>
-        ///
-        /// Address info:
-        /// - use broker's fixed address
-        ///
-        /// Port # info:
-        /// - #1: same port as Listen's #1
-        /// - #4: port for sending heartbeats to broker
-        /// 
-        /// Key info:
-        /// - use same key as a published service
-
+        // # Claim
+        // Connect to broker and discover available address for data connection.
         CLIOperation::Claim(inputs) => {
             let (ipstr, _all_ipstr) = if inputs.print_v4 {(
                 get_matching_ipstr(
@@ -295,19 +270,8 @@ fn main() -> std::io::Result<()> {
             // send/receive heartbeats to/from broker
             let _ = server(& addr, heartbeat_handler);
         }
-        /// # Publish
-        /// Connect to broker and publish address for data connection.
-        ///
-        /// Run from command line:
-        /// $ ./target/debug/nsm -n <interface> --ip-version <'4' or '6'> --operation publish --host <fixed IP address> --port <port #1> --bind-port <port #2> --service-port <port #3> --key <unique key>
-        ///
-        /// Address info:
-        /// - use broker's fixed address
-        ///
-        /// Port # info:
-        /// - #1: same port as Listen's #1
-        /// - #2: port for sending heartbeats to broker
-        /// - #3: port for client connection
+        // # Publish
+        // Connect to broker and publish address for data connection.
         CLIOperation::Publish(inputs) => {
             let (ipstr, all_ipstr) = if inputs.print_v4 {(
                 get_matching_ipstr(
