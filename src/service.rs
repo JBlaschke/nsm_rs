@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::thread;
 use threadpool::ThreadPool;
 use std::collections::VecDeque;
 use std::io::{self};
 use std::any::Any;
+use std::fmt;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -41,6 +42,38 @@ pub struct Payload {
     pub service_id: u64,
 }
 
+/// Store fail_count for heartbeats and limit increment rate
+#[derive(Clone, Debug)]
+pub struct FailCounter{
+    /// increment when heartbeat is not returned when expected
+    pub fail_count: i32,
+    /// track time from last fail_count increment
+    pub last_increment: Instant,
+    /// set interval for incrementing fail_count
+    pub interval: Duration,
+}
+
+/// create and manipulate FailCounter struct
+impl FailCounter{
+    /// create new FailCounter struct
+    fn new() -> Self {
+        Self {
+            fail_count: 0,
+            last_increment: Instant::now(),
+            interval: Duration::from_secs(10),
+        }
+    }
+
+    /// increment fail_count
+    fn increment(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_increment) >= self.interval {
+            self.fail_count += 1;
+            self.last_increment = now;
+        }
+    }
+}
+
 /// Parent trait of objects added to event queue/loop
 /// Intended to encapsulated different types of Events
 pub trait Event: Any + Send + Sync{
@@ -48,6 +81,15 @@ pub trait Event: Any + Send + Sync{
     fn monitor(&mut self) -> std::io::Result<()>;
     /// allows Event object to be downcasted
     fn as_any(&mut self) -> &mut dyn Any;
+
+    fn describe(&self) -> String;
+}
+
+/// Allows for printing out event queue of event objects 
+impl fmt::Debug for dyn Event {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Event: {}", self.describe())
+    }
 }
 
 /// Heartbeat Event struct holds metadata for a service/client with a heartbeat
@@ -62,7 +104,7 @@ pub struct Heartbeat {
     /// stream used to send heartbeats to client/service
     pub stream: Arc<Mutex<TcpStream>>,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
-    pub fail_count: i32,
+    pub fail_counter: FailCounter
 }
 
 /// Heartbeats are treated as an Event to handle other types of events in the same queue
@@ -73,13 +115,17 @@ impl Event for Heartbeat {
         self
     }
 
+    fn describe(&self) -> String {
+        format!("Heartbeat id: {}, failcount: {}", self.id, self.fail_counter.fail_count)
+    }
+
     /// send a heartbeat to the service/client and check if entity sent one back,
     /// increment fail_count if heartbeat not received when expected
     fn monitor(&mut self) -> std::io::Result<()>{
         let mut loc_stream = match self.stream.lock() {
             Ok(guard) => guard,
             Err(_err) => {
-                self.fail_count += 1;
+                self.fail_counter.increment();
                 return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
             }
         };
@@ -99,21 +145,21 @@ impl Event for Heartbeat {
         let received = match stream_read(&mut loc_stream) {
             Ok(message) => message,
             Err(err) => {
-                self.fail_count += 1;
-                trace!("Failed to receive data from stream. {:?}", self.fail_count);
+                self.fail_counter.increment();
+                trace!("Failed to receive data from stream. {:?}", self.fail_counter.fail_count);
                 return Err(err);
             }
         };
     
         if received == "" {
-            self.fail_count += 1;
-            trace!("Failed to receive HB. {:?}", self.fail_count);
+            self.fail_counter.increment();
+            trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput, "HB Failed")
             );
         } else {    
-            self.fail_count = 0;
-            trace!("Resetting failcount. {}", self.fail_count);
+            self.fail_counter.fail_count = 0;
+            trace!("Resetting failcount. {}", self.fail_counter.fail_count);
         }
     
         sleep(Duration::from_millis(2000)); //change to any time interval, must match time in heartbeat_handler()
@@ -144,7 +190,13 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
             // loop is paused while there are no events to handle
             while !state_loc.running {
                 trace!("waiting to run");
-                state_loc = cvar.wait(state_loc).unwrap();
+                let (new_state_loc, result) = cvar.wait_timeout(state_loc, Duration::from_secs(1)).unwrap();
+                state_loc = new_state_loc;
+                if result.timed_out() {
+                    // Set running to true and notify
+                    state_loc.running = true;
+                    cvar.notify_one();
+                }
             }
         }
 
@@ -191,8 +243,10 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
 
         let deque_clone2 = Arc::clone(& deque_clone);
         let data_clone = Arc::clone(&data);
-        let state_loc = lock.lock().unwrap();
+        let mut state_loc = lock.lock().unwrap();
         let mut state_clone = state_loc.clone();
+        state_loc.running = true;
+        cvar.notify_one();
 
         // use a worker from threadpool to handle events with multithreading
         state_loc.pool.execute(move || {
@@ -204,7 +258,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
             // or if client should be claim a new service
             if let Some(hb) = event.as_any().downcast_mut::<Heartbeat>() {
                 let mut data = data_clone.lock().unwrap();
-                *data = (hb.fail_count, hb.key, hb.id, hb.service_id);
+                *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id);
                 if data.0 < 10 {
                     trace!("Adding back to VecDeque: {:?}", data.0);
                     if hb.service_id == (service_id as u64){
@@ -217,7 +271,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                                     id: hb.id,
                                     service_id: hb.service_id,
                                     stream: Arc::clone(&hb.stream),
-                                    fail_count: 0
+                                    fail_counter: FailCounter::new(),
                                 });
                                 {
                                     // add updated client back to queue 
@@ -236,6 +290,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                         // add event back to queue 
                         let mut loc_deque = deque_clone2.lock().unwrap();
                         let _ = loc_deque.push_back(event);
+                        println!("{:?}", loc_deque);
                     }
                 } else {
                     // service or client no longer connected to broker
@@ -316,7 +371,7 @@ impl State {
             id: self.seq,
             service_id: temp_id,
             stream: shared_hb_stream,
-            fail_count: 0
+            fail_counter: FailCounter::new(),
         };
         trace!("Adding new connection to queue");
         {
@@ -895,9 +950,10 @@ mod tests {
         }
     }
 
+    /// test if request_handler() panics when receiving a NULL message
     #[test]
     #[should_panic]
-    fn test_request_handler_NULL() {
+    fn test_request_handler_null() {
 
         let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
 
@@ -923,9 +979,10 @@ mod tests {
         }
     }
 
+    /// test if request_handler() panics when receiving an ACK message
     #[test]
     #[should_panic]
-    fn test_request_handler_ACK() {
+    fn test_request_handler_ack() {
 
         let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
 
@@ -951,6 +1008,7 @@ mod tests {
         }
     }
 
+    /// test if request_handler() panics when receiving a HB message
     #[test]
     #[should_panic]
     fn test_request_handler_HB() {
@@ -979,6 +1037,7 @@ mod tests {
         }
     }
 
+    /// test if request_handler() panics when no service to claim
     #[test]
     #[should_panic]
     fn test_request_handler_CLAIM() {
@@ -992,10 +1051,10 @@ mod tests {
 
         let p = Payload {
             service_addr: vec!["127.0.0.1".to_string()],
-            service_port: 13000,
+            service_port: 15000,
             service_claim: epoch(),
             interface_addr: Vec::new(),
-            bind_port: 13015,
+            bind_port: 15015,
             key: 1000,
             id: 0,
             service_id: 0,
@@ -1038,9 +1097,143 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn test_heartbeat_handler() {
+    /// test if request_handler() successfully completes with PUB message
+    #[test]
+    fn test_request_handler_PUB() {
 
-    // }
+        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+
+        sleep(Duration::from_millis(500));
+        let listener = TcpListener::bind("127.0.0.1:16000").unwrap();
+        sleep(Duration::from_millis(500));
+        let mut stream = TcpStream::connect("127.0.0.1:16000").unwrap();
+
+        let p = Payload {
+            service_addr: vec!["127.0.0.1".to_string()],
+            service_port: 16020,
+            service_claim: epoch(),
+            interface_addr: Vec::new(),
+            bind_port: 16010,
+            key: 1000,
+            id: 0,
+            service_id: 0,
+        };
+
+        let _ = stream_write(&mut stream, & serialize_message(
+            & Message {
+                header: MessageHeader::PUB,
+                body: serialize(&p)
+            }
+        ));
+
+        for s in listener.incoming(){
+            match s {
+                Ok(s) => {
+                    let shared_stream = Arc::new(Mutex::new(s));
+                    let stream_clone = Arc::clone(&shared_stream);
+                    let state_clone = state.clone();
+                    let thread_handler = thread::spawn(move || {
+                        let result = request_handler(&state_clone, &stream_clone);
+                        assert!(result.is_ok());
+                    });
+                    let _ = thread_handler.join();
+                    break;
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
+        }
+    }
+
+    /// test if heartbeat handler properly processes non-heartbeat messages
+    #[test]
+    #[should_panic]
+    fn test_heartbeat_handler_incorrect_message() {
+
+        let publisher = TcpListener::bind("127.0.0.1:17000").unwrap();
+        sleep(Duration::from_millis(500));
+        let mut stream = TcpStream::connect("127.0.0.1:17000").unwrap();
+
+        let _ = stream_write(&mut stream, & serialize_message(
+            & Message {
+                header: MessageHeader::PUB,
+                body: "".to_string()
+            }
+        ));
+        for s in publisher.incoming(){
+            match s {
+                Ok(s) => {
+                    let shared_stream = Arc::new(Mutex::new(s));
+                    let stream_clone = Arc::clone(&shared_stream);
+                    let thread_handler = thread::spawn(move || {
+                        let _ = heartbeat_handler(&stream_clone);
+                    });
+                    sleep(Duration::from_millis(1000));
+                    let failure_duration = Duration::from_secs(10);
+                    match stream.set_read_timeout(Some(failure_duration)) {
+                        Ok(_x) => trace!("set_read_timeout OK"),
+                        Err(_e) => trace!("set_read_timeout Error")
+                    }
+                    let _ = match stream_read(&mut stream) {
+                        Ok(m) => deserialize_message(& m),
+                        Err(err) => panic!("server correctly dropped claim")
+                    };
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
+        }
+
+    }
+
+    /// test if heartbeat handler returns a heartbeat message
+    #[test]
+    fn test_heartbeat_handler_correct_message() {
+
+        let publisher = TcpListener::bind("127.0.0.1:17010").unwrap();
+        sleep(Duration::from_millis(500));
+        let mut stream = TcpStream::connect("127.0.0.1:17010").unwrap();
+
+        let _ = stream_write(&mut stream, & serialize_message(
+            & Message {
+                header: MessageHeader::HB,
+                body: "".to_string()
+            }
+        ));
+        println!("entering loop");
+        for s in publisher.incoming(){
+            match s {
+                Ok(s) => {
+                    let shared_stream = Arc::new(Mutex::new(s));
+                    let stream_clone = Arc::clone(&shared_stream);
+                    let thread_handler = thread::spawn(move || {
+                        let _ = heartbeat_handler(&stream_clone);
+                    });
+                    sleep(Duration::from_millis(1000));
+                    let failure_duration = Duration::from_secs(5);
+                    match stream.set_read_timeout(Some(failure_duration)) {
+                        Ok(_x) => trace!("set_read_timeout OK"),
+                        Err(_e) => trace!("set_read_timeout Error")
+                    }
+                    let message = match stream_read(&mut stream) {
+                        Ok(m) => deserialize_message(& m),
+                        Err(err) => panic!("server correctly dropped claim")
+                    };
+                    let header = match message.header{
+                        MessageHeader::HB => "HB",
+                        _ => panic!("heartbeat not returned properly")
+                    };
+                    assert!(header == "HB");
+                    break;
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
+        }
+
+    }
 
 }
