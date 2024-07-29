@@ -260,7 +260,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                 let mut data = data_clone.lock().unwrap();
                 *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id);
                 if data.0 < 10 {
-                    trace!("Adding back to VecDeque: {:?}", data.0);
+                    trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
                     if hb.service_id == (service_id as u64){
                         trace!("Connecting to new service");
                         match state_clone.claim(hb.key){
@@ -290,7 +290,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                         // add event back to queue 
                         let mut loc_deque = deque_clone2.lock().unwrap();
                         let _ = loc_deque.push_back(event);
-                        println!("{:?}", loc_deque);
+                        trace!("{:?}", loc_deque);
                     }
                 } else {
                     // service or client no longer connected to broker
@@ -496,11 +496,11 @@ pub fn request_handler(
         MessageHeader::NULL => panic!("Unexpected NULL message encountered!"),
     };
 
-    println!("Request handler received: {:?}", payload);
+    trace!("Request handler received: {:?}", payload);
     // handle services (PUB) and clients (CLAIM) appropriately
     match message.header {
         MessageHeader::PUB => {
-            println!("Publishing Service: {:?}", payload);
+            trace!("Publishing Service: {:?}", payload);
             let (lock, cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
 
@@ -512,7 +512,7 @@ pub fn request_handler(
             state_loc.print(); // print state of clients hashmap
         },
         MessageHeader::CLAIM => {
-            println!("Claiming Service: {:?}", payload);
+            trace!("Claiming Service: {:?}", payload);
 
             let (lock, _cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
@@ -541,7 +541,6 @@ pub fn request_handler(
                             continue;
                         }
                         // notify main() of failure to claim an available service
-                        println!("claim failed");
                         let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                             header: MessageHeader::NULL,
                             body: "".to_string()
@@ -1002,7 +1001,7 @@ mod tests {
                     let _ = request_handler(&state, &shared_stream);
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1031,7 +1030,7 @@ mod tests {
                     let _ = request_handler(&state, &shared_stream);
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1091,7 +1090,7 @@ mod tests {
                     }
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1140,7 +1139,7 @@ mod tests {
                     break;
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1181,7 +1180,7 @@ mod tests {
                     };
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1202,7 +1201,6 @@ mod tests {
                 body: "".to_string()
             }
         ));
-        println!("entering loop");
         for s in publisher.incoming(){
             match s {
                 Ok(s) => {
@@ -1229,7 +1227,7 @@ mod tests {
                     break;
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }

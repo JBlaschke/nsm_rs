@@ -14,7 +14,7 @@ pub fn init() -> ArgMatches {
             .help("Operation to be performed")
             .num_args(1)
             .required(true)
-            .value_parser(["list_interfaces", "list_ips", "listen", "claim", "publish"])
+            .value_parser(["list_interfaces", "list_ips", "listen", "claim", "publish", "collect"])
         )
         .arg(
             Arg::new("interface_name")
@@ -96,6 +96,16 @@ pub fn init() -> ArgMatches {
             .required(false)
             .value_parser(clap::value_parser!(u64))
         )
+
+        .arg(
+            Arg::new("json")
+            .long("json")
+            .value_name("JSON")
+            .help("Output from claim")
+            .num_args(1)
+            .required(false)
+        )
+
         .get_matches();
 
         return args;
@@ -195,9 +205,9 @@ pub struct Claim {
     pub key: u64
 }
 
-/// Match command line entries with variables in struct
-///
+
 /// Connect to broker and publish address for data connection.
+/// Match command line entries with variables in struct
 ///
 /// ## Example 
 /// Run from command line:
@@ -232,6 +242,33 @@ pub struct Publish {
     pub key: u64
 }
 
+/// Collect service's address from Claim's output 
+/// and initiate a service-client connection internally.
+///
+/// Match command line entries with variables in struct
+///
+/// ## Example 
+/// Run from command line:
+/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation collect       ```
+///
+#[derive(Debug)]
+pub struct Collect {
+    /// connecting to version 4 address
+    pub print_v4: bool,
+    /// connection to version 6 address
+    pub print_v6: bool,
+    /// broker's local IP address
+    pub host: String,
+    /// same as Listen's bind_port, notify of new connection
+    pub port: i32,
+    /// name of interface
+    pub name: String,
+    /// filter IP addresses to 1 output when more than 1 available
+    pub starting_octets: Option<String>,
+    /// contains contents collected from claim
+    pub json: String,
+}
+
 /// Define possible operations to run in main() based on command line entry
 #[derive(Debug)]
 pub enum CLIOperation {
@@ -244,7 +281,9 @@ pub enum CLIOperation {
     /// claim a service
     Claim(Claim),
     /// publish a service
-    Publish(Publish)
+    Publish(Publish),
+    /// collect outputs from claim and start service-client connection
+    Collect(Collect),
 }
 
 /// Parse through command line arguments and send them to a CLIOperation
@@ -358,6 +397,27 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     bind_port: bind_port,
                     service_port: service_port,
                     key: key
+                }
+            )
+        }
+        "collect" => {
+            assert!(args.contains_id("host"));
+            assert!(args.contains_id("port"));
+            assert!(args.contains_id("interface_name"));
+            let host =   args.get_one::<String>("host").unwrap();
+            let port = * args.get_one::<i32>("port").unwrap();
+            let name = args.get_one::<String>("interface_name").unwrap();
+            let starting_octets =   args.get_one::<String>("ip_start");
+            let json = args.get_one::<String>("json").unwrap();
+            return CLIOperation::Collect(
+                Collect{
+                    print_v4: print_v4,
+                    print_v6: print_v6,
+                    host: host.to_string(),
+                    port: port,
+                    name: name.to_string(),
+                    starting_octets: starting_octets.cloned(),
+                    json: json
                 }
             )
         }
