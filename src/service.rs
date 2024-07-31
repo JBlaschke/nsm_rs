@@ -81,7 +81,7 @@ pub trait Event: Any + Send + Sync{
     fn monitor(&mut self) -> std::io::Result<()>;
     /// allows Event object to be downcasted
     fn as_any(&mut self) -> &mut dyn Any;
-
+    /// print event info to debug
     fn describe(&self) -> String;
 }
 
@@ -115,6 +115,7 @@ impl Event for Heartbeat {
         self
     }
 
+    /// print ID and fail_count to debug
     fn describe(&self) -> String {
         format!("Heartbeat id: {}, failcount: {}", self.id, self.fail_counter.fail_count)
     }
@@ -260,7 +261,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                 let mut data = data_clone.lock().unwrap();
                 *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id);
                 if data.0 < 10 {
-                    trace!("Adding back to VecDeque: {:?}", data.0);
+                    trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
                     if hb.service_id == (service_id as u64){
                         trace!("Connecting to new service");
                         match state_clone.claim(hb.key){
@@ -290,7 +291,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                         // add event back to queue 
                         let mut loc_deque = deque_clone2.lock().unwrap();
                         let _ = loc_deque.push_back(event);
-                        println!("{:?}", loc_deque);
+                        trace!("{:?}", loc_deque);
                     }
                 } else {
                     // service or client no longer connected to broker
@@ -496,11 +497,11 @@ pub fn request_handler(
         MessageHeader::NULL => panic!("Unexpected NULL message encountered!"),
     };
 
-    println!("Request handler received: {:?}", payload);
+    trace!("Request handler received: {:?}", payload);
     // handle services (PUB) and clients (CLAIM) appropriately
     match message.header {
         MessageHeader::PUB => {
-            println!("Publishing Service: {:?}", payload);
+            trace!("Publishing Service: {:?}", payload);
             let (lock, cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
 
@@ -512,7 +513,7 @@ pub fn request_handler(
             state_loc.print(); // print state of clients hashmap
         },
         MessageHeader::CLAIM => {
-            println!("Claiming Service: {:?}", payload);
+            trace!("Claiming Service: {:?}", payload);
 
             let (lock, _cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
@@ -541,7 +542,6 @@ pub fn request_handler(
                             continue;
                         }
                         // notify main() of failure to claim an available service
-                        println!("claim failed");
                         let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                             header: MessageHeader::NULL,
                             body: "".to_string()
@@ -555,14 +555,31 @@ pub fn request_handler(
 
             println!("Now state:");
             state_loc.print(); // print state of clients hashmap
-        }
+        },
         _ => {panic!("This should not be reached!");}
     }
     Ok(())
 }
 
-/// receive a heartbeat from broker and send one back to show life of connection
-pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()> {
+pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option<&String>)
+-> std::io::Result<()> {
+    let stream_clone = Arc::clone(&stream);
+
+    // retrieve service's payload from client or set an empty message body
+    let binding = "".to_string();
+    let payload = payload.unwrap_or(&binding);
+    let payload_clone = payload.clone();
+
+    let _ = thread::spawn(move || {
+        let _ = heartbeat_handler(&stream_clone, &payload_clone);
+    });
+    return Ok(());
+}
+
+/// Receive a heartbeat from broker and send one back to show life of connection.
+/// If a client, HB message contains payload of connected service to use in Collect()
+pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String)
+  -> std::io::Result<()> {
     trace!("Starting heartbeat handler");
 
     loop{
@@ -584,7 +601,7 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<()>
             trace!("Heartbeat handler received {:?}", request);
             let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                 header: MessageHeader::HB,
-                body: request.body
+                body: payload.clone()
             }));
             trace!("Heartbeat handler has returned heartbeat request");
         }
@@ -973,7 +990,7 @@ mod tests {
                     let _ = request_handler(&state, &shared_stream);
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1002,7 +1019,7 @@ mod tests {
                     let _ = request_handler(&state, &shared_stream);
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1031,7 +1048,7 @@ mod tests {
                     let _ = request_handler(&state, &shared_stream);
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1091,7 +1108,7 @@ mod tests {
                     }
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1140,7 +1157,7 @@ mod tests {
                     break;
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1181,7 +1198,7 @@ mod tests {
                     };
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }
@@ -1202,7 +1219,6 @@ mod tests {
                 body: "".to_string()
             }
         ));
-        println!("entering loop");
         for s in publisher.incoming(){
             match s {
                 Ok(s) => {
@@ -1229,7 +1245,7 @@ mod tests {
                     break;
                 }
                 Err(e) => {
-                    println!("Error: {}", e);
+                    panic!("Error: {}", e);
                 }
             }
         }

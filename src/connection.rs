@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use log::{debug, error, info, trace, warn};
 
 /// Store host and port for new connections
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Addr {
     /// IP Address
     pub host: String,

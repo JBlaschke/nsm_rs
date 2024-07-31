@@ -8,10 +8,10 @@ mod network;
 use network::{get_local_ips, get_matching_ipstr};
 
 mod connection;
-use connection::{Message, MessageHeader, connect, Addr, server, send, stream_read, deserialize_message};
+use connection::{Message, MessageHeader, connect, Addr, server, send, stream_read, serialize_message, deserialize_message};
 
 mod service;
-use service::{Payload, State, serialize, request_handler, heartbeat_handler, event_monitor};
+use service::{Payload, State, serialize, deserialize, request_handler, heartbeat_handler_helper, event_monitor};
 
 mod utils;
 use utils::{only_or_error, epoch};
@@ -214,6 +214,9 @@ fn main() -> std::io::Result<()> {
                 header: MessageHeader::CLAIM,
                 body: _payload
             });
+
+            let mut service_payload = "".to_string();
+
             // check for successful connection to a published service
             match ack {
                 Ok(m) => {
@@ -234,6 +237,7 @@ fn main() -> std::io::Result<()> {
                                 if matches!(message.header, MessageHeader::ACK){
                                     info!("Server acknowledged CLAIM.");
                                     println!("{}", message.body);
+                                    service_payload = message.body;
                                     break;
                                 }
                                 else{
@@ -260,6 +264,9 @@ fn main() -> std::io::Result<()> {
                     ));
                 }
             }
+            let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
+                return heartbeat_handler_helper(stream, Some(&service_payload));
+            };
 
             let host = only_or_error(& ipstr);
             let addr = Addr {
@@ -268,7 +275,7 @@ fn main() -> std::io::Result<()> {
             };
 
             // send/receive heartbeats to/from broker
-            let _ = server(& addr, heartbeat_handler);
+            let _ = server(& addr, handler);
         }
         // # Publish
         // Connect to broker and publish address for data connection.
@@ -337,8 +344,69 @@ fn main() -> std::io::Result<()> {
                 port: inputs.bind_port
             };
 
+            let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
+                return heartbeat_handler_helper(stream, None);
+            };
+
             // send/receive heartbeats to/from broker
-            let _ = server(& addr, heartbeat_handler);
+            let _ = server(& addr, handler);
+
+        }
+
+        CLIOperation::Collect(inputs) => {
+
+            let addr = Addr {
+                host: inputs.host,
+                port: inputs.port
+            };
+
+            // connect to bind port of service or client
+            let stream = match connect(& addr){
+                    Ok(s) => s,
+                    Err(_e) => {
+                        return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
+                        }
+            };        
+            trace!("Connection to {:?} successful", addr);
+
+            // let _ = stream_write(&mut stream, & serialize_message(& Message{
+            //     header: MessageHeader::HB,
+            //     body: "".to_string()
+            // }));
+
+            // let failure_duration = Duration::from_secs(6); //change to any failure limit
+            // // allots time for reading from stream
+            // match stream.set_read_timeout(Some(failure_duration)) {
+            //     Ok(_x) => trace!("set_read_timeout OK"),
+            //     Err(_e) => trace!("set_read_timeout Error")
+            // }
+
+            // // read HB from bind port
+            // let received = match stream_read(&mut stream) {
+            //     Ok(message) => message,
+            //     Err(_err) => panic!("Collect could not read from")
+            // };
+
+            let stream_mut = Arc::new(Mutex::new(stream));
+
+            let received = send(& stream_mut, & Message{
+                header: MessageHeader::HB,
+                body: "".to_string()
+            });
+        
+            println!("HB read");
+            let payload = match received {
+                Ok(message) => {
+                    if message.body.is_empty() {
+                        panic!("Payload not found in heartbeat.");
+                    }
+                    println!("{:?}", message.body);
+                    deserialize(&message.body)
+                }
+                Err(_err) => return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput, "Failed to collect HB message."))
+            };
 
         }
     }
