@@ -14,7 +14,7 @@ pub fn init() -> ArgMatches {
             .help("Operation to be performed")
             .num_args(1)
             .required(true)
-            .value_parser(["list_interfaces", "list_ips", "listen", "claim", "publish", "collect"])
+            .value_parser(["list_interfaces", "list_ips", "listen", "claim", "publish", "collect", "send"])
         )
         .arg(
             Arg::new("interface_name")
@@ -96,16 +96,14 @@ pub fn init() -> ArgMatches {
             .required(false)
             .value_parser(clap::value_parser!(u64))
         )
-
         .arg(
-            Arg::new("json")
-            .long("json")
-            .value_name("JSON")
-            .help("Output from claim")
+            Arg::new("msg")
+            .long("msg")
+            .value_name("MSG")
+            .help("Message to send to service")
             .num_args(1)
             .required(false)
         )
-
         .get_matches();
 
         return args;
@@ -242,8 +240,7 @@ pub struct Publish {
     pub key: u64
 }
 
-/// Collect service's address from Claim's output 
-/// and initiate a service-client connection internally.
+/// Collect heartbeats/messages inside event loop
 ///
 /// Match command line entries with variables in struct
 ///
@@ -265,8 +262,34 @@ pub struct Collect {
     pub name: String,
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>,
-    /// contains contents collected from claim
-    pub json: String,
+    /// uniqueley identifies service
+    pub key: u64
+}
+
+/// Send a message from the client to the service through broker
+///
+/// Match command line entries with variables in struct
+///
+/// ## Example 
+/// Run from command line:
+/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation send       ```
+///
+#[derive(Debug)]
+pub struct Send {
+    /// connecting to version 4 address
+    pub print_v4: bool,
+    /// connection to version 6 address
+    pub print_v6: bool,
+    /// broker's local IP address
+    pub host: String,
+    /// same as Listen's bind_port, notify of new connection
+    pub port: i32,
+    /// name of interface
+    pub name: String,
+    /// filter IP addresses to 1 output when more than 1 available
+    pub starting_octets: Option<String>,
+    /// contains user-defined message
+    pub msg: String,
     /// uniqueley identifies service
     pub key: u64
 }
@@ -286,6 +309,8 @@ pub enum CLIOperation {
     Publish(Publish),
     /// collect outputs from claim and start service-client connection
     Collect(Collect),
+    /// send message from client to service containing a message
+    Send(Send),
 }
 
 /// Parse through command line arguments and send them to a CLIOperation
@@ -410,7 +435,6 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let port = * args.get_one::<i32>("port").unwrap();
             let name = args.get_one::<String>("interface_name").unwrap();
             let starting_octets =   args.get_one::<String>("ip_start");
-            let json = args.get_one::<String>("json").unwrap();
             let key  = * args.get_one::<u64>("key").unwrap();
             return CLIOperation::Collect(
                 Collect{
@@ -420,7 +444,30 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     port: port,
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
-                    json: json.to_string(),
+                    key: key
+                }
+            )
+        }
+        "send" => {
+            assert!(args.contains_id("host"));
+            assert!(args.contains_id("port"));
+            assert!(args.contains_id("interface_name"));
+            assert!(args.contains_id("key"));
+            let host =   args.get_one::<String>("host").unwrap();
+            let port = * args.get_one::<i32>("port").unwrap();
+            let key  = * args.get_one::<u64>("key").unwrap();
+            let name = args.get_one::<String>("interface_name").unwrap();
+            let starting_octets =   args.get_one::<String>("ip_start");
+            let msg = args.get_one::<String>("msg").unwrap();
+            return CLIOperation::Send(
+                Send {
+                    print_v4: print_v4,
+                    print_v6: print_v6,
+                    host: host.to_string(),
+                    port: port,
+                    name: name.to_string(),
+                    starting_octets: starting_octets.cloned(),
+                    msg: msg.to_string(),
                     key: key
                 }
             )

@@ -159,6 +159,7 @@ impl Event for Heartbeat {
                 std::io::ErrorKind::InvalidInput, "HB Failed")
             );
         } else {    
+            println!("{:?}", received);
             self.fail_counter.fail_count = 0;
             trace!("Resetting failcount. {}", self.fail_counter.fail_count);
         }
@@ -494,6 +495,7 @@ pub fn request_handler(
         MessageHeader::ACK => panic!("Unexpected ACK message encountered!"),
         MessageHeader::PUB => deserialize(& message.body),
         MessageHeader::CLAIM => deserialize(& message.body),
+        MessageHeader::MSG => panic!("Unexpected MSG message encountered!"),
         MessageHeader::NULL => panic!("Unexpected NULL message encountered!"),
     };
 
@@ -591,19 +593,20 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String)
         };
 
         trace!("{:?}", request);
-        if ! matches!(request.header, MessageHeader::HB) {
+        if ! matches!(request.header, MessageHeader::HB | MessageHeader::MSG) {
             warn!(
-                "Non-heartbeat request sent to heartbeat_handler: {}",
+                "Unexpected request sent to heartbeat_handler: {}",
                 request.header
             );
-            info!("Dropping non-heartbeat request");
+            info!("Dropping request");
         } else {
             trace!("Heartbeat handler received {:?}", request);
+            println!("{:?}", request.header); 
             let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                header: MessageHeader::HB,
+                header: request.header,
                 body: payload.clone()
             }));
-            trace!("Heartbeat handler has returned heartbeat request");
+            trace!("Heartbeat handler has returned request");
         }
         sleep(Duration::from_millis(2000)); // change to any time interval, must match time in monitor()
     }

@@ -8,7 +8,7 @@ mod network;
 use network::{get_local_ips, get_matching_ipstr};
 
 mod connection;
-use connection::{Message, MessageHeader, connect, Addr, server, send, stream_read, serialize_message, deserialize_message};
+use connection::{Message, MessageHeader, connect, Addr, server, send, stream_write, stream_read, serialize_message, deserialize_message};
 
 mod service;
 use service::{Payload, State, serialize, deserialize, request_handler, heartbeat_handler_helper, event_monitor};
@@ -370,24 +370,6 @@ fn main() -> std::io::Result<()> {
             };        
             trace!("Connection to {:?} successful", addr);
 
-            // let _ = stream_write(&mut stream, & serialize_message(& Message{
-            //     header: MessageHeader::HB,
-            //     body: "".to_string()
-            // }));
-
-            // let failure_duration = Duration::from_secs(6); //change to any failure limit
-            // // allots time for reading from stream
-            // match stream.set_read_timeout(Some(failure_duration)) {
-            //     Ok(_x) => trace!("set_read_timeout OK"),
-            //     Err(_e) => trace!("set_read_timeout Error")
-            // }
-
-            // // read HB from bind port
-            // let received = match stream_read(&mut stream) {
-            //     Ok(message) => message,
-            //     Err(_err) => panic!("Collect could not read from")
-            // };
-
             let stream_mut = Arc::new(Mutex::new(stream));
 
             let received = send(& stream_mut, & Message{
@@ -405,9 +387,32 @@ fn main() -> std::io::Result<()> {
                     deserialize(&message.body)
                 }
                 Err(_err) => return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput, "Failed to collect HB message."))
+                    std::io::ErrorKind::InvalidInput, "Failed to collect message."))
             };
 
+        }
+
+        CLIOperation::Send(inputs) => {
+            println!("entered send");
+            let addr = Addr {
+                host: inputs.host,
+                port: inputs.port
+            };
+            // connect to bind port of service or client
+            let mut stream = match connect(& addr){
+                Ok(s) => s,
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
+                    }
+            };  
+            trace!("Connection to {:?} successful", addr);
+
+            let _ = stream_write(&mut stream, & serialize_message(& Message{
+                header: MessageHeader::MSG,
+                body: inputs.msg
+            }));
+            
         }
     }
 
