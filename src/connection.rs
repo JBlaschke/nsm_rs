@@ -19,7 +19,7 @@ pub struct Addr {
 }
 
 /// Identify type of Message to handle it properly
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MessageHeader {
     /// heartbeat
     HB,

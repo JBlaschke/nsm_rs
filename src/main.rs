@@ -8,10 +8,10 @@ mod network;
 use network::{get_local_ips, get_matching_ipstr};
 
 mod connection;
-use connection::{Message, MessageHeader, connect, Addr, server, send, stream_write, stream_read, serialize_message, deserialize_message};
+use connection::{Message, MessageHeader, connect, Addr, server, send, stream_read, deserialize_message};
 
 mod service;
-use service::{Payload, State, serialize, deserialize, request_handler, heartbeat_handler_helper, event_monitor};
+use service::{Payload, State, serialize, request_handler, heartbeat_handler_helper, event_monitor};
 
 mod utils;
 use utils::{only_or_error, epoch};
@@ -134,6 +134,7 @@ fn main() -> std::io::Result<()> {
         CLIOperation::Listen(inputs) => {
             trace!("Start setting up listener...");
 
+            // identify local ip address
             let ipstr = if inputs.print_v4 {
                 get_matching_ipstr(
                     & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
@@ -143,6 +144,7 @@ fn main() -> std::io::Result<()> {
                     & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
                 )
             };
+            
             let host = only_or_error(& ipstr);
 
             // initialize State struct
@@ -201,8 +203,11 @@ fn main() -> std::io::Result<()> {
             });
 
             // connect to broker
-            let stream = match connect(& Addr{
-                host: inputs.host, port: inputs.port}){
+            let broker_addr = Addr{
+                host: inputs.host,
+                 port: inputs.port
+            };
+            let stream = match connect(& broker_addr){
                     Ok(s) => s,
                     Err(_e) => {
                         return Err(std::io::Error::new(
@@ -265,7 +270,7 @@ fn main() -> std::io::Result<()> {
                 }
             }
             let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
-                return heartbeat_handler_helper(stream, Some(&service_payload));
+                return heartbeat_handler_helper(stream, Some(&service_payload), Some(&broker_addr));
             };
 
             let host = only_or_error(& ipstr);
@@ -345,7 +350,7 @@ fn main() -> std::io::Result<()> {
             };
 
             let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
-                return heartbeat_handler_helper(stream, None);
+                return heartbeat_handler_helper(stream, None, None);
             };
 
             // send/receive heartbeats to/from broker
@@ -377,14 +382,13 @@ fn main() -> std::io::Result<()> {
                 body: "".to_string()
             });
         
-            println!("HB read");
-            let payload = match received {
+            println!("reading HB");
+            let _payload = match received {
                 Ok(message) => {
                     if message.body.is_empty() {
                         panic!("Payload not found in heartbeat.");
                     }
                     println!("{:?}", message.body);
-                    deserialize(&message.body)
                 }
                 Err(_err) => return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput, "Failed to collect message."))
@@ -393,7 +397,6 @@ fn main() -> std::io::Result<()> {
         }
 
         CLIOperation::Send(inputs) => {
-            println!("entered send");
             let addr = Addr {
                 host: inputs.host,
                 port: inputs.port
@@ -406,12 +409,22 @@ fn main() -> std::io::Result<()> {
                     std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
                     }
             };  
-            trace!("Connection to {:?} successful", addr);
 
-            let _ = stream_write(&mut stream, & serialize_message(& Message{
+            let stream_mut = Arc::new(Mutex::new(stream));
+
+            let received = send(& stream_mut, & Message{
                 header: MessageHeader::MSG,
                 body: inputs.msg
-            }));
+            });
+        
+            println!("reading msg");
+            let _ = match received {
+                Ok(message) => {
+                    println!("{:?}", message);
+                }
+                Err(_err) => return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput, "Failed to collect message."))
+            };
             
         }
     }

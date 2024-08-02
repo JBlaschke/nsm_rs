@@ -18,7 +18,8 @@ use log::{debug, error, info, trace, warn};
 
 use crate::utils::{only_or_error, epoch};
 use crate::connection::{
-    MessageHeader, Message, receive, stream_read, stream_write, serialize_message, deserialize_message
+    MessageHeader, Message, Addr, connect, send, receive, stream_read, stream_write, 
+    serialize_message, deserialize_message
 };
 
 /// Store client or service metadata
@@ -40,6 +41,15 @@ pub struct Payload {
     pub id: u64,
     /// identifies unique service, clients assume id from connected service
     pub service_id: u64,
+}
+
+/// Store message contents to send to connected service
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MsgBody{
+    /// message to send to service
+    pub msg: String,
+    /// identifies unique service
+    pub id: u64,
 }
 
 /// Store fail_count for heartbeats and limit increment rate
@@ -104,7 +114,9 @@ pub struct Heartbeat {
     /// stream used to send heartbeats to client/service
     pub stream: Arc<Mutex<TcpStream>>,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
-    pub fail_counter: FailCounter
+    pub fail_counter: FailCounter,
+    /// message sent from client
+    pub msg: String,
 }
 
 /// Heartbeats are treated as an Event to handle other types of events in the same queue
@@ -274,6 +286,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                                     service_id: hb.service_id,
                                     stream: Arc::clone(&hb.stream),
                                     fail_counter: FailCounter::new(),
+                                    msg: "".to_string(),
                                 });
                                 {
                                     // add updated client back to queue 
@@ -374,6 +387,7 @@ impl State {
             service_id: temp_id,
             stream: shared_hb_stream,
             fail_counter: FailCounter::new(),
+            msg: "".to_string()
         };
         trace!("Adding new connection to queue");
         {
@@ -495,12 +509,12 @@ pub fn request_handler(
         MessageHeader::ACK => panic!("Unexpected ACK message encountered!"),
         MessageHeader::PUB => deserialize(& message.body),
         MessageHeader::CLAIM => deserialize(& message.body),
-        MessageHeader::MSG => panic!("Unexpected MSG message encountered!"),
+        MessageHeader::MSG => Payload::default(),
         MessageHeader::NULL => panic!("Unexpected NULL message encountered!"),
     };
 
     trace!("Request handler received: {:?}", payload);
-    // handle services (PUB) and clients (CLAIM) appropriately
+    // handle services (PUB), clients (CLAIM), messages (MSG) appropriately
     match message.header {
         MessageHeader::PUB => {
             trace!("Publishing Service: {:?}", payload);
@@ -558,13 +572,28 @@ pub fn request_handler(
             println!("Now state:");
             state_loc.print(); // print state of clients hashmap
         },
+        MessageHeader::MSG => {
+            let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
+            trace!("Sending Message: {:?}", msg_body);
+
+            let (lock, _cvar) = &**state;
+            let mut state_loc = lock.lock().unwrap();
+
+            {
+                let mut deque = state_loc.deque.lock().unwrap();
+                if let Some(hb) = deque.iter_mut().find(|e| e.service_id == msg_body.id) {
+                    hb.msg = msg_body.msg;
+                }
+            }
+
+        }
         _ => {panic!("This should not be reached!");}
     }
     Ok(())
 }
 
-pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option<&String>)
--> std::io::Result<()> {
+pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option<&String>, 
+    addr: Option<&Addr>) -> std::io::Result<()> {
     let stream_clone = Arc::clone(&stream);
 
     // retrieve service's payload from client or set an empty message body
@@ -572,17 +601,29 @@ pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option
     let payload = payload.unwrap_or(&binding);
     let payload_clone = payload.clone();
 
+    let empty_addr = Addr{
+        host: "".to_string(),
+        port: 0
+    };
+    let addr = addr.unwrap_or(&empty_addr);
+    let addr_clone = addr.clone();
+
     let _ = thread::spawn(move || {
-        let _ = heartbeat_handler(&stream_clone, &payload_clone);
+        let _ = heartbeat_handler(&stream_clone, &payload_clone, &addr_clone);
     });
     return Ok(());
 }
 
 /// Receive a heartbeat from broker and send one back to show life of connection.
 /// If a client, HB message contains payload of connected service to use in Collect()
-pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String)
+pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr: &Addr)
   -> std::io::Result<()> {
     trace!("Starting heartbeat handler");
+
+    let mut service_id = 0;
+    if *payload != "".to_string() {
+        service_id = deserialize(payload).service_id;
+    }
 
     loop{
         let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
@@ -592,7 +633,25 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String)
             Err(err) => {return Err(err);}
         };
 
-        trace!("{:?}", request);
+        if matches!(request.header, MessageHeader::MSG){
+            let listen_stream = match connect(& addr){
+                Ok(s) => s,
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,"MSG connection unsuccessful."));
+                    }
+            };
+            let stream_mut = Arc::new(Mutex::new(listen_stream));
+            let msg_body = MsgBody{
+                msg: request.body.clone(),
+                id: service_id
+            };
+            println!("{:?}", msg_body);
+            let ack = send(& stream_mut, & Message{
+                header: MessageHeader::MSG,
+                body: serde_json::to_string(& msg_body).unwrap()
+            });
+        }
         if ! matches!(request.header, MessageHeader::HB | MessageHeader::MSG) {
             warn!(
                 "Unexpected request sent to heartbeat_handler: {}",
@@ -608,6 +667,7 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String)
             }));
             trace!("Heartbeat handler has returned request");
         }
+
         sleep(Duration::from_millis(2000)); // change to any time interval, must match time in monitor()
     }
 }
