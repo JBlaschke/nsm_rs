@@ -129,7 +129,7 @@ impl Event for Heartbeat {
 
     /// print ID and fail_count to debug
     fn describe(&self) -> String {
-        format!("Heartbeat id: {}, failcount: {}", self.id, self.fail_counter.fail_count)
+        format!("Heartbeat id: {}, failcount: {}, msg: {}", self.id, self.fail_counter.fail_count, self.msg)
     }
 
     /// send a heartbeat to the service/client and check if entity sent one back,
@@ -142,10 +142,11 @@ impl Event for Heartbeat {
                 return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
             }
         };
-    
+        
+        trace!("Sending heartbeat containing msg: {:?}", self.msg);
         let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
             header: MessageHeader::HB,
-            body: "".to_string()
+            body: self.msg.clone()
         }));
     
         let failure_duration = Duration::from_secs(6); //change to any failure limit
@@ -286,7 +287,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                                     service_id: hb.service_id,
                                     stream: Arc::clone(&hb.stream),
                                     fail_counter: FailCounter::new(),
-                                    msg: "".to_string(),
+                                    msg: hb.msg.clone(),
                                 });
                                 {
                                     // add updated client back to queue 
@@ -579,11 +580,24 @@ pub fn request_handler(
             let (lock, _cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
 
-            {
-                let mut deque = state_loc.deque.lock().unwrap();
-                if let Some(hb) = deque.iter_mut().find(|e| e.service_id == msg_body.id) {
-                    hb.msg = msg_body.msg;
+            let mut counter = 0;
+            while counter < 10 {
+                {
+                    let mut deque = state_loc.deque.lock().unwrap();
+                    if let Some(hb) = deque.iter_mut().find_map(|e| {
+                        e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
+                            hb.msg = msg_body.msg.clone();
+                            trace!("Altering hb message {:?}", hb);
+                            break;
+                    }
+                    else{
+                        counter += 1;
+                    }
                 }
+                sleep(Duration::from_millis(1000));
+            }
+            if counter == 10 {
+                warn!("Could not find matching service");
             }
 
         }
@@ -661,10 +675,18 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
         } else {
             trace!("Heartbeat handler received {:?}", request);
             println!("{:?}", request.header); 
-            let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                header: request.header,
-                body: payload.clone()
-            }));
+            if request.body.is_empty(){
+                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                    header: request.header,
+                    body: payload.clone()
+                }));
+            }
+            else {
+                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                    header: request.header,
+                    body: request.body
+                }));
+            }
             trace!("Heartbeat handler has returned request");
         }
 
