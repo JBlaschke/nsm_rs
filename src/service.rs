@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 use std::io::{self};
 use std::any::Any;
 use std::fmt;
+use lazy_static::lazy_static;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -44,12 +45,17 @@ pub struct Payload {
 }
 
 /// Store message contents to send to connected service
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct MsgBody{
     /// message to send to service
     pub msg: String,
     /// identifies unique service
     pub id: u64,
+}
+
+// Initialize the global variable with default values
+lazy_static! {
+    static ref GLOBAL_MSGBODY: Mutex<MsgBody> = Mutex::new(MsgBody::default());
 }
 
 /// Store fail_count for heartbeats and limit increment rate
@@ -116,7 +122,7 @@ pub struct Heartbeat {
     /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_counter: FailCounter,
     /// message sent from client
-    pub msg: String,
+    pub msg_body: MsgBody,
 }
 
 /// Heartbeats are treated as an Event to handle other types of events in the same queue
@@ -129,7 +135,7 @@ impl Event for Heartbeat {
 
     /// print ID and fail_count to debug
     fn describe(&self) -> String {
-        format!("Heartbeat id: {}, failcount: {}, msg: {}", self.id, self.fail_counter.fail_count, self.msg)
+        format!("Heartbeat id: {}, failcount: {}, msg: {}", self.id, self.fail_counter.fail_count, self.msg_body.msg)
     }
 
     /// send a heartbeat to the service/client and check if entity sent one back,
@@ -143,17 +149,17 @@ impl Event for Heartbeat {
             }
         };
         
-        trace!("Sending heartbeat containing msg: {:?}", self.msg);
+        trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
         let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
             header: MessageHeader::HB,
-            body: self.msg.clone()
+            body: serde_json::to_string(& self.msg_body.clone()).unwrap()
         }));
     
         let failure_duration = Duration::from_secs(6); //change to any failure limit
         // allots time for reading from stream
         match loc_stream.set_read_timeout(Some(failure_duration)) {
             Ok(_x) => trace!("set_read_timeout OK"),
-            Err(_e) => trace!("set_read_timeout Error")
+            Err(_e) => warn!("set_read_timeout Error")
         }
     
         let received = match stream_read(&mut loc_stream) {
@@ -172,7 +178,7 @@ impl Event for Heartbeat {
                 std::io::ErrorKind::InvalidInput, "HB Failed")
             );
         } else {    
-            println!("{:?}", received);
+            trace!("Received: {:?}", received);
             self.fail_counter.fail_count = 0;
             trace!("Resetting failcount. {}", self.fail_counter.fail_count);
         }
@@ -279,7 +285,8 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                     if hb.service_id == (service_id as u64){
                         trace!("Connecting to new service");
                         match state_clone.claim(hb.key){
-                            Ok(_p) => {
+                            Ok(p) => {
+                                trace!("Claimed new service w/ payload: {:?}", p);
                                 // create new Heartbeat object with new service_id
                                 event = Box::new(Heartbeat {
                                     key: hb.key,
@@ -287,7 +294,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                                     service_id: hb.service_id,
                                     stream: Arc::clone(&hb.stream),
                                     fail_counter: FailCounter::new(),
-                                    msg: hb.msg.clone(),
+                                    msg_body: hb.msg_body.clone(),
                                 });
                                 {
                                     // add updated client back to queue 
@@ -388,7 +395,7 @@ impl State {
             service_id: temp_id,
             stream: shared_hb_stream,
             fail_counter: FailCounter::new(),
-            msg: "".to_string()
+            msg_body: MsgBody::default(),
         };
         trace!("Adding new connection to queue");
         {
@@ -409,7 +416,7 @@ impl State {
 
     /// remove service/client from clients hashmap in State when Heartbeat fails
     pub fn rmv(&mut self, k: u64, id: u64, service_id: u64) -> std::io::Result<Message>{
-        trace!("{:?}", self.clients);
+        trace!("Current state: {:?}", self.clients);
 
         let mut removed_item = None;
         // find key in hashmap
@@ -426,7 +433,7 @@ impl State {
             }
         }
         if let Some(item) = removed_item {
-            trace!("\n{:?}", self.clients);
+            trace!("Now state: {:?}", self.clients);
             // check if a service was removed from clients
             if item.service_id == item.id{
                 return Ok(Message {
@@ -510,6 +517,7 @@ pub fn request_handler(
         MessageHeader::ACK => panic!("Unexpected ACK message encountered!"),
         MessageHeader::PUB => deserialize(& message.body),
         MessageHeader::CLAIM => deserialize(& message.body),
+        MessageHeader::COL => panic!("Unexpected COL message encountered!"),
         MessageHeader::MSG => Payload::default(),
         MessageHeader::NULL => panic!("Unexpected NULL message encountered!"),
     };
@@ -586,7 +594,7 @@ pub fn request_handler(
                     let mut deque = state_loc.deque.lock().unwrap();
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
                         e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
-                            hb.msg = msg_body.msg.clone();
+                            hb.msg_body = msg_body.clone();
                             trace!("Altering hb message {:?}", hb);
                             break;
                     }
@@ -666,28 +674,49 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
                 body: serde_json::to_string(& msg_body).unwrap()
             });
         }
-        if ! matches!(request.header, MessageHeader::HB | MessageHeader::MSG) {
-            warn!(
-                "Unexpected request sent to heartbeat_handler: {}",
-                request.header
-            );
-            info!("Dropping request");
-        } else {
-            trace!("Heartbeat handler received {:?}", request);
-            println!("{:?}", request.header); 
-            if request.body.is_empty(){
+        trace!("Heartbeat handler received {:?}", request);
+        if matches!(request.header, MessageHeader::COL) {
+            if *payload == "".to_string(){
+                // send msg back
+                let mut msg = GLOBAL_MSGBODY.lock().unwrap();
+                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                    header: request.header,
+                    body: serde_json::to_string(&* msg.msg).unwrap()
+                }));
+            }
+            else {
+                // send payload back
                 let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                     header: request.header,
                     body: payload.clone()
                 }));
             }
-            else {
+            trace!("Heartbeat handler has returned request");
+        }
+        else if matches!(request.header, MessageHeader::HB | MessageHeader::MSG){
+            let msg_body: MsgBody = serde_json::from_str(& request.body.clone()).unwrap();
+            if msg_body.msg.is_empty(){
+                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                    header: request.header,
+                    body: payload.clone(),
+                }));
+            }
+            else{
+                let mut msg = GLOBAL_MSGBODY.lock().unwrap();
+                *msg = serde_json::from_str(& request.body).unwrap();
                 let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                     header: request.header,
                     body: request.body
                 }));
-            }
+            }   
             trace!("Heartbeat handler has returned request");
+        }
+        else {
+            warn!(
+                "Unexpected request sent to heartbeat_handler: {}",
+                request.header
+            );
+            info!("Dropping request");
         }
 
         sleep(Duration::from_millis(2000)); // change to any time interval, must match time in monitor()

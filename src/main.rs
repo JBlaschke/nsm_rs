@@ -24,6 +24,7 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex, Condvar};
 use std::time::Duration;
 use std::thread::sleep;
+use lazy_static::lazy_static;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -378,7 +379,7 @@ fn main() -> std::io::Result<()> {
             let stream_mut = Arc::new(Mutex::new(stream));
 
             let received = send(& stream_mut, & Message{
-                header: MessageHeader::HB,
+                header: MessageHeader::COL,
                 body: "".to_string()
             });
         

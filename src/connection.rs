@@ -29,6 +29,8 @@ pub enum MessageHeader {
     PUB,
     /// body contains Claim payload
     CLAIM,
+    /// collect message
+    COL,
     /// user-defined message
     MSG,
     /// empty message
@@ -43,6 +45,7 @@ impl fmt::Display for MessageHeader {
             MessageHeader::ACK   => write!(f, "ACK"),
             MessageHeader::PUB   => write!(f, "PUB"),
             MessageHeader::CLAIM => write!(f, "CLAIM"),
+            MessageHeader::COL   => write!(f, "COL"),
             MessageHeader::MSG   => write!(f, "MSG"),
             MessageHeader::NULL  => write!(f, "NULL"),
        }
