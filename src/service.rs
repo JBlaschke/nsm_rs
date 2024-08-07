@@ -53,7 +53,7 @@ pub struct MsgBody{
     pub id: u64,
 }
 
-// Initialize the global variable with default values
+/// Initialize the global message with default values
 lazy_static! {
     static ref GLOBAL_MSGBODY: Mutex<MsgBody> = Mutex::new(MsgBody::default());
 }
@@ -627,9 +627,11 @@ pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option
         host: "".to_string(),
         port: 0
     };
+    // client uses listener's address to send msg, service does not need addr
     let addr = addr.unwrap_or(&empty_addr);
     let addr_clone = addr.clone();
 
+    // start new thread to send/receive heartbeats/messages to/from listener
     let _ = thread::spawn(move || {
         let _ = heartbeat_handler(&stream_clone, &payload_clone, &addr_clone);
     });
@@ -642,6 +644,7 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
   -> std::io::Result<()> {
     trace!("Starting heartbeat handler");
 
+    // set service_id to know which service to send msg to
     let mut service_id = 0;
     if *payload != "".to_string() {
         service_id = deserialize(payload).service_id;
@@ -650,11 +653,26 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
     loop{
         let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
 
+        let failure_duration = Duration::from_secs(2); //change to any failure limit
+        // allots time for reading from stream
+        match loc_stream.set_read_timeout(Some(failure_duration)) {
+            Ok(_x) => trace!("set_read_timeout OK"),
+            Err(_e) => warn!("set_read_timeout Error")
+        }
+
+        // receive heartbeat/message
         let request = match stream_read(loc_stream) {
-            Ok(message) => deserialize_message(& message),
+            Ok(message) => {
+                if message == "".to_string(){
+                    trace!("Connection broken, shutting down");
+                    std::process::exit(0);
+                }
+                deserialize_message(& message)
+            },
             Err(err) => {return Err(err);}
         };
 
+        // if a MSG: connect to listener to alter the msg value in the service's heartbeat
         if matches!(request.header, MessageHeader::MSG){
             let listen_stream = match connect(& addr){
                 Ok(s) => s,
@@ -668,7 +686,6 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
                 msg: request.body.clone(),
                 id: service_id
             };
-            println!("{:?}", msg_body);
             let ack = send(& stream_mut, & Message{
                 header: MessageHeader::MSG,
                 body: serde_json::to_string(& msg_body).unwrap()
@@ -676,6 +693,7 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
         }
         trace!("Heartbeat handler received {:?}", request);
         if matches!(request.header, MessageHeader::COL) {
+            // payload is empty for services, retrieve and send msg waiting in global variable
             if *payload == "".to_string(){
                 // send msg back
                 let mut msg = GLOBAL_MSGBODY.lock().unwrap();
@@ -685,7 +703,7 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
                 }));
             }
             else {
-                // send payload back
+                // payload not empty for clients, send payload w/ address of the paired service
                 let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                     header: request.header,
                     body: payload.clone()
@@ -695,6 +713,7 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
         }
         else if matches!(request.header, MessageHeader::HB | MessageHeader::MSG){
             let msg_body: MsgBody = serde_json::from_str(& request.body.clone()).unwrap();
+            // default HB/MSG response to send what was received
             if msg_body.msg.is_empty(){
                 let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                     header: request.header,
@@ -702,6 +721,7 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
                 }));
             }
             else{
+                // store msg received from listener into global msg variable
                 let mut msg = GLOBAL_MSGBODY.lock().unwrap();
                 *msg = serde_json::from_str(& request.body).unwrap();
                 let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
