@@ -20,7 +20,7 @@ use log::{debug, error, info, trace, warn};
 use crate::utils::{only_or_error, epoch};
 use crate::connection::{
     MessageHeader, Message, Addr, connect, send, receive, stream_read, stream_write, 
-    serialize_message, deserialize_message
+    serialize_message, deserialize_message, connect_with_retry
 };
 
 /// Store client or service metadata
@@ -53,7 +53,7 @@ pub struct MsgBody{
     pub id: u64,
 }
 
-/// Initialize the global message with default values
+// Initialize the global message with default values
 lazy_static! {
     static ref GLOBAL_MSGBODY: Mutex<MsgBody> = Mutex::new(MsgBody::default());
 }
@@ -63,6 +63,8 @@ lazy_static! {
 pub struct FailCounter{
     /// increment when heartbeat is not returned when expected
     pub fail_count: i32,
+    /// track first failure
+    pub first_increment: Instant,
     /// track time from last fail_count increment
     pub last_increment: Instant,
     /// set interval for incrementing fail_count
@@ -75,6 +77,7 @@ impl FailCounter{
     fn new() -> Self {
         Self {
             fail_count: 0,
+            first_increment: Instant::now(),
             last_increment: Instant::now(),
             interval: Duration::from_secs(10),
         }
@@ -117,7 +120,9 @@ pub struct Heartbeat {
     pub id: u64,
     /// same service_id, used to trace and reassigned a client whose service dropped from system
     pub service_id: u64,
-    /// stream used to send heartbeats to client/service
+    /// address of service/client
+    pub addr: String,
+    /// stream used to send heartbeats to client
     pub stream: Arc<Mutex<TcpStream>>,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_counter: FailCounter,
@@ -159,21 +164,59 @@ impl Event for Heartbeat {
         // allots time for reading from stream
         match loc_stream.set_read_timeout(Some(failure_duration)) {
             Ok(_x) => trace!("set_read_timeout OK"),
-            Err(_e) => warn!("set_read_timeout Error")
+            Err(e) => match e.kind() {
+                io::ErrorKind::InvalidInput => warn!("Invalid input for read timeout: {}", e),
+                io::ErrorKind::NotConnected => warn!("Stream is not connected: {}", e),
+                io::ErrorKind::AddrNotAvailable => warn!("Address not available: {}", e),
+                io::ErrorKind::WouldBlock => warn!("Operation would block: {}", e),
+                io::ErrorKind::PermissionDenied => warn!("Permission denied: {}", e),
+                _ => warn!("An unexpected error occurred: {}", e),
+            }
         }
     
         let received = match stream_read(&mut loc_stream) {
             Ok(message) => message,
-            Err(err) => {
+            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
                 self.fail_counter.increment();
-                trace!("Failed to receive data from stream. {:?}", self.fail_counter.fail_count);
+                trace!("ConnectionReset error");
+                return Err(std::io::Error::new(err.kind(), err.to_string()));
+            }
+            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
+                self.fail_counter.increment();
+                trace!("ConnectionAborted error");
+                return Err(std::io::Error::new(err.kind(), err.to_string()));
+            }
+            Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                self.fail_counter.increment();
+                trace!("TimeOut error");
+                return Err(std::io::Error::new(err.kind(), err.to_string()));
+            }
+            Err(err) => {
+                // open connection, read timed out
+                if self.fail_counter.fail_count == 0 {
+                    self.fail_counter.first_increment = Instant::now();
+                }
+                self.fail_counter.increment();
+                trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
                 return Err(err);
             }
         };
     
         if received == "" {
+            // broken connection
+            if self.fail_counter.fail_count == 0 {
+                self.fail_counter.first_increment = Instant::now();
+            }
             self.fail_counter.increment();
             trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
+            *loc_stream = match connect_with_retry(self.addr.clone()){
+                Ok(s) => s,
+                Err(err) => return Err(err)
+            };
+            let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                header: MessageHeader::NULL,
+                body: "".to_string()
+            }));
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput, "HB Failed")
             );
@@ -182,8 +225,6 @@ impl Event for Heartbeat {
             self.fail_counter.fail_count = 0;
             trace!("Resetting failcount. {}", self.fail_counter.fail_count);
         }
-    
-        sleep(Duration::from_millis(2000)); //change to any time interval, must match time in heartbeat_handler()
 
         Ok(())
     }
@@ -292,6 +333,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                                     key: hb.key,
                                     id: hb.id,
                                     service_id: hb.service_id,
+                                    addr: hb.addr.clone(),
                                     stream: Arc::clone(&hb.stream),
                                     fail_counter: FailCounter::new(),
                                     msg_body: hb.msg_body.clone(),
@@ -393,6 +435,7 @@ impl State {
             key: p.key,
             id: self.seq,
             service_id: temp_id,
+            addr: bind_address.clone(),
             stream: shared_hb_stream,
             fail_counter: FailCounter::new(),
             msg_body: MsgBody::default(),
@@ -519,7 +562,7 @@ pub fn request_handler(
         MessageHeader::CLAIM => deserialize(& message.body),
         MessageHeader::COL => panic!("Unexpected COL message encountered!"),
         MessageHeader::MSG => Payload::default(),
-        MessageHeader::NULL => panic!("Unexpected NULL message encountered!"),
+        MessageHeader::NULL => Payload::default(),
     };
 
     trace!("Request handler received: {:?}", payload);
@@ -609,6 +652,9 @@ pub fn request_handler(
             }
 
         }
+        MessageHeader::NULL => {
+            trace!("Doing nothing. Monitor attempting to replace stream");
+        }
         _ => {panic!("This should not be reached!");}
     }
     Ok(())
@@ -653,9 +699,8 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
     loop{
         let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
 
-        let failure_duration = Duration::from_secs(2); //change to any failure limit
         // allots time for reading from stream
-        match loc_stream.set_read_timeout(Some(failure_duration)) {
+        match loc_stream.set_read_timeout(Some(Duration::from_secs(2))) {
             Ok(_x) => trace!("set_read_timeout OK"),
             Err(_e) => warn!("set_read_timeout Error")
         }
@@ -669,7 +714,22 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
                 }
                 deserialize_message(& message)
             },
-            Err(err) => {return Err(err);}
+            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
+                trace!("ConnectionReset error");
+                std::process::exit(0);
+            }
+            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
+                trace!("ConnectionAborted error");
+                std::process::exit(0);
+            }
+            Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                trace!("TimeOut error");
+                std::process::exit(0);
+            }
+            Err(err) => {
+                trace!("Unknown error reading from stream");
+                std::process::exit(0);
+            }
         };
 
         // if a MSG: connect to listener to alter the msg value in the service's heartbeat
@@ -743,10 +803,13 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn init_logger() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
 
     /// check if function returns an error when a client claims an unused key
     #[test]
@@ -1318,7 +1381,7 @@ mod tests {
                     let shared_stream = Arc::new(Mutex::new(s));
                     let stream_clone = Arc::clone(&shared_stream);
                     let thread_handler = thread::spawn(move || {
-                        let _ = heartbeat_handler(&stream_clone);
+                        let _ = heartbeat_handler_helper(&stream_clone, None, None);
                     });
                     sleep(Duration::from_millis(1000));
                     let failure_duration = Duration::from_secs(10);
@@ -1343,6 +1406,8 @@ mod tests {
     #[test]
     fn test_heartbeat_handler_correct_message() {
 
+        init_logger();
+
         let publisher = TcpListener::bind("127.0.0.1:17010").unwrap();
         sleep(Duration::from_millis(500));
         let mut stream = TcpStream::connect("127.0.0.1:17010").unwrap();
@@ -1350,7 +1415,7 @@ mod tests {
         let _ = stream_write(&mut stream, & serialize_message(
             & Message {
                 header: MessageHeader::HB,
-                body: "".to_string()
+                body: serde_json::to_string(&MsgBody::default()).unwrap()
             }
         ));
         for s in publisher.incoming(){
@@ -1359,7 +1424,7 @@ mod tests {
                     let shared_stream = Arc::new(Mutex::new(s));
                     let stream_clone = Arc::clone(&shared_stream);
                     let thread_handler = thread::spawn(move || {
-                        let _ = heartbeat_handler(&stream_clone);
+                        let _ = heartbeat_handler_helper(&stream_clone, None, None);
                     });
                     sleep(Duration::from_millis(1000));
                     let failure_duration = Duration::from_secs(5);
@@ -1369,7 +1434,7 @@ mod tests {
                     }
                     let message = match stream_read(&mut stream) {
                         Ok(m) => deserialize_message(& m),
-                        Err(err) => panic!("server correctly dropped claim")
+                        Err(err) => panic!("server dropped claim")
                     };
                     let header = match message.header{
                         MessageHeader::HB => "HB",
@@ -1386,4 +1451,70 @@ mod tests {
 
     }
 
+        /// test if faulty connection restarts 
+        #[test]
+        fn test_connect_with_retry() {
+            init_logger();
+
+            let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+
+            sleep(Duration::from_millis(500));
+            let publisher = TcpListener::bind("127.0.0.1:18000").unwrap();
+            sleep(Duration::from_millis(500));
+            let mut stream = TcpStream::connect("127.0.0.1:18000").unwrap();
+
+            let shared_stream = Arc::new(Mutex::new(stream));
+            let hb = Heartbeat {
+                key: 1000,
+                id: 1,
+                service_id: 1,
+                addr: "127.0.0.1:18000".to_string(),
+                stream: Arc::clone(&shared_stream),
+                fail_counter: FailCounter::new(),
+                msg_body: MsgBody::default(),
+            };
+            let mut loc_stream = hb.stream.lock().unwrap();
+            let _ = stream_write(&mut loc_stream, & serialize_message(
+                & Message {
+                    header: MessageHeader::HB,
+                    body: serde_json::to_string(&MsgBody::default()).unwrap()
+                }
+            ));
+    
+            let thread_handler = thread::spawn(move || {
+                for s in publisher.incoming(){
+                    match s {
+                        Ok(s) => {
+                            trace!("new connection");
+                            let shared_s = Arc::new(Mutex::new(s));
+                            let mut loc_s = shared_s.lock().unwrap();
+                            let response_a = match stream_read(&mut loc_s) {
+                                Ok(m) => deserialize_message(& m),
+                                Err(err) => panic!("failed to read from stream")
+                            };
+                            trace!("Received on stream : {:?}", response_a);
+
+                            sleep(Duration::from_millis(5000));
+                        }
+                        Err(e) => {
+                            panic!("Error: {}", e);
+                        }
+                    }
+                }
+            });
+
+            drop(shared_stream);
+            *loc_stream = connect_with_retry("127.0.0.1:18000".to_string()).unwrap();
+
+            trace!("writing to same stream");
+            let _ = stream_write(&mut loc_stream, & serialize_message(
+                & Message {
+                    header: MessageHeader::HB,
+                    body: serde_json::to_string(&MsgBody::default()).unwrap()
+                }
+            ));
+
+            sleep(Duration::from_millis(30000));
+
+        }
 }

@@ -5,6 +5,9 @@ use std::net::{TcpListener, TcpStream};
 use std::fmt;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
+use rand::Rng;
+use std::thread;
+use std::time::Duration;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -76,6 +79,37 @@ pub fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
 
     TcpStream::connect(format!("{}:{}", addr.host, addr.port))
 }
+
+pub fn connect_with_retry(addr: String) -> std::io::Result<TcpStream> {
+    let mut retry_delay = Duration::from_secs(1);
+    let max_delay = Duration::from_secs(5);
+    let mut rng = rand::thread_rng();
+    let mut failcount = 0;
+
+    while failcount < 3 {
+        match TcpStream::connect(addr.clone()) {
+            Ok(stream) => {
+                trace!("Reset stream connection");
+                return Ok(stream);
+            }
+            Err(e) => {
+                warn!("Failed to connect: {:?}", e);
+                
+                failcount += 1;
+                // Exponential backoff with jitter
+                let jitter: u64 = rng.gen_range(0..1000); // Random jitter in milliseconds
+                let total_delay = retry_delay + Duration::from_millis(jitter);
+                
+                thread::sleep(total_delay);
+                retry_delay = std::cmp::min(retry_delay * 2, max_delay);
+            }
+        }
+    }
+    // If the loop exits without establishing a connection, return an error
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput, "Failed to connect after multiple attempts"))
+}
+
 
 /// Write a message through a TCPStream, returns Result of # of bytes written or err
 pub fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result<usize> {
