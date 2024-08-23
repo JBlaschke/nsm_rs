@@ -434,7 +434,7 @@ impl State {
                     {
                         let mut deque = self.deque.lock().unwrap();
                         if let Some(hb) = deque.iter_mut().find_map(|e| {
-                            e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == item.service_id) }) {
+                            e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.id == item.id) }) {
                                 if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
                                     hb.addr = bind_address.clone();
                                     hb.stream = shared_hb_stream.clone();
