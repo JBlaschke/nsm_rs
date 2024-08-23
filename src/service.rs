@@ -209,17 +209,17 @@ impl Event for Heartbeat {
             }
             self.fail_counter.increment();
             trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
-            *loc_stream = match connect_with_retry(self.addr.clone()){
-                Ok(s) => s,
-                Err(err) => return Err(err)
-            };
-            let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                header: MessageHeader::NULL,
-                body: "".to_string()
-            }));
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput, "HB Failed")
-            );
+            // *loc_stream = match connect_with_retry(self.addr.clone()){
+            //     Ok(s) => s,
+            //     Err(err) => return Err(std::io::Error::new(
+            //         std::io::ErrorKind::InvalidInput, "HB Failed")
+            //     )
+            // };
+            // println!("writing to heartbeat handler");
+            // let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+            //     header: MessageHeader::NULL,
+            //     body: "".to_string()
+            // }));
         } else {    
             trace!("Received: {:?}", received);
             self.fail_counter.fail_count = 0;
@@ -425,6 +425,41 @@ impl State {
         };
         let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
         
+        if let Some(vec) = self.clients.get_mut(&p.key) {
+            // find value in clients with matching id
+            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr) {
+                let item = &vec[pos];
+                let mut counter = 0;
+                while counter < 10 {
+                    {
+                        let mut deque = self.deque.lock().unwrap();
+                        if let Some(hb) = deque.iter_mut().find_map(|e| {
+                            e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == item.service_id) }) {
+                                if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
+                                    hb.addr = bind_address.clone();
+                                    hb.stream = shared_hb_stream.clone();
+                                    trace!("Altering hb {:?}", hb);
+                                    p.id = item.id;
+                                    p.service_id = item.service_id;
+                                    let immutable_hb: &Heartbeat = hb;
+                                    return Ok(immutable_hb.clone());
+                                }
+                                else {
+                                    continue;
+                                }
+                        }
+                        else{
+                            counter += 1;
+                        }
+                    }
+                    sleep(Duration::from_millis(1000));
+                }
+                if counter == 10 {
+                    warn!("Could not find matching service");
+                }
+            }
+        }
+
         let mut temp_id = self.seq;
         // service_id is same as id for a service - unclaimed service starts with service_id = 0
         // client inherits its service's id for service_id
