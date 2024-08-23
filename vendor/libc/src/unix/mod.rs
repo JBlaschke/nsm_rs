@@ -369,6 +369,7 @@ cfg_if! {
                         target_os = "ios",
                         target_os = "tvos",
                         target_os = "watchos",
+                        target_os = "visionos",
                         target_os = "android",
                         target_os = "openbsd",
                         target_os = "nto",
@@ -395,7 +396,7 @@ cfg_if! {
         #[cfg_attr(feature = "rustc-dep-of-std",
                    link(name = "c", cfg(not(target_feature = "crt-static"))))]
         extern {}
-    } else if #[cfg(target_env = "aix")] {
+    } else if #[cfg(target_os = "aix")] {
         #[link(name = "c")]
         #[link(name = "m")]
         #[link(name = "bsd")]
@@ -1042,7 +1043,8 @@ extern "C" {
             target_os = "macos",
             target_os = "ios",
             target_os = "tvos",
-            target_os = "watchos"
+            target_os = "watchos",
+            target_os = "visionos"
         ),
         link_name = "realpath$DARWIN_EXTSN"
     )]
@@ -1218,7 +1220,8 @@ extern "C" {
             target_os = "macos",
             target_os = "ios",
             target_os = "tvos",
-            target_os = "watchos"
+            target_os = "watchos",
+            target_os = "visionos"
         ),
         link_name = "res_9_init"
     )]
@@ -1406,6 +1409,15 @@ cfg_if! {
                      target_os = "nto")))] {
         extern "C" {
             pub fn adjtime(delta: *const timeval, olddelta: *mut timeval) -> ::c_int;
+        }
+    }
+}
+
+cfg_if! {
+    if #[cfg(not(any(target_os = "emscripten",
+                     target_os = "android",
+                     target_os = "nto")))] {
+        extern "C" {
             pub fn stpncpy(dst: *mut c_char, src: *const c_char, n: size_t) -> *mut c_char;
         }
     }
@@ -1555,6 +1567,7 @@ cfg_if! {
                         target_os = "ios",
                         target_os = "tvos",
                         target_os = "watchos",
+                        target_os = "visionos",
                         target_os = "freebsd",
                         target_os = "dragonfly",
                         target_os = "openbsd",
