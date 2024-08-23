@@ -15,7 +15,7 @@ pub fn init() -> ArgMatches {
             .value_name("OPERATION")
             .help("Operation to be performed")
             .num_args(1)
-            .required(true)
+            .required(false)
             .value_parser(["list_interfaces", "list_ips", "listen", "claim", "publish", "collect", "send"])
         )
         .arg(

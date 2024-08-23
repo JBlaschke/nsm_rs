@@ -8,6 +8,7 @@ mod network;
 mod connection;
 mod service;
 mod utils;
+mod models; 
 
 mod operations;
 use operations::{list_interfaces, list_ips, listen, claim, publish, collect, send_msg};
@@ -18,6 +19,9 @@ use cli::{init, parse, CLIOperation};
 use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
 use clap::ArgMatches;
 
+mod api;
+use api::{handle_claim, handle_collect, handle_publish, handle_list_interfaces, handle_list_ips, 
+    handle_listen, handle_send};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -36,6 +40,7 @@ use env_logger::Env;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+
     let matches = init();
 
     if matches.contains_id("operation") {
@@ -94,6 +99,7 @@ async fn main() -> std::io::Result<()> {
     }
     else {
         // api entry
+        println!("Starting service on 127.0.0.1:11000");
         HttpServer::new(|| {
             App::new()
                 .route("/list_interfaces", web::get().to(handle_list_interfaces))
@@ -103,8 +109,8 @@ async fn main() -> std::io::Result<()> {
                 .route("/claim", web::post().to(handle_claim))
                 .route("/collect", web::get().to(handle_collect))
                 .route("/send", web::post().to(handle_send))
-                .route("/task", web::get().to(task_update))
-                .route("/task/{id}", web::get().to(task_id_update))
+                // .route("/task", web::get().to(task_update))
+                // .route("/task/{id}", web::get().to(task_id_update))
         })
         .bind("127.0.0.1:11000")?
         .run()

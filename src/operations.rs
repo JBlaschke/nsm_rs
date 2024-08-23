@@ -20,7 +20,8 @@ use log::{debug, error, info, trace, warn};
 use env_logger::Env;
 
 pub fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
-    
+    println!("entered list_interfaces");
+    println!("{:?}", inputs);
     let ips = get_local_ips();
 
     if inputs.print_v4 {info!("Listing Matching IPv4 Interfaces");}

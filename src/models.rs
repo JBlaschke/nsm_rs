@@ -8,10 +8,13 @@ use serde::{Serialize, Deserialize};
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListInterfaces {
     /// output helpful messages for debugging
+    #[serde(default)]
     pub verbose: bool,
     /// list version 4 interfaces
+    #[serde(default)]
     pub print_v4: bool,
     /// list version 6 interfaces
+    #[serde(default)]
     pub print_v6: bool
 }
 
@@ -24,14 +27,18 @@ pub struct ListInterfaces {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListIPs {
     /// output helpful messages for debugging
+    #[serde(default)]
     pub verbose: bool,
     /// list version 4 IP addresses
+    #[serde(default)]
     pub print_v4: bool,
     /// list version 6 IP addresses
+    #[serde(default)]
     pub print_v6: bool,
     /// name of interface
     pub name: String,
     /// filter IP addresses to 1 output when more than 1 available
+    #[serde(default)]
     pub starting_octets: Option<String>
 }
 
@@ -47,12 +54,15 @@ pub struct ListIPs {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Listen {
     /// connecting to version 4 address
+    #[serde(default)]
     pub print_v4: bool,
     /// connection to version 6 address
+    #[serde(default)]
     pub print_v6: bool,
     /// name of interface
     pub name: String,
     /// filter IP addresses to 1 output when more than 1 available
+    #[serde(default)]
     pub starting_octets: Option<String>,
     /// port for listening for incoming connections
     pub bind_port: i32
@@ -77,8 +87,10 @@ pub struct Listen {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Claim {
     /// connecting to version 4 address
+    #[serde(default)]
     pub print_v4: bool,
     /// connection to version 6 address
+    #[serde(default)]
     pub print_v6: bool,
     /// broker's local IP address
     pub host: String,
@@ -87,6 +99,7 @@ pub struct Claim {
     /// name of interface
     pub name: String,
     /// filter IP addresses to 1 output when more than 1 available
+    #[serde(default)]
     pub starting_octets: Option<String>,
     /// port for sending heartbeats to broker
     pub bind_port: i32,
@@ -112,8 +125,10 @@ pub struct Claim {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Publish {
     /// connecting to version 4 address
+    #[serde(default)]
     pub print_v4: bool,
     /// connection to version 6 address
+    #[serde(default)]
     pub print_v6: bool,
     /// broker's local IP address
     pub host: String,
@@ -122,6 +137,7 @@ pub struct Publish {
     /// name of interface
     pub name: String,
     /// filter IP addresses to 1 output when more than 1 available
+    #[serde(default)]
     pub starting_octets: Option<String>,
     /// port for sending heartbeats to broker
     pub bind_port: i32,
@@ -142,8 +158,10 @@ pub struct Publish {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Collect {
     /// connecting to version 4 address
+    #[serde(default)]
     pub print_v4: bool,
     /// connection to version 6 address
+    #[serde(default)]
     pub print_v6: bool,
     /// claim's local ip address
     pub host: String,
@@ -152,6 +170,7 @@ pub struct Collect {
     /// name of interface
     pub name: String,
     /// filter IP addresses to 1 output when more than 1 available
+    #[serde(default)]
     pub starting_octets: Option<String>,
     /// uniqueley identifies service
     pub key: u64
@@ -168,8 +187,10 @@ pub struct Collect {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Send {
     /// connecting to version 4 address
+    #[serde(default)]
     pub print_v4: bool,
     /// connection to version 6 address
+    #[serde(default)]
     pub print_v6: bool,
     /// broker's local IP address
     pub host: String,
@@ -178,6 +199,7 @@ pub struct Send {
     /// name of interface
     pub name: String,
     /// filter IP addresses to 1 output when more than 1 available
+    #[serde(default)]
     pub starting_octets: Option<String>,
     /// contains user-defined message
     pub msg: String,
