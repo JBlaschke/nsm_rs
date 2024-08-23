@@ -12,9 +12,6 @@ mod utils;
 mod operations;
 use operations::{list_interfaces, list_ips, listen, claim, publish, collect, send_msg};
 
-mod models;
-use models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
-
 mod cli;
 use cli::{init, parse, CLIOperation};
 
@@ -25,23 +22,6 @@ use clap::ArgMatches;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 use env_logger::Env;
-
-async fn handle_list_interfaces(query: web::Query<ListInterfaces>) -> impl Responder {
-    let inputs = query.into_inner();
-    
-    let result = list_interfaces(ListInterfaces {
-        verbose: inputs.verbose,
-        print_v4: inputs.print_v4,
-        print_v6: inputs.print_v6,
-    });
-
-    match result {
-        Ok(_) => HttpResponse::Ok().body("Successfully listed interfaces"),
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {}", err))
-        }
-    }
-}
 
 /// Entry point for service mesh operations
 ///
@@ -117,6 +97,14 @@ async fn main() -> std::io::Result<()> {
         HttpServer::new(|| {
             App::new()
                 .route("/list_interfaces", web::get().to(handle_list_interfaces))
+                .route("/list_ips", web::get().to(handle_list_ips))
+                .route("/listen", web::post().to(handle_listen))
+                .route("/publish", web::post().to(handle_publish))
+                .route("/claim", web::post().to(handle_claim))
+                .route("/collect", web::get().to(handle_collect))
+                .route("/send", web::post().to(handle_send))
+                .route("/task", web::get().to(task_update))
+                .route("/task/{id}", web::get().to(task_id_update))
         })
         .bind("127.0.0.1:11000")?
         .run()
