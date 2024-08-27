@@ -11,7 +11,6 @@ pub struct ListInterfaces {
     #[serde(default)]
     pub verbose: bool,
     /// list version 4 interfaces
-    #[serde(default)]
     pub print_v4: bool,
     /// list version 6 interfaces
     #[serde(default)]
@@ -30,7 +29,6 @@ pub struct ListIPs {
     #[serde(default)]
     pub verbose: bool,
     /// list version 4 IP addresses
-    #[serde(default)]
     pub print_v4: bool,
     /// list version 6 IP addresses
     #[serde(default)]

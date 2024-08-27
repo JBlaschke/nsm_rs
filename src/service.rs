@@ -13,6 +13,7 @@ use std::io::{self};
 use std::any::Any;
 use std::fmt;
 use lazy_static::lazy_static;
+use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -546,13 +547,9 @@ pub fn deserialize(payload: & String) -> Payload {
 
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
-pub fn request_handler(
-    state: &Arc<(Mutex<State>, Condvar)>, stream: & Arc<Mutex<TcpStream>>
-) -> std::io::Result<()> {
+pub async fn request_handler(state: web::Data<Arc<(Mutex<State>, Condvar)>>,
+ message: web::Json<Message>) -> impl Responder {
     trace!("Starting request handler");
-
-    // receive Payload from incoming connection
-    let message = receive(stream)?;
 
     // check type of Message, only want to handle PUB or CLAIM Message
     let payload = match message.header {
@@ -567,97 +564,97 @@ pub fn request_handler(
 
     trace!("Request handler received: {:?}", payload);
     // handle services (PUB), clients (CLAIM), messages (MSG) appropriately
-    match message.header {
-        MessageHeader::PUB => {
-            trace!("Publishing Service: {:?}", payload);
-            let (lock, cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
+    // match message.header {
+    //     MessageHeader::PUB => {
+    //         trace!("Publishing Service: {:?}", payload);
+    //         let (lock, cvar) = &**state;
+    //         let mut state_loc = lock.lock().unwrap();
 
-            let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
-            state_loc.running = true; // set running to true for event loop
-            cvar.notify_one(); // notify event loop of new Event
+    //         let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
+    //         state_loc.running = true; // set running to true for event loop
+    //         cvar.notify_one(); // notify event loop of new Event
 
-            println!("Now state:");
-            state_loc.print(); // print state of clients hashmap
-        },
-        MessageHeader::CLAIM => {
-            trace!("Claiming Service: {:?}", payload);
+    //         println!("Now state:");
+    //         state_loc.print(); // print state of clients hashmap
+    //     },
+    //     MessageHeader::CLAIM => {
+    //         trace!("Claiming Service: {:?}", payload);
 
-            let (lock, _cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
-            let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
-            let mut service_id = 0;
-            let mut claim_fail = 0; // initiate counter for connection failure
-            // loop solves race case when client starts faster than service can be published
-            loop {
-                // 
-                match state_loc.claim(payload.key){
-                    Ok(p) => {
-                        service_id = (*p).service_id; // capture claimed service's service_id for add()
-                        // send acknowledgment of successful service claim with service's payload containing its address
-                        let _ = stream_write(loc_stream, & serialize_message(
-                            & Message {
-                                header: MessageHeader::ACK,
-                                body: serialize(p) // address extracted in main to print to client
-                            }
-                        ));
-                        break;
-                    },
-                    _ => {
-                        claim_fail += 1;
-                        if claim_fail <= 5{
-                            sleep(Duration::from_millis(1000));
-                            continue;
-                        }
-                        // notify main() of failure to claim an available service
-                        let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                            header: MessageHeader::NULL,
-                            body: "".to_string()
-                        }));
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput, "Failed to claim key"));
-                    },
-                }
-            }
-            let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
+    //         let (lock, _cvar) = &**state;
+    //         let mut state_loc = lock.lock().unwrap();
+    //         let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+    //         let mut service_id = 0;
+    //         let mut claim_fail = 0; // initiate counter for connection failure
+    //         // loop solves race case when client starts faster than service can be published
+    //         loop {
+    //             // 
+    //             match state_loc.claim(payload.key){
+    //                 Ok(p) => {
+    //                     service_id = (*p).service_id; // capture claimed service's service_id for add()
+    //                     // send acknowledgment of successful service claim with service's payload containing its address
+    //                     let _ = stream_write(loc_stream, & serialize_message(
+    //                         & Message {
+    //                             header: MessageHeader::ACK,
+    //                             body: serialize(p) // address extracted in main to print to client
+    //                         }
+    //                     ));
+    //                     break;
+    //                 },
+    //                 _ => {
+    //                     claim_fail += 1;
+    //                     if claim_fail <= 5{
+    //                         sleep(Duration::from_millis(1000));
+    //                         continue;
+    //                     }
+    //                     // notify main() of failure to claim an available service
+    //                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+    //                         header: MessageHeader::NULL,
+    //                         body: "".to_string()
+    //                     }));
+    //                     return Err(std::io::Error::new(
+    //                         std::io::ErrorKind::InvalidInput, "Failed to claim key"));
+    //                 },
+    //             }
+    //         }
+    //         let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
 
-            println!("Now state:");
-            state_loc.print(); // print state of clients hashmap
-        },
-        MessageHeader::MSG => {
-            let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
-            trace!("Sending Message: {:?}", msg_body);
+    //         println!("Now state:");
+    //         state_loc.print(); // print state of clients hashmap
+    //     },
+    //     MessageHeader::MSG => {
+    //         let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
+    //         trace!("Sending Message: {:?}", msg_body);
 
-            let (lock, _cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
+    //         let (lock, _cvar) = &**state;
+    //         let mut state_loc = lock.lock().unwrap();
 
-            let mut counter = 0;
-            while counter < 10 {
-                {
-                    let mut deque = state_loc.deque.lock().unwrap();
-                    if let Some(hb) = deque.iter_mut().find_map(|e| {
-                        e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
-                            hb.msg_body = msg_body.clone();
-                            trace!("Altering hb message {:?}", hb);
-                            break;
-                    }
-                    else{
-                        counter += 1;
-                    }
-                }
-                sleep(Duration::from_millis(1000));
-            }
-            if counter == 10 {
-                warn!("Could not find matching service");
-            }
+    //         let mut counter = 0;
+    //         while counter < 10 {
+    //             {
+    //                 let mut deque = state_loc.deque.lock().unwrap();
+    //                 if let Some(hb) = deque.iter_mut().find_map(|e| {
+    //                     e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
+    //                         hb.msg_body = msg_body.clone();
+    //                         trace!("Altering hb message {:?}", hb);
+    //                         break;
+    //                 }
+    //                 else{
+    //                     counter += 1;
+    //                 }
+    //             }
+    //             sleep(Duration::from_millis(1000));
+    //         }
+    //         if counter == 10 {
+    //             warn!("Could not find matching service");
+    //         }
 
-        }
-        MessageHeader::NULL => {
-            trace!("Doing nothing. Monitor attempting to replace stream");
-        }
-        _ => {panic!("This should not be reached!");}
-    }
-    Ok(())
+    //     }
+    //     MessageHeader::NULL => {
+    //         trace!("Doing nothing. Monitor attempting to replace stream");
+    //     }
+    //     _ => {panic!("This should not be reached!");}
+    // }
+    HttpResponse::Ok().body("Request handled")
 }
 
 pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option<&String>, 

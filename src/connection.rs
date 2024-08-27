@@ -193,22 +193,34 @@ pub fn server(
     mut handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
 ) -> std::io::Result<()> {
     trace!("Starting server process on: {:?}", addr);
+    
 
-    let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
-    trace!("Bind to {:?} successful", addr);
+    // HttpServer::new(move || {
+    //     App::new()
+    //         .service(
+    //             web::resource("/request_handler")
+    //                 .route(web::post().to(handler))
+    //         )
+    // })
+    // .bind(format!("{}:{}", addr.host, addr.port))?
+    // .run()
+    // .await
 
-    for stream in listener.incoming() {
-        info!("Request received on {:?}, processing...", stream);
-        match stream {
-            Ok(stream) => {
-                trace!("Passing TCP connection to handler...");
-                let shared_stream = Arc::new(Mutex::new(stream));
-                let _ = handler(& shared_stream); 
-            }
-            Err(e) => {
-                println!("Error: {}", e);
-            }
-        }
-    }
+    // let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
+    // trace!("Bind to {:?} successful", addr);
+
+    // for stream in listener.incoming() {
+    //     info!("Request received on {:?}, processing...", stream);
+    //     match stream {
+    //         Ok(stream) => {
+    //             trace!("Passing TCP connection to handler...");
+    //             let shared_stream = Arc::new(Mutex::new(stream));
+    //             let _ = handler(& shared_stream); 
+    //         }
+    //         Err(e) => {
+    //             println!("Error: {}", e);
+    //         }
+    //     }
+    // }
     Ok(())
 }

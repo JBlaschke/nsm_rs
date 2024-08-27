@@ -20,8 +20,8 @@ use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
 use clap::ArgMatches;
 
 mod api;
-use api::{handle_claim, handle_collect, handle_publish, handle_list_interfaces, handle_list_ips, 
-    handle_listen, handle_send};
+use api::{handle_claim, handle_collect, handle_publish, handle_list_interfaces,
+    handle_list_ips, handle_send};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -84,6 +84,7 @@ async fn main() -> std::io::Result<()> {
             // # Publish
             // Connect to broker and publish address for data connection.
             CLIOperation::Publish(inputs) => {
+                println!("entering publish");
                 let _ = publish(inputs);
             }
 
@@ -99,20 +100,19 @@ async fn main() -> std::io::Result<()> {
     }
     else {
         // api entry
-        println!("Starting service on 127.0.0.1:11000");
+        println!("Starting service on 127.0.0.1:8080");
         HttpServer::new(|| {
             App::new()
-                .route("/list_interfaces", web::get().to(handle_list_interfaces))
-                .route("/list_ips", web::get().to(handle_list_ips))
-                .route("/listen", web::post().to(handle_listen))
-                .route("/publish", web::post().to(handle_publish))
-                .route("/claim", web::post().to(handle_claim))
-                .route("/collect", web::get().to(handle_collect))
-                .route("/send", web::post().to(handle_send))
-                // .route("/task", web::get().to(task_update))
-                // .route("/task/{id}", web::get().to(task_id_update))
+                .service(handle_list_interfaces)
+                .service(handle_list_ips)
+                .service(handle_publish)
+                .service(handle_claim)
+                .service(handle_collect)
+                .service(handle_send)
+                // .service(task_update)
+                // .service(task_id_update)
         })
-        .bind("127.0.0.1:11000")?
+        .bind("127.0.0.1:8080")?
         .run()
         .await
     }

@@ -5,6 +5,7 @@ use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Se
 use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
 use clap::ArgMatches;
 
+#[actix_web::get("/list_interfaces")]
 pub async fn handle_list_interfaces(query: web::Query<ListInterfaces>) -> impl Responder {
     let inputs = query.into_inner();
     
@@ -22,6 +23,7 @@ pub async fn handle_list_interfaces(query: web::Query<ListInterfaces>) -> impl R
     }
 }
 
+#[actix_web::get("/list_ips")]
 pub async fn handle_list_ips(query: web::Query<ListIPs>) -> impl Responder {
     let inputs = query.into_inner();
     
@@ -41,27 +43,10 @@ pub async fn handle_list_ips(query: web::Query<ListIPs>) -> impl Responder {
     }
 }
 
-pub async fn handle_listen(data: web::Json<Listen>) -> impl Responder {
-    let inputs = data.into_inner();
-    
-    let result = listen(Listen {
-        print_v4: inputs.print_v4,
-        print_v6: inputs.print_v6,
-        name: inputs.name,
-        starting_octets: inputs.starting_octets,
-        bind_port: inputs.bind_port,
-    });
-
-    match result {
-        Ok(_) => HttpResponse::Ok().body("Successfully posted Listener"),
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {}", err))
-        }
-    }
-}
-
+#[actix_web::post("/publish")]
 pub async fn handle_publish(data: web::Json<Publish>) -> impl Responder {
     let inputs = data.into_inner();
+    println!("starting publish ");
     
     let result = publish(Publish {
         print_v4: inputs.print_v4,
@@ -75,7 +60,7 @@ pub async fn handle_publish(data: web::Json<Publish>) -> impl Responder {
         key: inputs.key
     });
 
-    match result {
+    match result.await {
         Ok(_) => HttpResponse::Ok().body("Successfully published service"),
         Err(err) => {
             HttpResponse::InternalServerError().body(format!("Error: {}", err))
@@ -83,6 +68,7 @@ pub async fn handle_publish(data: web::Json<Publish>) -> impl Responder {
     }
 }
 
+#[actix_web::post("/claim")]
 pub async fn handle_claim(data: web::Json<Claim>) -> impl Responder {
     let inputs = data.into_inner();
     
@@ -105,6 +91,7 @@ pub async fn handle_claim(data: web::Json<Claim>) -> impl Responder {
     }
 }
 
+#[actix_web::get("/collect")]
 pub async fn handle_collect(query: web::Query<Collect>) -> impl Responder {
     let inputs = query.into_inner();
     
@@ -126,6 +113,7 @@ pub async fn handle_collect(query: web::Query<Collect>) -> impl Responder {
     }
 }
 
+#[actix_web::post("/send")]
 pub async fn handle_send(data: web::Json<Send>) -> impl Responder {
     let inputs = data.into_inner();
     
