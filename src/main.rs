@@ -16,7 +16,7 @@ use operations::{list_interfaces, list_ips, listen, claim, publish, collect, sen
 mod cli;
 use cli::{init, parse, CLIOperation};
 
-use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
+use tiny_http::{Server, Response, Request, Method};
 use clap::ArgMatches;
 
 mod api;
@@ -38,8 +38,7 @@ use env_logger::Env;
 /// ### Note
 ///  see cli module for more details
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
 
     let matches = init();
 
@@ -96,24 +95,45 @@ async fn main() -> std::io::Result<()> {
                 let _ = send_msg(inputs);
             }
         }
-        Ok(())
+        return Ok(());
     }
     else {
         // api entry
-        println!("Starting service on 127.0.0.1:8080");
-        HttpServer::new(|| {
-            App::new()
-                .service(handle_list_interfaces)
-                .service(handle_list_ips)
-                .service(handle_publish)
-                .service(handle_claim)
-                .service(handle_collect)
-                .service(handle_send)
-                // .service(task_update)
-                // .service(task_id_update)
-        })
-        .bind("127.0.0.1:8080")?
-        .run()
-        .await
+        println!("Starting service on 0.0.0.0.1:8080");
+        let server = Server::http("0.0.0.0:8080").unwrap();
+
+        for request in server.incoming_requests() {
+            let method = request.method().clone();
+            let path = request.url();
+
+            match method {
+                Method::Get if path.starts_with("/list_interfaces") => {
+                    let _ = handle_list_interfaces(request);
+                },
+                Method::Get if path.starts_with("/list_ips") => {
+                    let _ = handle_list_ips(request);
+                },
+                Method::Post if path.starts_with("/publish") => {
+                    let _ = handle_publish(request);
+                },
+                Method::Get if path.starts_with("/claim") => {
+                    let _ = handle_claim(request);
+                },
+                Method::Get if path.starts_with("/collect") => {
+                    let _ = handle_collect(request);
+                },
+                Method::Post if path.starts_with("/send") => {
+                    let _ = handle_send(request);
+                },
+                // (Method::Get, "/task_update") => {
+                //     let _ = handle_task_update(request);
+                // },
+                _ => {
+                    let response = Response::from_string("Unsupported HTTP method").with_status_code(405);
+                }
+            }
+        }
     }
+
+    return Ok(());
 }

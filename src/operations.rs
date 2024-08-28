@@ -1,6 +1,7 @@
 use crate::network::{get_local_ips, get_matching_ipstr};
 
-use crate::connection::{Message, MessageHeader, connect, Addr, server, send, stream_read, deserialize_message};
+use crate::connection::{Message, MessageHeader, connect, Addr, server, send, stream_read,
+    serialize_message, deserialize_message};
 
 use crate::service::{Payload, State, serialize, request_handler, heartbeat_handler_helper, event_monitor};
 
@@ -13,16 +14,14 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex, Condvar};
 use std::time::Duration;
 use std::thread::sleep;
-use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
-use actix_rt::System;
-use reqwest;
+use tiny_http::{Server, Response, Request, Method};
+use reqwest::blocking::Client;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 use env_logger::Env;
 
 pub fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
-
     let ips = get_local_ips();
 
     if inputs.print_v4 {info!("Listing Matching IPv4 Interfaces");}
@@ -126,9 +125,9 @@ pub fn listen(inputs: Listen) -> std::io::Result<()> {
     let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
     let state_clone = Arc::clone(& state);
     
-    // let handler = |message: web::Json<Message>| async {
-    //     request_handler(& state_clone).await
-    // };
+    let handler =  move |request: Request| {
+        return request_handler(& state_clone, request);
+    };
 
     let addr = Addr {
         host: host.to_string(),
@@ -139,25 +138,12 @@ pub fn listen(inputs: Listen) -> std::io::Result<()> {
 
     // thread handles incoming connections and adds them to State and event queue
     let _thread_handler = thread::spawn(move || {
-        let system = actix_rt::System::new();
-
-        system.block_on(async move {
-            HttpServer::new(move || {
-                App::new()
-                    .app_data(web::Data::new(Arc::clone(& state)))
-                    .route("/request_handler", web::post().to(request_handler))
-            })
-            .bind(format!("{}:{}", addr.host, addr.port)).unwrap()
-            .run()
-            .await.unwrap();
-        })
+         let _ = server(& addr, handler);
     });
-
-    std::thread::sleep(std::time::Duration::from_secs(1));
 
     trace!("entering event_monitor");
     // send State struct holding event queue into event monitor to handle heartbeats
-    let _ = match event_monitor(state_clone){
+    let _ = match event_monitor(state){
         Ok(()) => println!("exited event monitor"),
         Err(_) => println!("event monitor error")
     };
@@ -166,8 +152,7 @@ pub fn listen(inputs: Listen) -> std::io::Result<()> {
 
 }
 
-pub async fn publish(inputs: Publish) -> std::io::Result<()> {
-    println!("starting publish");
+pub fn publish(inputs: Publish) -> std::io::Result<()> {
 
     let ips = get_local_ips();
 
@@ -195,74 +180,49 @@ pub async fn publish(inputs: Publish) -> std::io::Result<()> {
     });
 
     // connect to broker
-    let client = reqwest::Client::new();
-    let msg = Message{
+    let client = Client::new();
+    let msg = serialize_message(& Message{
         header: MessageHeader::PUB,
         body: payload
-    };
+    });
 
-    println!("attempting to send message");
-    match client
-    .post("http://127.0.0.1:8080/request_handler")
-    .json(&msg)
-    .send()
-    .await {
-            Ok(s) => s,
-            Err(_e) => {
-                return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
+    println!("sending request to {}:{}", inputs.host, inputs.port);
+    let response = client
+    .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+    .body(msg)
+    .send();
+
+    sleep(Duration::from_millis(1000));
+
+    match response {
+        Ok(mut resp) => {
+            trace!("Received response: {:?}", resp);
+            let body = resp.text().unwrap();
+            let m = deserialize_message(& body);
+            match m.header {
+                MessageHeader::ACK => {
+                    info!("Server acknowledged PUB.")
                 }
+                _ => {
+                    warn!("Server responds with unexpected message: {:?}", m)
+                }
+            }
+        }
+        Err(e) => eprintln!("Failed to send request to listener: {}", e),
+    }
+
+    let host = only_or_error(& ipstr);
+    let addr = Addr {
+        host: host.to_string(),
+        port: inputs.bind_port
     };
 
-    println!("payload sent to listener");
+    let handler =  move |request: Request| {
+        return heartbeat_handler_helper(request, None, None);
+    };
 
-    // connect to broker
-    // let stream = match connect(& Addr{
-    //     host: inputs.host, port: inputs.port}){
-    //         Ok(s) => s,
-    //         Err(_e) => {
-    //             return Err(std::io::Error::new(
-    //             std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
-    //             }
-    // };
-    // let stream_mut = Arc::new(Mutex::new(stream));
-    // let ack = send(& stream_mut, & Message{
-    //     header: MessageHeader::PUB,
-    //     body: payload
-    // });
-
-    // check for successful connection
-    // match ack {
-    //     Ok(m) => {
-    //         trace!("Received response: {:?}", m);
-    //         match m.header {
-    //             MessageHeader::ACK => {
-    //                 info!("Server acknowledged PUB.")
-    //             }
-    //             _ => {
-    //                 warn!("Server responds with unexpected message: {:?}", m)
-    //             }
-    //         }
-    //     }
-    //     Err(e) => {
-    //         error!("Encountered error: {:?}", e);
-    //     }
-    // }
-
-    //drop(stream_mut);
-
-    // let host = only_or_error(& ipstr);
-    // let addr = Addr {
-    //     host: host.to_string(),
-    //     port: inputs.bind_port
-    // };
-
-    // let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
-    //     return heartbeat_handler_helper(stream, None, None);
-    // };
-
-    // // send/receive heartbeats to/from broker
-    // let _ = server(& addr, handler);
+    // send/receive heartbeats to/from broker
+    let _ = server(& addr, handler);
 
     Ok(())
 
@@ -300,80 +260,80 @@ pub fn claim(inputs: Claim) -> std::io::Result<()> {
         host: inputs.host,
          port: inputs.port
     };
-    // let stream = match connect(& broker_addr){
-    //         Ok(s) => s,
-    //         Err(_e) => {
-    //             return Err(std::io::Error::new(
-    //             std::io::ErrorKind::InvalidInput,"Connection unsuccessful. Try another key"));
-    //             }
-    // };
-    // let stream_mut = Arc::new(Mutex::new(stream));
-    // let ack = send(& stream_mut, & Message{
-    //     header: MessageHeader::CLAIM,
-    //     body: _payload
-    // });
+    let stream = match connect(& broker_addr){
+            Ok(s) => s,
+            Err(_e) => {
+                return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,"Connection unsuccessful. Try another key"));
+                }
+    };
+    let stream_mut = Arc::new(Mutex::new(stream));
+    let ack = send(& stream_mut, & Message{
+        header: MessageHeader::CLAIM,
+        body: _payload
+    });
 
-    // let mut service_payload = "".to_string();
+    let mut service_payload = "".to_string();
 
-    // // check for successful connection to a published service
-    // match ack {
-    //     Ok(m) => {
-    //         trace!("Received response: {:?}", m);
-    //         match m.header {
-    //             MessageHeader::ACK => {
-    //                 let mut read_fail = 0;
-    //                 let loc_stream: &mut TcpStream = &mut stream_mut.lock().unwrap();
-    //                 // loop handles connection race case
-    //                 loop {
-    //                     sleep(Duration::from_millis(1000));
-    //                     let message = match stream_read(loc_stream) {
-    //                         Ok(m) => deserialize_message(& m),
-    //                         Err(err) => {return Err(err);}
-    //                     };
-    //                     trace!("{:?}", message);
-    //                     // print service's address to client
-    //                     if matches!(message.header, MessageHeader::ACK){
-    //                         info!("Server acknowledged CLAIM.");
-    //                         println!("{}", message.body);
-    //                         service_payload = message.body;
-    //                         break;
-    //                     }
-    //                     else{
-    //                         read_fail += 1;
-    //                         if read_fail > 5 {
-    //                             return Err(std::io::Error::new(
-    //                                 std::io::ErrorKind::InvalidInput,"Key not found"));
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //             _ => {
-    //                 return Err(std::io::Error::new(
-    //                     std::io::ErrorKind::InvalidInput,
-    //                     format!("Server responds with unexpected message: {:?}", m),
-    //                 ));
-    //             }
-    //         }
-    //     }
-    //     Err(e) => {
-    //         return Err(std::io::Error::new(
-    //             std::io::ErrorKind::InvalidInput,
-    //             format!("Encountered error: {:?}", e),
-    //         ));
-    //     }
-    // }
-    // let handler =  move |stream: &Arc<Mutex<TcpStream>>| {
-    //     return heartbeat_handler_helper(stream, Some(&service_payload), Some(&broker_addr));
-    // };
+    // check for successful connection to a published service
+    match ack {
+        Ok(m) => {
+            trace!("Received response: {:?}", m);
+            match m.header {
+                MessageHeader::ACK => {
+                    let mut read_fail = 0;
+                    let loc_stream: &mut TcpStream = &mut stream_mut.lock().unwrap();
+                    // loop handles connection race case
+                    loop {
+                        sleep(Duration::from_millis(1000));
+                        let message = match stream_read(loc_stream) {
+                            Ok(m) => deserialize_message(& m),
+                            Err(err) => {return Err(err);}
+                        };
+                        trace!("{:?}", message);
+                        // print service's address to client
+                        if matches!(message.header, MessageHeader::ACK){
+                            info!("Server acknowledged CLAIM.");
+                            println!("{}", message.body);
+                            service_payload = message.body;
+                            break;
+                        }
+                        else{
+                            read_fail += 1;
+                            if read_fail > 5 {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput,"Key not found"));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Server responds with unexpected message: {:?}", m),
+                    ));
+                }
+            }
+        }
+        Err(e) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Encountered error: {:?}", e),
+            ));
+        }
+    }
+    let handler =  move |request: Request| {
+        return heartbeat_handler_helper(request, Some(&service_payload), Some(&broker_addr));
+    };
 
-    // let host = only_or_error(& ipstr);
-    // let addr = Addr {
-    //     host: host.to_string(),
-    //     port: inputs.bind_port
-    // };
+    let host = only_or_error(& ipstr);
+    let addr = Addr {
+        host: host.to_string(),
+        port: inputs.bind_port
+    };
 
-    // // send/receive heartbeats to/from broker
-    // let _ = server(& addr, handler);
+    // send/receive heartbeats to/from broker
+    let _ = server(& addr, handler);
 
     Ok(())
 

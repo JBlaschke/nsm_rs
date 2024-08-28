@@ -11,9 +11,15 @@
 
 [package]
 edition = "2021"
+rust-version = "1.64.0"
 name = "system-configuration"
-version = "0.5.1"
+version = "0.6.1"
 authors = ["Mullvad VPN"]
+build = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "Bindings to SystemConfiguration framework for macOS"
 readme = "README.md"
 keywords = [
@@ -28,13 +34,24 @@ categories = [
 ]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mullvad/system-configuration-rs"
-resolver = "1"
+
+[lib]
+name = "system_configuration"
+path = "src/lib.rs"
+
+[[example]]
+name = "set_dns"
+path = "examples/set_dns.rs"
+
+[[example]]
+name = "watch_dns"
+path = "examples/watch_dns.rs"
 
 [dependencies.bitflags]
-version = "1"
+version = "2"
 
 [dependencies.core-foundation]
 version = "0.9"
 
 [dependencies.system-configuration-sys]
-version = "0.5"
+version = "0.6"

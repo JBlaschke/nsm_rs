@@ -13,7 +13,8 @@ use std::io::{self};
 use std::any::Any;
 use std::fmt;
 use lazy_static::lazy_static;
-use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
+use tiny_http::{Server, Response, Request, Method};
+use reqwest::blocking::Client;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -547,9 +548,15 @@ pub fn deserialize(payload: & String) -> Payload {
 
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
-pub async fn request_handler(state: web::Data<Arc<(Mutex<State>, Condvar)>>,
- message: web::Json<Message>) -> impl Responder {
+pub fn request_handler(
+    state: &Arc<(Mutex<State>, Condvar)>, mut request: Request
+) -> std::io::Result<()> {
     trace!("Starting request handler");
+
+    // receive Payload from incoming connection
+    let mut body = String::new();
+    request.as_reader().read_to_string(&mut body)?;
+    let message = deserialize_message(& body);
 
     // check type of Message, only want to handle PUB or CLAIM Message
     let payload = match message.header {
@@ -564,103 +571,110 @@ pub async fn request_handler(state: web::Data<Arc<(Mutex<State>, Condvar)>>,
 
     trace!("Request handler received: {:?}", payload);
     // handle services (PUB), clients (CLAIM), messages (MSG) appropriately
-    // match message.header {
-    //     MessageHeader::PUB => {
-    //         trace!("Publishing Service: {:?}", payload);
-    //         let (lock, cvar) = &**state;
-    //         let mut state_loc = lock.lock().unwrap();
+    match message.header {
+        MessageHeader::PUB => {
+            trace!("Publishing Service: {:?}", payload);
 
-    //         let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
-    //         state_loc.running = true; // set running to true for event loop
-    //         cvar.notify_one(); // notify event loop of new Event
+            // send acknowledgment of successful request
+            let response = Response::from_string(serialize_message( & Message {
+                header: MessageHeader::ACK,
+                body: "".to_string()
+            }));
+            request.respond(response).unwrap();
 
-    //         println!("Now state:");
-    //         state_loc.print(); // print state of clients hashmap
-    //     },
-    //     MessageHeader::CLAIM => {
-    //         trace!("Claiming Service: {:?}", payload);
+            let (lock, cvar) = &**state;
+            let mut state_loc = lock.lock().unwrap();
 
-    //         let (lock, _cvar) = &**state;
-    //         let mut state_loc = lock.lock().unwrap();
-    //         let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
-    //         let mut service_id = 0;
-    //         let mut claim_fail = 0; // initiate counter for connection failure
-    //         // loop solves race case when client starts faster than service can be published
-    //         loop {
-    //             // 
-    //             match state_loc.claim(payload.key){
-    //                 Ok(p) => {
-    //                     service_id = (*p).service_id; // capture claimed service's service_id for add()
-    //                     // send acknowledgment of successful service claim with service's payload containing its address
-    //                     let _ = stream_write(loc_stream, & serialize_message(
-    //                         & Message {
-    //                             header: MessageHeader::ACK,
-    //                             body: serialize(p) // address extracted in main to print to client
-    //                         }
-    //                     ));
-    //                     break;
-    //                 },
-    //                 _ => {
-    //                     claim_fail += 1;
-    //                     if claim_fail <= 5{
-    //                         sleep(Duration::from_millis(1000));
-    //                         continue;
-    //                     }
-    //                     // notify main() of failure to claim an available service
-    //                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-    //                         header: MessageHeader::NULL,
-    //                         body: "".to_string()
-    //                     }));
-    //                     return Err(std::io::Error::new(
-    //                         std::io::ErrorKind::InvalidInput, "Failed to claim key"));
-    //                 },
-    //             }
-    //         }
-    //         let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
+            // let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
+            // state_loc.running = true; // set running to true for event loop
+            // cvar.notify_one(); // notify event loop of new Event
 
-    //         println!("Now state:");
-    //         state_loc.print(); // print state of clients hashmap
-    //     },
-    //     MessageHeader::MSG => {
-    //         let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
-    //         trace!("Sending Message: {:?}", msg_body);
+            // println!("Now state:");
+            // state_loc.print(); // print state of clients hashmap
+        },
+        MessageHeader::CLAIM => {
+            trace!("Claiming Service: {:?}", payload);
 
-    //         let (lock, _cvar) = &**state;
-    //         let mut state_loc = lock.lock().unwrap();
+            // let (lock, _cvar) = &**state;
+            // let mut state_loc = lock.lock().unwrap();
+            // let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+            // let mut service_id = 0;
+            // let mut claim_fail = 0; // initiate counter for connection failure
+            // // loop solves race case when client starts faster than service can be published
+            // loop {
+            //     // 
+            //     match state_loc.claim(payload.key){
+            //         Ok(p) => {
+            //             service_id = (*p).service_id; // capture claimed service's service_id for add()
+            //             // send acknowledgment of successful service claim with service's payload containing its address
+            //             let _ = stream_write(loc_stream, & serialize_message(
+            //                 & Message {
+            //                     header: MessageHeader::ACK,
+            //                     body: serialize(p) // address extracted in main to print to client
+            //                 }
+            //             ));
+            //             break;
+            //         },
+            //         _ => {
+            //             claim_fail += 1;
+            //             if claim_fail <= 5{
+            //                 sleep(Duration::from_millis(1000));
+            //                 continue;
+            //             }
+            //             // notify main() of failure to claim an available service
+            //             let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+            //                 header: MessageHeader::NULL,
+            //                 body: "".to_string()
+            //             }));
+            //             return Err(std::io::Error::new(
+            //                 std::io::ErrorKind::InvalidInput, "Failed to claim key"));
+            //         },
+            //     }
+            // }
+            // let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
 
-    //         let mut counter = 0;
-    //         while counter < 10 {
-    //             {
-    //                 let mut deque = state_loc.deque.lock().unwrap();
-    //                 if let Some(hb) = deque.iter_mut().find_map(|e| {
-    //                     e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
-    //                         hb.msg_body = msg_body.clone();
-    //                         trace!("Altering hb message {:?}", hb);
-    //                         break;
-    //                 }
-    //                 else{
-    //                     counter += 1;
-    //                 }
-    //             }
-    //             sleep(Duration::from_millis(1000));
-    //         }
-    //         if counter == 10 {
-    //             warn!("Could not find matching service");
-    //         }
+            // println!("Now state:");
+            // state_loc.print(); // print state of clients hashmap
+        },
+        MessageHeader::MSG => {
+            let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
+            trace!("Sending Message: {:?}", msg_body);
 
-    //     }
-    //     MessageHeader::NULL => {
-    //         trace!("Doing nothing. Monitor attempting to replace stream");
-    //     }
-    //     _ => {panic!("This should not be reached!");}
-    // }
-    HttpResponse::Ok().body("Request handled")
+            // let (lock, _cvar) = &**state;
+            // let mut state_loc = lock.lock().unwrap();
+
+            // let mut counter = 0;
+            // while counter < 10 {
+            //     {
+            //         let mut deque = state_loc.deque.lock().unwrap();
+            //         if let Some(hb) = deque.iter_mut().find_map(|e| {
+            //             e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
+            //                 hb.msg_body = msg_body.clone();
+            //                 trace!("Altering hb message {:?}", hb);
+            //                 break;
+            //         }
+            //         else{
+            //             counter += 1;
+            //         }
+            //     }
+            //     sleep(Duration::from_millis(1000));
+            // }
+            // if counter == 10 {
+            //     warn!("Could not find matching service");
+            // }
+
+        }
+        MessageHeader::NULL => {
+            trace!("Doing nothing. Monitor attempting to replace stream");
+        }
+        _ => {panic!("This should not be reached!");}
+    }
+    Ok(())
 }
 
-pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option<&String>, 
+pub fn heartbeat_handler_helper(mut request: Request, payload: Option<&String>, 
     addr: Option<&Addr>) -> std::io::Result<()> {
-    let stream_clone = Arc::clone(&stream);
-
+    
     // retrieve service's payload from client or set an empty message body
     let binding = "".to_string();
     let payload = payload.unwrap_or(&binding);
@@ -676,14 +690,14 @@ pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option
 
     // start new thread to send/receive heartbeats/messages to/from listener
     let _ = thread::spawn(move || {
-        let _ = heartbeat_handler(&stream_clone, &payload_clone, &addr_clone);
+        let _ = heartbeat_handler(request, &payload_clone, &addr_clone);
     });
     return Ok(());
 }
 
 /// Receive a heartbeat from broker and send one back to show life of connection.
 /// If a client, HB message contains payload of connected service to use in Collect()
-pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr: &Addr)
+pub fn heartbeat_handler(mut request: Request, payload: &String, addr: &Addr)
   -> std::io::Result<()> {
     trace!("Starting heartbeat handler");
 
@@ -693,111 +707,105 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
         service_id = deserialize(payload).service_id;
     }
 
-    loop{
-        let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+    let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
 
-        // allots time for reading from stream
-        match loc_stream.set_read_timeout(Some(Duration::from_secs(2))) {
-            Ok(_x) => trace!("set_read_timeout OK"),
-            Err(_e) => warn!("set_read_timeout Error")
-        }
+    // allots time for reading from stream
+    let start_time = Instant::now();
 
-        // receive heartbeat/message
-        let request = match stream_read(loc_stream) {
-            Ok(message) => {
-                if message == "".to_string(){
+    // receive heartbeat/message
+    let mut body = String::new();
+    let mut response = Response::from_string("");
+    while start_time.elapsed() < timeout_duration {
+        match request.as_reader().read_to_string(&mut body) {
+            Ok(len) => {
+                if len == 0{
                     trace!("Connection broken, shutting down");
                     std::process::exit(0);
                 }
-                deserialize_message(& message)
+                break;
             },
-            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
-                trace!("ConnectionReset error");
-                std::process::exit(0);
+            Err(_) => {
+                thread::sleep(Duration::from_millis(100));
             }
-            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
-                trace!("ConnectionAborted error");
-                std::process::exit(0);
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
-                trace!("TimeOut error");
-                std::process::exit(0);
-            }
-            Err(err) => {
-                trace!("Unknown error reading from stream");
-                std::process::exit(0);
-            }
-        };
+        }
+    }
+    if start_time.elapsed() >= timeout_duration {
+        println!("Request timed out");
+        let response = Response::from_string("Request timed out").with_status_code(408);
+        let _ = request.respond(response).unwrap();
+        return Ok(());
+    }
+    let message = deserialize_message(& body);
 
-        // if a MSG: connect to listener to alter the msg value in the service's heartbeat
-        if matches!(request.header, MessageHeader::MSG){
-            let listen_stream = match connect(& addr){
-                Ok(s) => s,
-                Err(_e) => {
-                    return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,"MSG connection unsuccessful."));
-                    }
-            };
-            let stream_mut = Arc::new(Mutex::new(listen_stream));
-            let msg_body = MsgBody{
-                msg: request.body.clone(),
-                id: service_id
-            };
-            let ack = send(& stream_mut, & Message{
+    // if a MSG: connect to listener to alter the msg value in the service's heartbeat
+    if matches!(message.header, MessageHeader::MSG){
+        let client = Client::new();
+
+        let msg_body = MsgBody{
+            msg: message.body.clone(),
+            id: service_id
+        };
+    
+        let msg = serialize_message( & Message{
                 header: MessageHeader::MSG,
                 body: serde_json::to_string(& msg_body).unwrap()
-            });
-        }
-        trace!("Heartbeat handler received {:?}", request);
-        if matches!(request.header, MessageHeader::COL) {
-            // payload is empty for services, retrieve and send msg waiting in global variable
-            if *payload == "".to_string(){
-                // send msg back
-                let mut msg = GLOBAL_MSGBODY.lock().unwrap();
-                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: request.header,
-                    body: serde_json::to_string(&* msg.msg).unwrap()
-                }));
-            }
-            else {
-                // payload not empty for clients, send payload w/ address of the paired service
-                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: request.header,
-                    body: payload.clone()
-                }));
-            }
-            trace!("Heartbeat handler has returned request");
-        }
-        else if matches!(request.header, MessageHeader::HB | MessageHeader::MSG){
-            let msg_body: MsgBody = serde_json::from_str(& request.body.clone()).unwrap();
-            // default HB/MSG response to send what was received
-            if msg_body.msg.is_empty(){
-                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: request.header,
-                    body: payload.clone(),
-                }));
-            }
-            else{
-                // store msg received from listener into global msg variable
-                let mut msg = GLOBAL_MSGBODY.lock().unwrap();
-                *msg = serde_json::from_str(& request.body).unwrap();
-                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: request.header,
-                    body: request.body
-                }));
-            }   
-            trace!("Heartbeat handler has returned request");
+        });
+        println!("sending request");
+        let _ = client
+        .post(format!("{}:{}/request_handler", addr.host, addr.port))
+        .body(msg)
+        .send();
+    }
+    trace!("Heartbeat handler received {:?}", message);
+    if matches!(message.header, MessageHeader::COL) {
+        // payload is empty for services, retrieve and send msg waiting in global variable
+        if *payload == "".to_string(){
+            // send msg back
+            let mut msg = GLOBAL_MSGBODY.lock().unwrap();
+            response = Response::from_string(serialize_message(& Message{
+                header: message.header,
+                body: serde_json::to_string(&* msg.msg).unwrap()
+            }));
         }
         else {
-            warn!(
-                "Unexpected request sent to heartbeat_handler: {}",
-                request.header
-            );
-            info!("Dropping request");
+            // payload not empty for clients, send payload w/ address of the paired service
+            response = Response::from_string(serialize_message(& Message{
+                header: message.header,
+                body: payload.clone()
+            }));
         }
-
-        sleep(Duration::from_millis(2000)); // change to any time interval, must match time in monitor()
+        trace!("Heartbeat handler has returned request");
     }
+    else if matches!(message.header, MessageHeader::HB | MessageHeader::MSG){
+        let msg_body: MsgBody = serde_json::from_str(& message.body.clone()).unwrap();
+        // default HB/MSG response to send what was received
+        if msg_body.msg.is_empty(){
+            response = Response::from_string(serialize_message(& Message{
+                header: message.header,
+                body: payload.clone()
+            }));
+        }
+        else{
+            // store msg received from listener into global msg variable
+            let mut msg = GLOBAL_MSGBODY.lock().unwrap();
+            *msg = serde_json::from_str(& message.body).unwrap();
+            response = Response::from_string(serialize_message(& Message{
+                header: message.header,
+                body: message.body
+            }));
+        }   
+        trace!("Heartbeat handler has returned request");
+    }
+    else {
+        warn!(
+            "Unexpected request sent to heartbeat_handler: {}",
+            message.header
+        );
+        info!("Dropping request");
+        return Ok(());
+    }
+    let _ = request.respond(response).unwrap();
+    Ok(())
 }
 
 #[cfg(test)]

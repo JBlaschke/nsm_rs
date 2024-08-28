@@ -17,6 +17,6 @@ nix = "0.24.1"
 lazy_static = "1.4.0"
 rand = "0.8"
 tokio = { version = "1", features = ["full"] }
-actix-web = "4.0"
-actix-rt = "2.1"
-reqwest = { version = "0.11", features = ["json"] }
+tiny_http = "0.12.0"
+url = "2.5.2"
+reqwest = { version = "0.12.5", features = ["blocking"] }

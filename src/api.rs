@@ -2,144 +2,370 @@ use crate::operations::{list_interfaces, list_ips, listen, claim, publish, colle
 
 use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
 
-use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
+use tiny_http::{Server, Response, Request, Method};
 use clap::ArgMatches;
+use url::Url;
+use std::collections::HashMap;
 
-#[actix_web::get("/list_interfaces")]
-pub async fn handle_list_interfaces(query: web::Query<ListInterfaces>) -> impl Responder {
-    let inputs = query.into_inner();
-    
-    let result = list_interfaces(ListInterfaces {
-        verbose: inputs.verbose,
-        print_v4: inputs.print_v4,
-        print_v6: inputs.print_v6,
-    });
+pub fn handle_list_interfaces(request: Request) {
+    let url_str = format!("http://localhost{}", request.url());
+    let parsed_url = Url::parse(&url_str).unwrap();
 
-    match result {
-        Ok(_) => HttpResponse::Ok().body("Successfully listed interfaces"),
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {}", err))
+    // Extract query parameters into a HashMap
+    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+
+    let _ = match list_interfaces(ListInterfaces {
+        verbose: query_pairs.get("verbose").map_or(false, |v| v == "true"),
+        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
+        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
+    }) {
+        Ok(output) => {
+            let response = Response::from_string(format!("Successful request to list_interfaces"))
+            .with_status_code(200);
+        let _ = request.respond(response);
+        },
+        Err(e) => {
+            let response = Response::from_string(format!("Error processing request: {}", e))
+                .with_status_code(500);
+            let _ = request.respond(response);
+            return;
         }
-    }
+    };
 }
 
-#[actix_web::get("/list_ips")]
-pub async fn handle_list_ips(query: web::Query<ListIPs>) -> impl Responder {
-    let inputs = query.into_inner();
-    
-    let result = list_ips(ListIPs {
-        verbose: inputs.verbose,
-        print_v4: inputs.print_v4,
-        print_v6: inputs.print_v6,
-        name: inputs.name,
-        starting_octets: inputs.starting_octets,
-    });
+pub fn handle_list_ips(request: Request) {
+    let url_str = format!("http://localhost{}", request.url());
+    let parsed_url = Url::parse(&url_str).unwrap();
 
-    match result {
-        Ok(_) => HttpResponse::Ok().body("Successfully listed addresses"),
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {}", err))
+    // Extract query parameters into a HashMap
+    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+    println!("{:?}", query_pairs);
+
+    let name = match query_pairs.get("name") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'name' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
         }
-    }
+    };
+
+    let _ = match list_ips(ListIPs {
+        verbose: query_pairs.get("verbose").map_or(false, |v| v == "true"),
+        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
+        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
+        name,
+        starting_octets: query_pairs.get("starting_octets").cloned(),
+    }) {
+        Ok(output) => {
+            let response = Response::from_string(format!("Successful request to list_ips"))
+            .with_status_code(200);
+        let _ = request.respond(response);
+        },
+        Err(e) => {
+            let response = Response::from_string(format!("Error processing request: {}", e))
+                .with_status_code(500);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
 }
 
-#[actix_web::post("/publish")]
-pub async fn handle_publish(data: web::Json<Publish>) -> impl Responder {
-    let inputs = data.into_inner();
+pub fn handle_publish(request: Request) {    
+    let url_str = format!("http://localhost{}", request.url());
+    let parsed_url = Url::parse(&url_str).unwrap();
+
+    // Extract query parameters into a HashMap
+    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
     println!("starting publish ");
+
+    let name = match query_pairs.get("name") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'name' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let host = match query_pairs.get("host") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'host' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let port = match query_pairs.get("port")
+        .and_then(|p| p.parse::<i32>().ok()) {
+        Some(port) => port,
+        None => {
+            let response = Response::from_string("Error: 'port' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let bind_port = match query_pairs.get("bind_port")
+    .and_then(|p| p.parse::<i32>().ok()) {
+    Some(port) => port,
+    None => {
+        let response = Response::from_string("Error: 'bind_port' parameter is required.")
+            .with_status_code(400);
+        let _ = request.respond(response);
+        return;
+    }
+    };
+
+    let service_port = match query_pairs.get("service_port")
+    .and_then(|p| p.parse::<i32>().ok()) {
+    Some(port) => port,
+    None => {
+        let response = Response::from_string("Error: 'service_port' parameter is required.")
+            .with_status_code(400);
+        let _ = request.respond(response);
+        return;
+    }
+    };  
+
+    let key = match query_pairs.get("key")
+    .and_then(|p| p.parse::<u64>().ok()) {
+    Some(k) => k,
+    None => {
+        let response = Response::from_string("Error: 'key' parameter is required.")
+            .with_status_code(400);
+        let _ = request.respond(response);
+        return;
+    }
+    };
     
     let result = publish(Publish {
-        print_v4: inputs.print_v4,
-        print_v6: inputs.print_v6,
-        host: inputs.host,
-        port: inputs.port,
-        name: inputs.name,
-        starting_octets: inputs.starting_octets,
-        bind_port: inputs.bind_port,
-        service_port: inputs.service_port,
-        key: inputs.key
+        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
+        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
+        host,
+        port,
+        name,
+        starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
+        bind_port,
+        service_port,
+        key,
     });
-
-    match result.await {
-        Ok(_) => HttpResponse::Ok().body("Successfully published service"),
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {}", err))
-        }
-    }
 }
 
-#[actix_web::post("/claim")]
-pub async fn handle_claim(data: web::Json<Claim>) -> impl Responder {
-    let inputs = data.into_inner();
-    
+pub fn handle_claim(request: Request) {
+    let url_str = format!("http://localhost{}", request.url());
+    let parsed_url = Url::parse(&url_str).unwrap();
+
+    // Extract query parameters into a HashMap
+    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+
+    let name = match query_pairs.get("name") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'name' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let host = match query_pairs.get("host") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'host' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let port = match query_pairs.get("port")
+        .and_then(|p| p.parse::<i32>().ok()) {
+        Some(port) => port,
+        None => {
+            let response = Response::from_string("Error: 'port' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let bind_port = match query_pairs.get("bind_port")
+    .and_then(|p| p.parse::<i32>().ok()) {
+    Some(port) => port,
+    None => {
+        let response = Response::from_string("Error: 'bind_port' parameter is required.")
+            .with_status_code(400);
+        let _ = request.respond(response);
+        return;
+    }
+    };
+
+    let key = match query_pairs.get("key")
+    .and_then(|p| p.parse::<u64>().ok()) {
+    Some(k) => k,
+    None => {
+        let response = Response::from_string("Error: 'key' parameter is required.")
+            .with_status_code(400);
+        let _ = request.respond(response);
+        return;
+    }
+    };
+
     let result = claim(Claim {
-        print_v4: inputs.print_v4,
-        print_v6: inputs.print_v6,
-        host: inputs.host,
-        port: inputs.port,
-        name: inputs.name,
-        starting_octets: inputs.starting_octets,
-        bind_port: inputs.bind_port,
-        key: inputs.key
+        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
+        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
+        host,
+        port,
+        name,
+        starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
+        bind_port,
+        key,
     });
-
-    match result {
-        Ok(_) => HttpResponse::Ok().body("Successfully claimed service"),
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {}", err))
-        }
-    }
 }
 
-#[actix_web::get("/collect")]
-pub async fn handle_collect(query: web::Query<Collect>) -> impl Responder {
-    let inputs = query.into_inner();
-    
+pub fn handle_collect(request: Request) {
+    let url_str = format!("http://localhost{}", request.url());
+    let parsed_url = Url::parse(&url_str).unwrap();
+
+    // Extract query parameters into a HashMap
+    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+
+    let name = match query_pairs.get("name") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'name' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let host = match query_pairs.get("host") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'host' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let port = match query_pairs.get("port")
+        .and_then(|p| p.parse::<i32>().ok()) {
+        Some(port) => port,
+        None => {
+            let response = Response::from_string("Error: 'port' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let key = match query_pairs.get("key")
+    .and_then(|p| p.parse::<u64>().ok()) {
+    Some(k) => k,
+    None => {
+        let response = Response::from_string("Error: 'key' parameter is required.")
+            .with_status_code(400);
+        let _ = request.respond(response);
+        return;
+    }
+    };
+
     let result = collect(Collect {
-        print_v4: inputs.print_v4,
-        print_v6: inputs.print_v6,
-        host: inputs.host,
-        port: inputs.port,
-        name: inputs.name,
-        starting_octets: inputs.starting_octets,
-        key: inputs.key
+        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
+        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
+        host,
+        port,
+        name,
+        starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
+        key,
     });
 
-    match result {
-        Ok(_) => HttpResponse::Ok().body("Successfully sent collect request"),
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {}", err))
-        }
-    }
 }
 
-#[actix_web::post("/send")]
-pub async fn handle_send(data: web::Json<Send>) -> impl Responder {
-    let inputs = data.into_inner();
+pub fn handle_send(request: Request) {
+    let url_str = format!("http://localhost{}", request.url());
+    let parsed_url = Url::parse(&url_str).unwrap();
+
+    // Extract query parameters into a HashMap
+    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
     
+    let name = match query_pairs.get("name") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'name' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let host = match query_pairs.get("host") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'host' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let port = match query_pairs.get("port")
+        .and_then(|p| p.parse::<i32>().ok()) {
+        Some(port) => port,
+        None => {
+            let response = Response::from_string("Error: 'port' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let msg = match query_pairs.get("msg") {
+        Some(n) => n.to_string(),
+        None => {
+            let response = Response::from_string("Error: 'msg' parameter is required.")
+                .with_status_code(400);
+            let _ = request.respond(response);
+            return;
+        }
+    };
+
+    let key = match query_pairs.get("key")
+    .and_then(|p| p.parse::<u64>().ok()) {
+    Some(k) => k,
+    None => {
+        let response = Response::from_string("Error: 'key' parameter is required.")
+            .with_status_code(400);
+        let _ = request.respond(response);
+        return;
+    }
+    };
     let result = send_msg(Send {
-        print_v4: inputs.print_v4,
-        print_v6: inputs.print_v6,
-        host: inputs.host,
-        port: inputs.port,
-        name: inputs.name,
-        starting_octets: inputs.starting_octets,
-        msg: inputs.msg,
-        key: inputs.key
+        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
+        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
+        host,
+        port,
+        name,
+        starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
+        msg,
+        key,
     });
 
-    match result {
-        Ok(_) => HttpResponse::Ok().body("Successfully sent message"),
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {}", err))
-        }
-    }
 }
 
-// async fn handle_task_id_update() -> impl Responder {
+// fn handle_task_id_update(request: Request) {
 
 // }
 
-// async fn handle_task_update() -> impl Responder {
+// fn handle_task_update(request: Request) {
 
 // }

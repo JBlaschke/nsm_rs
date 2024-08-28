@@ -85,6 +85,7 @@ bitflags::bitflags! {
     /// Rustier interface for [`SCNetworkReachabilityFlags`].
     ///
     /// [`SCNetworkReachability`]: https://developer.apple.com/documentation/systemconfiguration/scnetworkreachabilityflags
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ReachabilityFlags: u32 {
         /// The specified node name or address can be reached via a transient connection, such as
         /// PPP.
@@ -186,18 +187,21 @@ impl SCNetworkReachability {
     /// See [`SCNetworkReachabilityScheduleFromRunLoop`] for details.
     ///
     /// [`SCNetworkReachabilityScheduleFromRunLoop`]: https://developer.apple.com/documentation/systemconfiguration/1514894-scnetworkreachabilityschedulewit?language=objc
-    pub fn schedule_with_runloop(
+    ///
+    /// # Safety
+    ///
+    /// The `run_loop_mode` must not be NULL and must be a pointer to a valid run loop mode.
+    /// Use `core_foundation::runloop::kCFRunLoopCommonModes` if you are unsure.
+    pub unsafe fn schedule_with_runloop(
         &self,
         run_loop: &CFRunLoop,
         run_loop_mode: CFStringRef,
     ) -> Result<(), SchedulingError> {
-        if unsafe {
-            SCNetworkReachabilityScheduleWithRunLoop(
-                self.0,
-                run_loop.to_void() as *mut _,
-                run_loop_mode,
-            )
-        } == 0u8
+        if SCNetworkReachabilityScheduleWithRunLoop(
+            self.0,
+            run_loop.to_void() as *mut _,
+            run_loop_mode,
+        ) == 0u8
         {
             Err(SchedulingError(()))
         } else {
@@ -210,18 +214,21 @@ impl SCNetworkReachability {
     /// See [`SCNetworkReachabilityUnscheduleFromRunLoop`] for details.
     ///
     /// [`SCNetworkReachabilityUnscheduleFromRunLoop`]: https://developer.apple.com/documentation/systemconfiguration/1514899-scnetworkreachabilityunschedulef?language=objc
-    pub fn unschedule_from_runloop(
+    ///
+    /// # Safety
+    ///
+    /// The `run_loop_mode` must not be NULL and must be a pointer to a valid run loop mode.
+    /// Use `core_foundation::runloop::kCFRunLoopCommonModes` if you are unsure.
+    pub unsafe fn unschedule_from_runloop(
         &self,
         run_loop: &CFRunLoop,
         run_loop_mode: CFStringRef,
     ) -> Result<(), UnschedulingError> {
-        if unsafe {
-            SCNetworkReachabilityUnscheduleFromRunLoop(
-                self.0,
-                run_loop.to_void() as *mut _,
-                run_loop_mode,
-            )
-        } == 0u8
+        if SCNetworkReachabilityUnscheduleFromRunLoop(
+            self.0,
+            run_loop.to_void() as *mut _,
+            run_loop_mode,
+        ) == 0u8
         {
             Err(UnschedulingError(()))
         } else {
@@ -253,14 +260,26 @@ impl SCNetworkReachability {
             copyDescription: Some(NetworkReachabilityCallbackContext::<F>::copy_ctx_description),
         };
 
-        if unsafe {
+        let result = unsafe {
             SCNetworkReachabilitySetCallback(
                 self.0,
                 Some(NetworkReachabilityCallbackContext::<F>::callback),
                 &mut callback_context,
             )
-        } == 0u8
-        {
+        };
+
+        // The call to SCNetworkReachabilitySetCallback will call the
+        // `retain` callback which will increment the reference count on
+        // `callback`. Therefore, although the count is decremented below,
+        // the reference count will still be >0.
+        //
+        // When `SCNetworkReachability` is dropped, `release` is called
+        // which will drop the reference count on `callback` to 0.
+        //
+        // Assumes the pointer pointed to by the `info` member of `callback_context` is still valid.
+        unsafe { Arc::decrement_strong_count(callback_context.info) };
+
+        if result == 0u8 {
             Err(SetCallbackError {})
         } else {
             Ok(())
@@ -297,7 +316,7 @@ impl<T: Fn(ReachabilityFlags) + Sync + Send> NetworkReachabilityCallbackContext<
         context: *mut c_void,
     ) {
         let context: &mut Self = unsafe { &mut (*(context as *mut _)) };
-        (context.callback)(unsafe { ReachabilityFlags::from_bits_unchecked(flags) });
+        (context.callback)(ReachabilityFlags::from_bits_retain(flags));
     }
 
     extern "C" fn copy_ctx_description(_ctx: *const c_void) -> CFStringRef {
@@ -309,17 +328,15 @@ impl<T: Fn(ReachabilityFlags) + Sync + Send> NetworkReachabilityCallbackContext<
 
     extern "C" fn release_context(ctx: *const c_void) {
         unsafe {
-            let _ = Arc::from_raw(ctx as *mut Self);
+            Arc::decrement_strong_count(ctx as *mut Self);
         }
     }
 
     extern "C" fn retain_context(ctx_ptr: *const c_void) -> *const c_void {
         unsafe {
-            let ctx_ref: Arc<Self> = Arc::from_raw(ctx_ptr as *const Self);
-            let new_ctx = ctx_ref.clone();
-            std::mem::forget(ctx_ref);
-            Arc::into_raw(new_ctx) as *const c_void
+            Arc::increment_strong_count(ctx_ptr as *mut Self);
         }
+        ctx_ptr
     }
 }
 
@@ -327,24 +344,35 @@ impl<T: Fn(ReachabilityFlags) + Sync + Send> NetworkReachabilityCallbackContext<
 /// libc::sockaddr_in6, depending on the passed in standard library SocketAddr.
 fn to_c_sockaddr(addr: SocketAddr) -> Box<libc::sockaddr> {
     let ptr = match addr {
+        // See reference conversion from socket2:
+        // https://github.com/rust-lang/socket2/blob/3a938932829ea6ee3025d2d7a86c7b095c76e6c3/src/sockaddr.rs#L277-L287
+        // https://github.com/rust-lang/socket2/blob/3a938932829ea6ee3025d2d7a86c7b095c76e6c3/src/sys/unix.rs#L1356-L1363
         SocketAddr::V4(addr) => Box::into_raw(Box::new(libc::sockaddr_in {
             sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
-            sin_family: libc::AF_INET as u8,
-            sin_port: addr.port(),
-            sin_addr: libc::in_addr {
-                s_addr: u32::from(*addr.ip()),
+            sin_family: libc::AF_INET as libc::sa_family_t,
+            sin_port: addr.port().to_be(),
+            sin_addr: {
+                // `s_addr` is stored as BE on all machines, and the array is in BE order.
+                // So the native endian conversion method is used so that it's never
+                // swapped.
+                libc::in_addr {
+                    s_addr: u32::from_ne_bytes(addr.ip().octets()),
+                }
             },
-            sin_zero: [0i8; 8],
+            sin_zero: Default::default(),
         })) as *mut c_void,
+        // See reference conversion from socket2:
+        // https://github.com/rust-lang/socket2/blob/3a938932829ea6ee3025d2d7a86c7b095c76e6c3/src/sockaddr.rs#L314-L331
+        // https://github.com/rust-lang/socket2/blob/3a938932829ea6ee3025d2d7a86c7b095c76e6c3/src/sys/unix.rs#L1369-L1373
         SocketAddr::V6(addr) => Box::into_raw(Box::new(libc::sockaddr_in6 {
             sin6_len: std::mem::size_of::<libc::sockaddr_in6>() as u8,
-            sin6_family: libc::AF_INET6 as u8,
-            sin6_port: addr.port(),
-            sin6_flowinfo: 0,
+            sin6_family: libc::AF_INET6 as libc::sa_family_t,
+            sin6_port: addr.port().to_be(),
+            sin6_flowinfo: addr.flowinfo(),
             sin6_addr: libc::in6_addr {
                 s6_addr: addr.ip().octets(),
             },
-            sin6_scope_id: 0,
+            sin6_scope_id: addr.scope_id(),
         })) as *mut c_void,
     };
 
@@ -356,7 +384,10 @@ mod test {
     use super::*;
 
     use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
-    use std::ffi::CString;
+    use std::{
+        ffi::CString,
+        net::{Ipv4Addr, Ipv6Addr},
+    };
 
     #[test]
     fn test_network_reachability_from_addr() {
@@ -373,14 +404,15 @@ mod test {
                 addr
             );
             reachability.set_callback(|_| {}).unwrap();
-            reachability
-                .schedule_with_runloop(&CFRunLoop::get_current(), unsafe { kCFRunLoopCommonModes })
-                .unwrap();
-            reachability
-                .unschedule_from_runloop(&CFRunLoop::get_current(), unsafe {
-                    kCFRunLoopCommonModes
-                })
-                .unwrap();
+            // SAFETY: We use the Apple provided run_loop_mode kCFRunLoopCommonModes
+            unsafe {
+                reachability
+                    .schedule_with_runloop(&CFRunLoop::get_current(), kCFRunLoopCommonModes)
+                    .unwrap();
+                reachability
+                    .unschedule_from_runloop(&CFRunLoop::get_current(), kCFRunLoopCommonModes)
+                    .unwrap();
+            }
         }
     }
 
@@ -404,14 +436,47 @@ mod test {
                 remote
             );
             reachability.set_callback(|_| {}).unwrap();
-            reachability
-                .schedule_with_runloop(&CFRunLoop::get_current(), unsafe { kCFRunLoopCommonModes })
-                .unwrap();
-            reachability
-                .unschedule_from_runloop(&CFRunLoop::get_current(), unsafe {
-                    kCFRunLoopCommonModes
-                })
-                .unwrap();
+            // SAFETY: We use the Apple provided run_loop_mode kCFRunLoopCommonModes
+            unsafe {
+                reachability
+                    .schedule_with_runloop(&CFRunLoop::get_current(), kCFRunLoopCommonModes)
+                    .unwrap();
+                reachability
+                    .unschedule_from_runloop(&CFRunLoop::get_current(), kCFRunLoopCommonModes)
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_sockaddr_local_to_dns_google_pair_reachability() {
+        let sockaddrs = [
+            "[2001:4860:4860::8844]:443".parse::<SocketAddr>().unwrap(),
+            "8.8.4.4:443".parse().unwrap(),
+        ];
+        for remote_addr in sockaddrs {
+            match std::net::TcpStream::connect(remote_addr) {
+                Err(_) => {
+                    let local_addr = if remote_addr.is_ipv4() {
+                        SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)
+                    } else {
+                        SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0)
+                    };
+                    let reachability =
+                        SCNetworkReachability::from_addr_pair(local_addr, remote_addr);
+                    let reachability_flags = reachability.reachability().unwrap();
+                    // Verify that not established tcp connection path is reported as not reachable.
+                    assert!(!reachability_flags.contains(ReachabilityFlags::REACHABLE));
+                }
+                Ok(tcp) => {
+                    let local = tcp.local_addr().unwrap();
+                    let remote = tcp.peer_addr().unwrap();
+                    let reachability = SCNetworkReachability::from_addr_pair(local, remote);
+                    let reachability_flags = reachability.reachability().unwrap();
+                    // Verify established tcp connection path is reported as reachable.
+                    assert!(reachability_flags.contains(ReachabilityFlags::REACHABLE));
+                }
+            }
         }
     }
 
@@ -425,16 +490,18 @@ mod test {
             match SCNetworkReachability::from_host(&input) {
                 Some(mut reachability) => {
                     reachability.set_callback(|_| {}).unwrap();
-                    reachability
-                        .schedule_with_runloop(&CFRunLoop::get_current(), unsafe {
-                            kCFRunLoopCommonModes
-                        })
-                        .unwrap();
-                    reachability
-                        .unschedule_from_runloop(&CFRunLoop::get_current(), unsafe {
-                            kCFRunLoopCommonModes
-                        })
-                        .unwrap();
+                    // SAFETY: We use the Apple provided run_loop_mode kCFRunLoopCommonModes
+                    unsafe {
+                        reachability
+                            .schedule_with_runloop(&CFRunLoop::get_current(), kCFRunLoopCommonModes)
+                            .unwrap();
+                        reachability
+                            .unschedule_from_runloop(
+                                &CFRunLoop::get_current(),
+                                kCFRunLoopCommonModes,
+                            )
+                            .unwrap();
+                    }
                 }
                 None => {
                     panic!(
@@ -447,7 +514,7 @@ mod test {
 
         // Can only testify that an empty string is invalid, everything else seems to work
         assert!(
-            !SCNetworkReachability::from_host(&get_cstring("")).is_some(),
+            SCNetworkReachability::from_host(&get_cstring("")).is_none(),
             "Constructed valid SCNetworkReachability from empty string"
         );
     }
@@ -461,9 +528,12 @@ mod test {
             let mut reachability =
                 SCNetworkReachability::from("0.0.0.0:0".parse::<SocketAddr>().unwrap());
             reachability.set_callback(|_| {}).unwrap();
-            reachability
-                .schedule_with_runloop(&CFRunLoop::get_current(), unsafe { kCFRunLoopCommonModes })
-                .unwrap();
+            // SAFETY: We use the Apple provided run_loop_mode kCFRunLoopCommonModes
+            unsafe {
+                reachability
+                    .schedule_with_runloop(&CFRunLoop::get_current(), kCFRunLoopCommonModes)
+                    .unwrap();
+            }
             reachability.set_callback(|_| {}).unwrap();
             let _ = tx.send(reachability);
             CFRunLoop::run_current();

@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use rand::Rng;
 use std::thread;
 use std::time::Duration;
+use tiny_http::{Server, Response, Request, Method};
+
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -141,9 +143,9 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
 
 /// Sends a message in a TCPStream using stream_write(), checks for response
 /// if message not an ACK, returns Result of Message received
-pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
+pub fn send(request: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
 
-    let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+    let loc_stream: &mut TcpStream = &mut *request.lock().unwrap();
     let _ = stream_write(loc_stream, & serialize_message(msg));
 
     if matches!(msg.header, MessageHeader::ACK){
@@ -190,21 +192,32 @@ pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
 /// Binds to stream and listens for incoming connections, then handles connection using specified handler
 pub fn server(
     addr: &Addr, 
-    mut handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
+    mut handler: impl FnMut(Request) -> std::io::Result<()> + std::marker::Send + 'static + Clone
 ) -> std::io::Result<()> {
     trace!("Starting server process on: {:?}", addr);
-    
 
-    // HttpServer::new(move || {
-    //     App::new()
-    //         .service(
-    //             web::resource("/request_handler")
-    //                 .route(web::post().to(handler))
-    //         )
-    // })
-    // .bind(format!("{}:{}", addr.host, addr.port))?
-    // .run()
-    // .await
+    let server = Server::http(format!("{}:{}", addr.host, addr.port)).unwrap();
+
+    for request in server.incoming_requests() {
+        println!("request received");
+        
+        let (method, path) = {
+            (request.method().clone(), request.url().to_string())
+        };
+
+        match method {
+            Method::Post if path.starts_with("/request_handler") => {
+                println!("entering handler");
+                let _ = handler(request);
+            },
+            Method::Post if path.starts_with("/heartbeat_handler") => {
+                let _ = handler(request);
+            },
+            _ => {
+                let response = Response::from_string("Unsupported HTTP method").with_status_code(405);
+            }
+        }
+    }
 
     // let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
     // trace!("Bind to {:?} successful", addr);
