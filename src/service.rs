@@ -22,8 +22,7 @@ use log::{debug, error, info, trace, warn};
 use crate::utils::{only_or_error, epoch};
 use crate::connection::{
     MessageHeader, Message, Addr, connect, send, receive, stream_read, stream_write, 
-    serialize_message, deserialize_message, connect_with_retry
-};
+    serialize_message, deserialize_message};
 
 /// Store client or service metadata
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -124,8 +123,8 @@ pub struct Heartbeat {
     pub service_id: u64,
     /// address of service/client
     pub addr: String,
-    /// stream used to send heartbeats to client
-    pub stream: Arc<Mutex<TcpStream>>,
+    /// client object for sending heartbeat requests
+    pub client: Client,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_counter: FailCounter,
     /// message sent from client
@@ -148,62 +147,35 @@ impl Event for Heartbeat {
     /// send a heartbeat to the service/client and check if entity sent one back,
     /// increment fail_count if heartbeat not received when expected
     fn monitor(&mut self) -> std::io::Result<()>{
-        let mut loc_stream = match self.stream.lock() {
-            Ok(guard) => guard,
-            Err(_err) => {
-                self.fail_counter.increment();
-                return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
-            }
-        };
         
         trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
-        let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+
+        let message = serialize_message(& Message{
             header: MessageHeader::HB,
             body: serde_json::to_string(& self.msg_body.clone()).unwrap()
-        }));
+        });
+        let response = self.client
+        .post(format!("http://{}/heartbeat_handler", self.addr))
+        .body(message)
+        .send();
     
-        let failure_duration = Duration::from_secs(6); //change to any failure limit
-        // allots time for reading from stream
-        match loc_stream.set_read_timeout(Some(failure_duration)) {
-            Ok(_x) => trace!("set_read_timeout OK"),
-            Err(e) => match e.kind() {
-                io::ErrorKind::InvalidInput => warn!("Invalid input for read timeout: {}", e),
-                io::ErrorKind::NotConnected => warn!("Stream is not connected: {}", e),
-                io::ErrorKind::AddrNotAvailable => warn!("Address not available: {}", e),
-                io::ErrorKind::WouldBlock => warn!("Operation would block: {}", e),
-                io::ErrorKind::PermissionDenied => warn!("Permission denied: {}", e),
-                _ => warn!("An unexpected error occurred: {}", e),
-            }
-        }
-    
-        let received = match stream_read(&mut loc_stream) {
-            Ok(message) => message,
-            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
-                self.fail_counter.increment();
-                trace!("ConnectionReset error");
-                return Err(std::io::Error::new(err.kind(), err.to_string()));
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
-                self.fail_counter.increment();
-                trace!("ConnectionAborted error");
-                return Err(std::io::Error::new(err.kind(), err.to_string()));
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
-                self.fail_counter.increment();
-                trace!("TimeOut error");
-                return Err(std::io::Error::new(err.kind(), err.to_string()));
+        // let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
+        // // allots time for reading response
+        // let start_time = Instant::now();
+        let received = match response {
+            Ok(mut resp) => {
+                trace!("Received response: {:?}", resp);
+                resp.text().unwrap()
             }
             Err(err) => {
-                // open connection, read timed out
                 if self.fail_counter.fail_count == 0 {
                     self.fail_counter.first_increment = Instant::now();
                 }
                 self.fail_counter.increment();
                 trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
-                return Err(err);
+                return Err(io::Error::new(io::ErrorKind::Other, err));
             }
         };
-    
         if received == "" {
             // broken connection
             if self.fail_counter.fail_count == 0 {
@@ -211,17 +183,6 @@ impl Event for Heartbeat {
             }
             self.fail_counter.increment();
             trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
-            *loc_stream = match connect_with_retry(self.addr.clone()){
-                Ok(s) => s,
-                Err(err) => return Err(err)
-            };
-            let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                header: MessageHeader::NULL,
-                body: "".to_string()
-            }));
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput, "HB Failed")
-            );
         } else {    
             trace!("Received: {:?}", received);
             self.fail_counter.fail_count = 0;
@@ -336,7 +297,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                                     id: hb.id,
                                     service_id: hb.service_id,
                                     addr: hb.addr.clone(),
-                                    stream: Arc::clone(&hb.stream),
+                                    client: hb.client.clone(),
                                     fail_counter: FailCounter::new(),
                                     msg_body: hb.msg_body.clone(),
                                 });
@@ -405,28 +366,43 @@ impl State {
 
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
-
-        trace!("Listener connecting to: {}", bind_address);
-        let mut bind_fail = 0;
-        // broker connects to service/client bind_port for heartbeats
-        // loop solves connection race case 
-        let hb_stream = loop {
-            match TcpStream::connect(bind_address.clone()) {
-                Ok(stream) => break stream,
-                Err(err) => {
-                    bind_fail += 1;
-                    if bind_fail > 5{
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput, "Service failed to connect to bind port"));
+        let client = Client::new();
+        
+        if let Some(vec) = self.clients.get_mut(&p.key) {
+            // find value in clients with matching id
+            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr) {
+                let item = &vec[pos];
+                let mut counter = 0;
+                while counter < 10 {
+                    {
+                        let mut deque = self.deque.lock().unwrap();
+                        if let Some(hb) = deque.iter_mut().find_map(|e| {
+                            e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.id == item.id) }) {
+                                if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
+                                    hb.addr = bind_address.clone();
+                                    hb.client = client;
+                                    trace!("Altering hb {:?}", hb);
+                                    p.id = item.id;
+                                    p.service_id = item.service_id;
+                                    let immutable_hb: &Heartbeat = hb;
+                                    return Ok(immutable_hb.clone());
+                                }
+                                else {
+                                    continue;
+                                }
+                        }
+                        else{
+                            counter += 1;
+                        }
                     }
-                    trace!("{}",format!("Retrying connection: {}", err));
                     sleep(Duration::from_millis(1000));
-                    continue;
+                }
+                if counter == 10 {
+                    warn!("Could not find matching service");
                 }
             }
-        };
-        let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
-        
+        }
+
         let mut temp_id = self.seq;
         // service_id is same as id for a service - unclaimed service starts with service_id = 0
         // client inherits its service's id for service_id
@@ -438,7 +414,7 @@ impl State {
             id: self.seq,
             service_id: temp_id,
             addr: bind_address.clone(),
-            stream: shared_hb_stream,
+            client,
             fail_counter: FailCounter::new(),
             msg_body: MsgBody::default(),
         };
@@ -585,87 +561,83 @@ pub fn request_handler(
             let (lock, cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
 
-            // let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
-            // state_loc.running = true; // set running to true for event loop
-            // cvar.notify_one(); // notify event loop of new Event
+            let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
+            state_loc.running = true; // set running to true for event loop
+            cvar.notify_one(); // notify event loop of new Event
 
-            // println!("Now state:");
-            // state_loc.print(); // print state of clients hashmap
+            println!("Now state:");
+            state_loc.print(); // print state of clients hashmap
         },
         MessageHeader::CLAIM => {
             trace!("Claiming Service: {:?}", payload);
 
-            // let (lock, _cvar) = &**state;
-            // let mut state_loc = lock.lock().unwrap();
-            // let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
-            // let mut service_id = 0;
-            // let mut claim_fail = 0; // initiate counter for connection failure
-            // // loop solves race case when client starts faster than service can be published
-            // loop {
-            //     // 
-            //     match state_loc.claim(payload.key){
-            //         Ok(p) => {
-            //             service_id = (*p).service_id; // capture claimed service's service_id for add()
-            //             // send acknowledgment of successful service claim with service's payload containing its address
-            //             let _ = stream_write(loc_stream, & serialize_message(
-            //                 & Message {
-            //                     header: MessageHeader::ACK,
-            //                     body: serialize(p) // address extracted in main to print to client
-            //                 }
-            //             ));
-            //             break;
-            //         },
-            //         _ => {
-            //             claim_fail += 1;
-            //             if claim_fail <= 5{
-            //                 sleep(Duration::from_millis(1000));
-            //                 continue;
-            //             }
-            //             // notify main() of failure to claim an available service
-            //             let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-            //                 header: MessageHeader::NULL,
-            //                 body: "".to_string()
-            //             }));
-            //             return Err(std::io::Error::new(
-            //                 std::io::ErrorKind::InvalidInput, "Failed to claim key"));
-            //         },
-            //     }
-            // }
-            // let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
+            let (lock, _cvar) = &**state;
+            let mut state_loc = lock.lock().unwrap();
+            let mut service_id = 0;
+            let mut claim_fail = 0; // initiate counter for connection failure
+            // loop solves race case when client starts faster than service can be published
+            loop {
+                // 
+                match state_loc.claim(payload.key){
+                    Ok(p) => {
+                        service_id = (*p).service_id; // capture claimed service's service_id for add()
+                        // send acknowledgment of successful service claim with service's payload containing its address
+                        let response = Response::from_string(serialize_message( & Message {
+                            header: MessageHeader::ACK,
+                            body: serialize(p) // address extracted in main to print to client
+                        }));
+                        request.respond(response).unwrap();
+                        break;
+                    },
+                    _ => {
+                        claim_fail += 1;
+                        if claim_fail <= 5{
+                            sleep(Duration::from_millis(1000));
+                            continue;
+                        }
+                        // notify main() of failure to claim an available service
+                        let response = Response::from_string(serialize_message( & Message {
+                            header: MessageHeader::NULL,
+                            body: "".to_string()
+                        }));
+                        request.respond(response).unwrap();
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput, "Failed to claim key"));
+                    },
+                }
+            }
+            let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
 
-            // println!("Now state:");
-            // state_loc.print(); // print state of clients hashmap
+            println!("Now state:");
+            state_loc.print(); // print state of clients hashmap
         },
         MessageHeader::MSG => {
             let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
             trace!("Sending Message: {:?}", msg_body);
 
-            // let (lock, _cvar) = &**state;
-            // let mut state_loc = lock.lock().unwrap();
+            let (lock, _cvar) = &**state;
+            let mut state_loc = lock.lock().unwrap();
 
-            // let mut counter = 0;
-            // while counter < 10 {
-            //     {
-            //         let mut deque = state_loc.deque.lock().unwrap();
-            //         if let Some(hb) = deque.iter_mut().find_map(|e| {
-            //             e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
-            //                 hb.msg_body = msg_body.clone();
-            //                 trace!("Altering hb message {:?}", hb);
-            //                 break;
-            //         }
-            //         else{
-            //             counter += 1;
-            //         }
-            //     }
-            //     sleep(Duration::from_millis(1000));
-            // }
-            // if counter == 10 {
-            //     warn!("Could not find matching service");
-            // }
+            let mut counter = 0;
+            while counter < 10 {
+                {
+                    let mut deque = state_loc.deque.lock().unwrap();
+                    if let Some(hb) = deque.iter_mut().find_map(|e| {
+                        e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
+                            hb.msg_body = msg_body.clone();
+                            trace!("Altering hb message {:?}", hb);
+                            break;
+                    }
+                    else{
+                        counter += 1;
+                    }
+                }
+                sleep(Duration::from_millis(1000));
+            }
+            if counter == 10 {
+                warn!("Could not find matching service");
+            }
 
-        }
-        MessageHeader::NULL => {
-            trace!("Doing nothing. Monitor attempting to replace stream");
         }
         _ => {panic!("This should not be reached!");}
     }
