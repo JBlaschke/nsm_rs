@@ -38,6 +38,7 @@ use env_logger::Env;
 /// ### Note
 ///  see cli module for more details
 
+
 fn main() -> std::io::Result<()> {
 
     let matches = init();
@@ -99,8 +100,8 @@ fn main() -> std::io::Result<()> {
     }
     else {
         // api entry
-        println!("Starting service on 192.0.0.2:12000");
-        let server = Server::http("192.0.0.2:12000").unwrap();
+        println!("Starting service on 0.0.0.0.1:8080");
+        let server = Server::http("0.0.0.0:8080").unwrap();
 
         for request in server.incoming_requests() {
             let method = request.method().clone();
@@ -129,7 +130,7 @@ fn main() -> std::io::Result<()> {
                 //     let _ = handle_task_update(request);
                 // },
                 _ => {
-                    let response = Response::from_string("Unsupported HTTP method").with_status_code(405);
+                    let _response = Response::from_string("Unsupported HTTP method").with_status_code(405);
                 }
             }
         }

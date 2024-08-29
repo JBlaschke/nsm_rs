@@ -1,6 +1,5 @@
 /// Track clients and services and handle events (heartbeats)
 
-use std::net::{TcpStream, TcpListener};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex, Condvar};
@@ -13,7 +12,7 @@ use std::io::{self};
 use std::any::Any;
 use std::fmt;
 use lazy_static::lazy_static;
-use tiny_http::{Server, Response, Request, Method};
+use tiny_http::{Response, Request};
 use reqwest::blocking::Client;
 
 #[allow(unused_imports)]
@@ -21,8 +20,7 @@ use log::{debug, error, info, trace, warn};
 
 use crate::utils::{only_or_error, epoch};
 use crate::connection::{
-    MessageHeader, Message, Addr, connect, send, receive, stream_read, stream_write, 
-    serialize_message, deserialize_message};
+    MessageHeader, Message, Addr, serialize_message, deserialize_message};
 
 /// Store client or service metadata
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -155,7 +153,7 @@ impl Event for Heartbeat {
             body: serde_json::to_string(& self.msg_body.clone()).unwrap()
         });
         let response = self.client
-        .post(format!("http://{}/heartbeat_handler", self.addr))
+        .get(format!("http://{}/heartbeat_handler", self.addr))
         .timeout(Duration::from_millis(2000))
         .body(message)
         .send();
@@ -164,7 +162,7 @@ impl Event for Heartbeat {
         // // allots time for reading response
         // let start_time = Instant::now();
         let received = match response {
-            Ok(mut resp) => {
+            Ok(resp) => {
                 trace!("Received response: {:?}", resp);
                 resp.text().unwrap()
             }
@@ -617,7 +615,7 @@ pub fn request_handler(
             trace!("Sending Message: {:?}", msg_body);
 
             let (lock, _cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
+            let state_loc = lock.lock().unwrap();
 
             let mut counter = 0;
             while counter < 10 {
@@ -735,7 +733,7 @@ pub fn heartbeat_handler(mut request: Request, payload: &String, addr: &Addr)
         // payload is empty for services, retrieve and send msg waiting in global variable
         if *payload == "".to_string(){
             // send msg back
-            let mut msg = GLOBAL_MSGBODY.lock().unwrap();
+            let msg = GLOBAL_MSGBODY.lock().unwrap();
             response = Response::from_string(serialize_message(& Message{
                 header: message.header,
                 body: serde_json::to_string(&* msg.msg).unwrap()

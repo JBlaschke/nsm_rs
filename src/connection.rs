@@ -1,11 +1,8 @@
 /// Handles incoming connections and sending/receiving messages
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::fmt;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
-use rand::Rng;
 use std::thread;
 use std::time::{Duration, Instant};
 use tiny_http::{Server, Response, Request, Method};
@@ -76,119 +73,6 @@ pub fn deserialize_message(payload: & String) -> Message {
     serde_json::from_str(payload).unwrap()
 }
 
-/// Connect to address using Addr struct, returns Result of connected TCPStream
-pub fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
-
-    TcpStream::connect(format!("{}:{}", addr.host, addr.port))
-}
-
-// pub fn connect_with_retry(addr: String) -> std::io::Result<TcpStream> {
-//     let mut retry_delay = Duration::from_secs(1);
-//     let max_delay = Duration::from_secs(5);
-//     let mut rng = rand::thread_rng();
-//     let mut failcount = 0;
-
-//     while failcount < 3 {
-//         match TcpStream::connect(addr.clone()) {
-//             Ok(stream) => {
-//                 trace!("Reset stream connection");
-//                 return Ok(stream);
-//             }
-//             Err(e) => {
-//                 warn!("Failed to connect: {:?}", e);
-                
-//                 failcount += 1;
-//                 // Exponential backoff with jitter
-//                 let jitter: u64 = rng.gen_range(0..1000); // Random jitter in milliseconds
-//                 let total_delay = retry_delay + Duration::from_millis(jitter);
-                
-//                 thread::sleep(total_delay);
-//                 retry_delay = std::cmp::min(retry_delay * 2, max_delay);
-//             }
-//         }
-//     }
-//     // If the loop exits without establishing a connection, return an error
-//     Err(std::io::Error::new(
-//         std::io::ErrorKind::InvalidInput, "Failed to connect after multiple attempts"))
-// }
-
-
-/// Write a message through a TCPStream, returns Result of # of bytes written or err
-pub fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result<usize> {
-    match stream.write(msg.as_bytes()) {
-        Ok(n) => Ok(n),
-        Err(err) => Err(err)
-    }
-}
-
-/// Read a message from TCPStream, returns Result of # of bytes read or err
-pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
-    let mut buf = [0; 1024];
-    let mut message = String::new();
-    loop {
-        let bytes_read = match stream.read(&mut buf) {
-            Ok(n) => n,
-            Err(err) => { return Err(err); }
-        };
-        let s = std::str::from_utf8(&buf[..bytes_read]).unwrap();
-        message.push_str(s);
-
-        if bytes_read < buf.len() {
-            break;
-        }
-    }
-
-    Ok(message)
-}
-
-/// Sends a message in a TCPStream using stream_write(), checks for response
-/// if message not an ACK, returns Result of Message received
-pub fn send(request: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
-
-    let loc_stream: &mut TcpStream = &mut *request.lock().unwrap();
-    let _ = stream_write(loc_stream, & serialize_message(msg));
-
-    if matches!(msg.header, MessageHeader::ACK){
-        return Ok(Message {
-            header: MessageHeader::NULL,
-            body: "".to_string()
-        })
-    }
-
-    let response = match stream_read(loc_stream) {
-        Ok(message) => deserialize_message(& message),
-        Err(err) => {return Err(err);}
-    };
-
-    Ok(response)
-}
-
-/// Receives a message through a TCPStream using stream_read(), writes an ACK
-/// if received message not a HB or ACK
-pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
-
-    let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
-
-    let response = match stream_read(loc_stream) {
-        Ok(message) => deserialize_message(& message),
-        Err(err) => {return Err(err);}
-    };
-
-    if matches!(response.header, MessageHeader::ACK)
-    || matches!(response.header, MessageHeader::HB) {
-        return Ok(response);
-    }
-
-    let _ = stream_write(loc_stream, & serialize_message(
-        & Message {
-            header: MessageHeader::ACK,
-            body: "".to_string()
-        }
-    ));
-
-    Ok(response)
-}
-
 /// Binds to stream and listens for incoming connections, then handles connection using specified handler
 pub fn server(
     addr: &Addr, 
@@ -199,19 +83,23 @@ pub fn server(
     let server = Server::http(format!("{}:{}", addr.host, addr.port)).unwrap();
 
     // Shared state to track the last heartbeat time
-    let last_heartbeat = Arc::new(Mutex::new(Instant::now()));
+    let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
 
     // Spawn a thread to monitor the heartbeat
     let last_heartbeat_clone = Arc::clone(&last_heartbeat);
     thread::spawn(move || {
         loop {
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_millis(500));
             let elapsed = {
-                let heartbeat_loc = last_heartbeat_clone.lock().unwrap();
-                heartbeat_loc.elapsed()
+                let timer_loc = last_heartbeat_clone.lock().unwrap();
+                if let Some(time) = *timer_loc {
+                    time.elapsed()
+                } else {
+                    continue;
+                }
             };
             if elapsed > Duration::from_secs(10) {
-                println!("No heartbeat received for 10 seconds, exiting...");
+                trace!("No heartbeat received for 10 seconds, exiting...");
                 std::process::exit(0);
             }
         }
@@ -228,9 +116,11 @@ pub fn server(
                 let _ = handler(request);
             },
             Method::Get if path.starts_with("/heartbeat_handler") => {
+                println!("starting heartbeat handler");
                 {
                     let mut last_heartbeat = last_heartbeat.lock().unwrap();
-                    *last_heartbeat = Instant::now();
+                    *last_heartbeat = Some(Instant::now());
+                    println!("Heartbeat received, time updated.");
                 }
                 let _ = handler(request);
             },

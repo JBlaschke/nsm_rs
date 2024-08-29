@@ -1,6 +1,6 @@
 use crate::network::{get_local_ips, get_matching_ipstr};
 
-use crate::connection::{Message, MessageHeader, connect, Addr, server, send, stream_read,
+use crate::connection::{Message, MessageHeader, Addr, server,
     serialize_message, deserialize_message};
 
 use crate::service::{Payload, State, serialize, request_handler, heartbeat_handler_helper, event_monitor};
@@ -10,7 +10,6 @@ use crate::utils::{only_or_error, epoch};
 use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
 
 use std::thread;
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex, Condvar};
 use std::time::Duration;
 use std::thread::sleep;
@@ -19,7 +18,6 @@ use reqwest::blocking::Client;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
-use env_logger::Env;
 
 pub fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
     let ips = get_local_ips();
@@ -197,7 +195,7 @@ pub fn publish(inputs: Publish) -> std::io::Result<()> {
         .send();
     
         match response {
-            Ok(mut resp) => {
+            Ok(resp) => {
                 trace!("Received response: {:?}", resp);
                 let body = resp.text().unwrap();
                 let m = deserialize_message(& body);
@@ -285,7 +283,7 @@ pub fn claim(inputs: Claim) -> std::io::Result<()> {
     
         // check for successful connection to a published service
         match response {
-            Ok(mut resp) => {
+            Ok(resp) => {
                 trace!("Received response: {:?}", resp);
                 let body = resp.text().unwrap();
                 trace!("{:?}", body);
@@ -335,8 +333,6 @@ pub fn claim(inputs: Claim) -> std::io::Result<()> {
 
 pub fn collect(inputs: Collect) -> std::io::Result<()> {
 
-    let ips = get_local_ips();
-
     // connect to bind port of service or client
     let client = Client::new();
     let msg = serialize_message(& Message{
@@ -351,7 +347,7 @@ pub fn collect(inputs: Collect) -> std::io::Result<()> {
     .send();
 
     match response {
-        Ok(mut resp) => {
+        Ok(resp) => {
             trace!("Received response: {:?}", resp);
             let body = resp.text().unwrap();
             let m = deserialize_message(& body);
@@ -366,7 +362,7 @@ pub fn collect(inputs: Collect) -> std::io::Result<()> {
                 _ => warn!("Server responds with unexpected message: {:?}", m),
             }
         }
-        Err(e) => return Err(std::io::Error::new(
+        Err(_e) => return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
     }
 
@@ -375,8 +371,6 @@ pub fn collect(inputs: Collect) -> std::io::Result<()> {
 }
 
 pub fn send_msg(inputs: Send) -> std::io::Result<()> {
-
-    let ips = get_local_ips();
 
     // connect to bind port of service or client
     let client = Client::new();
@@ -392,7 +386,7 @@ pub fn send_msg(inputs: Send) -> std::io::Result<()> {
     .send();
 
     match response {
-        Ok(mut resp) => {
+        Ok(resp) => {
             trace!("Received response: {:?}", resp);
             let body = resp.text().unwrap();
             let m = deserialize_message(& body);
@@ -401,7 +395,7 @@ pub fn send_msg(inputs: Send) -> std::io::Result<()> {
                 _ => warn!("Server responds with unexpected message: {:?}", m),
             }
         }
-        Err(e) => return Err(std::io::Error::new(
+        Err(_e) => return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
     }
 

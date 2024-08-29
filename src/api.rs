@@ -1,9 +1,8 @@
-use crate::operations::{list_interfaces, list_ips, listen, claim, publish, collect, send_msg};
+use crate::operations::{list_interfaces, list_ips, claim, publish, collect, send_msg};
 
-use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
+use crate::models::{ListInterfaces, ListIPs, Claim, Publish, Collect, Send};
 
-use tiny_http::{Server, Response, Request, Method};
-use clap::ArgMatches;
+use tiny_http::{Response, Request};
 use url::Url;
 use std::collections::HashMap;
 
@@ -19,7 +18,7 @@ pub fn handle_list_interfaces(request: Request) {
         print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
         print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
     }) {
-        Ok(output) => {
+        Ok(_output) => {
             let response = Response::from_string(format!("Successful request to list_interfaces"))
             .with_status_code(200);
         let _ = request.respond(response);
@@ -58,7 +57,7 @@ pub fn handle_list_ips(request: Request) {
         name,
         starting_octets: query_pairs.get("starting_octets").cloned(),
     }) {
-        Ok(output) => {
+        Ok(_output) => {
             let response = Response::from_string(format!("Successful request to list_ips"))
             .with_status_code(200);
         let _ = request.respond(response);
@@ -145,7 +144,7 @@ pub fn handle_publish(request: Request) {
     }
     };
     
-    let result = publish(Publish {
+    let _result = publish(Publish {
         print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
         print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
         host,
@@ -218,7 +217,7 @@ pub fn handle_claim(request: Request) {
     }
     };
 
-    let result = claim(Claim {
+    let _result = claim(Claim {
         print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
         print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
         host,
@@ -279,7 +278,7 @@ pub fn handle_collect(request: Request) {
     }
     };
 
-    let result = collect(Collect {
+    let _result = collect(Collect {
         print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
         print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
         host,
@@ -349,7 +348,7 @@ pub fn handle_send(request: Request) {
         return;
     }
     };
-    let result = send_msg(Send {
+    let _result = send_msg(Send {
         print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
         print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
         host,
