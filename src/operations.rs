@@ -186,27 +186,38 @@ pub fn publish(inputs: Publish) -> std::io::Result<()> {
         body: payload
     });
 
-    println!("sending request to {}:{}", inputs.host, inputs.port);
-    let response = client
-    .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
-    .body(msg)
-    .send();
-
-    match response {
-        Ok(mut resp) => {
-            trace!("Received response: {:?}", resp);
-            let body = resp.text().unwrap();
-            let m = deserialize_message(& body);
-            match m.header {
-                MessageHeader::ACK => {
-                    info!("Server acknowledged PUB.")
-                }
-                _ => {
-                    warn!("Server responds with unexpected message: {:?}", m)
+    let mut read_fail = 0;
+    loop {
+        sleep(Duration::from_millis(1000));
+        trace!("sending request to {}:{}", inputs.host, inputs.port);
+        let response = client
+        .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+        .timeout(Duration::from_millis(2000))
+        .body(msg.clone())
+        .send();
+    
+        match response {
+            Ok(mut resp) => {
+                trace!("Received response: {:?}", resp);
+                let body = resp.text().unwrap();
+                let m = deserialize_message(& body);
+                match m.header {
+                    MessageHeader::ACK => {
+                        info!("Server acknowledged PUB.");
+                        break;
+                    }
+                    _ => {
+                        warn!("Server responds with unexpected message: {:?}", m)
+                    }
                 }
             }
+            Err(e) => {
+                read_fail += 1;
+                if read_fail > 5 {
+                    panic!("Failed to send request to listener: {}", e)
+                }
+            },
         }
-        Err(e) => eprintln!("Failed to send request to listener: {}", e),
     }
 
     let host = only_or_error(& ipstr);
@@ -260,33 +271,44 @@ pub fn claim(inputs: Claim) -> std::io::Result<()> {
         body: payload
     });
 
-    println!("sending request to {}:{}", inputs.host, inputs.port);
-    let response = client
-    .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
-    .body(msg)
-    .send();
-
-    // check for successful connection to a published service
+    let mut read_fail = 0;
     let mut service_payload = "".to_string();
-    match response {
-        Ok(mut resp) => {
-            trace!("Received response: {:?}", resp);
-            let body = resp.text().unwrap();
-            let message = deserialize_message(& body);
-            trace!("{:?}", message);
-            // print service's address to client
-            if matches!(message.header, MessageHeader::ACK){
-                info!("Server acknowledged CLAIM.");
-                println!("{}", message.body);
-                service_payload = message.body;
+
+    loop {
+        sleep(Duration::from_millis(1000));
+        trace!("sending request to {}:{}", inputs.host, inputs.port);
+        let response = client
+        .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+        .timeout(Duration::from_millis(6000))
+        .body(msg.clone())
+        .send();
+    
+        // check for successful connection to a published service
+        match response {
+            Ok(mut resp) => {
+                trace!("Received response: {:?}", resp);
+                let body = resp.text().unwrap();
+                trace!("{:?}", body);
+                let message = deserialize_message(& body);
+                // print service's address to client
+                if matches!(message.header, MessageHeader::ACK){
+                    info!("Server acknowledged CLAIM.");
+                    println!("{}", message.body);
+                    service_payload = message.body;
+                    break;
+                }
+                else{
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,"Key not found"));
+                }
             }
-            else{
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,"Key not found"));
-            }
+            Err(e) => {
+                read_fail += 1;
+                if read_fail > 5 {
+                    panic!("Failed to send request to listener: {}", e)
+                }
+            },
         }
-        Err(e) => return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,"Failed to send request to listener")),
     }
 
     let broker_addr = Addr{

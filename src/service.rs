@@ -156,6 +156,7 @@ impl Event for Heartbeat {
         });
         let response = self.client
         .post(format!("http://{}/heartbeat_handler", self.addr))
+        .timeout(Duration::from_millis(2000))
         .body(message)
         .send();
     
@@ -368,40 +369,40 @@ impl State {
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
         let client = Client::new();
         
-        // if let Some(vec) = self.clients.get_mut(&p.key) {
+        if let Some(vec) = self.clients.get_mut(&p.key) {
             // find value in clients with matching id
-        //     if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr) {
-        //         let item = &vec[pos];
-        //         let mut counter = 0;
-        //         while counter < 10 {
-        //             {
-        //                 let mut deque = self.deque.lock().unwrap();
-        //                 if let Some(hb) = deque.iter_mut().find_map(|e| {
-        //                     e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.id == item.id) }) {
-        //                         if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
-        //                             hb.addr = bind_address.clone();
-        //                             hb.client = client;
-        //                             trace!("Altering hb {:?}", hb);
-        //                             p.id = item.id;
-        //                             p.service_id = item.service_id;
-        //                             let immutable_hb: &Heartbeat = hb;
-        //                             return Ok(immutable_hb.clone());
-        //                         }
-        //                         else {
-        //                             continue;
-        //                         }
-        //                 }
-        //                 else{
-        //                     counter += 1;
-        //                 }
-        //             }
-        //             sleep(Duration::from_millis(1000));
-        //         }
-        //         if counter == 10 {
-        //             warn!("Could not find matching service");
-        //         }
-        //     }
-        // }
+            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr) {
+                let item = &vec[pos];
+                let mut counter = 0;
+                while counter < 10 {
+                    {
+                        let mut deque = self.deque.lock().unwrap();
+                        if let Some(hb) = deque.iter_mut().find_map(|e| {
+                            e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.id == item.id) }) {
+                                if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
+                                    hb.addr = bind_address.clone();
+                                    hb.client = client;
+                                    trace!("Altering hb {:?}", hb);
+                                    p.id = item.id;
+                                    p.service_id = item.service_id;
+                                    let immutable_hb: &Heartbeat = hb;
+                                    return Ok(immutable_hb.clone());
+                                }
+                                else {
+                                    continue;
+                                }
+                        }
+                        else{
+                            counter += 1;
+                        }
+                    }
+                    sleep(Duration::from_millis(1000));
+                }
+                if counter == 10 {
+                    warn!("Could not find matching service");
+                }
+            }
+        }
 
         let mut temp_id = self.seq;
         // service_id is same as id for a service - unclaimed service starts with service_id = 0
@@ -725,6 +726,7 @@ pub fn heartbeat_handler(mut request: Request, payload: &String, addr: &Addr)
         println!("sending request");
         let _ = client
         .post(format!("{}:{}/request_handler", addr.host, addr.port))
+        .timeout(Duration::from_millis(2000))
         .body(msg)
         .send();
     }

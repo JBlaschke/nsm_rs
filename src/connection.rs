@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
 use rand::Rng;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tiny_http::{Server, Response, Request, Method};
 
 
@@ -198,9 +198,26 @@ pub fn server(
 
     let server = Server::http(format!("{}:{}", addr.host, addr.port)).unwrap();
 
-    for request in server.incoming_requests() {
-        println!("request received");
-        
+    // Shared state to track the last heartbeat time
+    let last_heartbeat = Arc::new(Mutex::new(Instant::now()));
+
+    // Spawn a thread to monitor the heartbeat
+    let last_heartbeat_clone = Arc::clone(&last_heartbeat);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            let elapsed = {
+                let heartbeat_loc = last_heartbeat_clone.lock().unwrap();
+                heartbeat_loc.elapsed()
+            };
+            if elapsed > Duration::from_secs(10) {
+                println!("No heartbeat received for 10 seconds, exiting...");
+                std::process::exit(0);
+            }
+        }
+    });
+
+    for request in server.incoming_requests() {        
         let (method, path) = {
             (request.method().clone(), request.url().to_string())
         };
@@ -210,7 +227,11 @@ pub fn server(
                 println!("entering handler");
                 let _ = handler(request);
             },
-            Method::Post if path.starts_with("/heartbeat_handler") => {
+            Method::Get if path.starts_with("/heartbeat_handler") => {
+                {
+                    let mut last_heartbeat = last_heartbeat.lock().unwrap();
+                    *last_heartbeat = Instant::now();
+                }
                 let _ = handler(request);
             },
             _ => {
@@ -219,21 +240,5 @@ pub fn server(
         }
     }
 
-    // let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
-    // trace!("Bind to {:?} successful", addr);
-
-    // for stream in listener.incoming() {
-    //     info!("Request received on {:?}, processing...", stream);
-    //     match stream {
-    //         Ok(stream) => {
-    //             trace!("Passing TCP connection to handler...");
-    //             let shared_stream = Arc::new(Mutex::new(stream));
-    //             let _ = handler(& shared_stream); 
-    //         }
-    //         Err(e) => {
-    //             println!("Error: {}", e);
-    //         }
-    //     }
-    // }
     Ok(())
 }

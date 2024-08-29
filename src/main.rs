@@ -99,8 +99,8 @@ fn main() -> std::io::Result<()> {
     }
     else {
         // api entry
-        println!("Starting service on 0.0.0.0.1:8080");
-        let server = Server::http("0.0.0.0:8080").unwrap();
+        println!("Starting service on 192.0.0.2:12000");
+        let server = Server::http("192.0.0.2:12000").unwrap();
 
         for request in server.incoming_requests() {
             let method = request.method().clone();
