@@ -3,9 +3,15 @@
 use std::fmt;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
-use tiny_http::{Server, Response, Request, Method};
+use std::net::SocketAddr;
+use hyper::http::{Method, Request, Response, StatusCode};
+use http_body_util::{BodyExt, Full};
+use hyper::body::{Bytes, Incoming, Buf};
+use hyper::service::service_fn;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto::Builder;
+use tokio::net::TcpListener;
 
 
 #[allow(unused_imports)]
@@ -74,61 +80,53 @@ pub fn deserialize_message(payload: & String) -> Message {
 }
 
 /// Binds to stream and listens for incoming connections, then handles connection using specified handler
-pub fn server(
-    addr: &Addr, 
-    mut handler: impl FnMut(Request) -> std::io::Result<()> + std::marker::Send + 'static + Clone
-) -> std::io::Result<()> {
+pub async fn server(
+    request: Request<Incoming>, addr: Addr, 
+    mut handler: impl FnMut(Request<Incoming>)-> Result<Response<Full<Bytes>>, hyper::Error> + std::marker::Send + 'static + Clone
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
     trace!("Starting server process on: {:?}", addr);
 
-    let server = Server::http(format!("{}:{}", addr.host, addr.port)).unwrap();
+    // // Shared state to track the last heartbeat time
+    // let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
 
-    // Shared state to track the last heartbeat time
-    let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
+    // // Spawn a thread to monitor the heartbeat
+    // let last_heartbeat_clone = Arc::clone(&last_heartbeat);
+    // thread::spawn(move || {
+    //     loop {
+    //         thread::sleep(Duration::from_millis(500));
+    //         let elapsed = {
+    //             let timer_loc = last_heartbeat_clone.lock().unwrap();
+    //             if let Some(time) = *timer_loc {
+    //                 time.elapsed()
+    //             } else {
+    //                 continue;
+    //             }
+    //         };
+    //         if elapsed > Duration::from_secs(10) {
+    //             trace!("No heartbeat received for 10 seconds, exiting...");
+    //             std::process::exit(0);
+    //         }
+    //     }
+    // });
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let mut response = Response::new(Full::default());
 
-    // Spawn a thread to monitor the heartbeat
-    let last_heartbeat_clone = Arc::clone(&last_heartbeat);
-    thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_millis(500));
-            let elapsed = {
-                let timer_loc = last_heartbeat_clone.lock().unwrap();
-                if let Some(time) = *timer_loc {
-                    time.elapsed()
-                } else {
-                    continue;
-                }
-            };
-            if elapsed > Duration::from_secs(10) {
-                trace!("No heartbeat received for 10 seconds, exiting...");
-                std::process::exit(0);
-            }
-        }
-    });
-
-    for request in server.incoming_requests() {        
-        let (method, path) = {
-            (request.method().clone(), request.url().to_string())
-        };
-
-        match method {
-            Method::Post if path.starts_with("/request_handler") => {
-                println!("entering handler");
-                let _ = handler(request);
-            },
-            Method::Get if path.starts_with("/heartbeat_handler") => {
-                println!("starting heartbeat handler");
-                {
-                    let mut last_heartbeat = last_heartbeat.lock().unwrap();
-                    *last_heartbeat = Some(Instant::now());
-                    println!("Heartbeat received, time updated.");
-                }
-                let _ = handler(request);
-            },
-            _ => {
-                let response = Response::from_string("Unsupported HTTP method").with_status_code(405);
-            }
+    match (method, path.as_str()) {
+        (Method::POST, p) if p.starts_with("/request_handler") => {
+            handler(request)
+        },
+        (Method::GET, p) if p.starts_with("/heartbeat_handler") => {
+            // {
+            //     let mut last_heartbeat = last_heartbeat.lock().unwrap();
+            //     *last_heartbeat = Some(Instant::now());
+            //     println!("Heartbeat received, time updated.");
+            // }
+            handler(request)
+        },
+        _ => {
+            *response.status_mut() = StatusCode::NOT_FOUND;
+            Ok(response)
         }
     }
-
-    Ok(())
 }
