@@ -11,16 +11,19 @@ use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Se
 
 use std::thread;
 use std::sync::{Arc, Mutex, Condvar};
-use std::time::Duration;
 use std::thread::sleep;
 use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Bytes, Incoming};
+use http_body_util::{BodyExt, Full, Empty};
+use hyper::body::{Buf, Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
+use hyper_util::client::legacy::Client;
+use hyper_rustls::HttpsConnectorBuilder;
 use tokio::net::TcpListener;
+use tokio::time::{timeout, Duration, Instant};
+use std::future::Future;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -106,7 +109,7 @@ pub fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
 }
 
-pub async fn listen(inputs: Listen) -> std::io::Result<()> {
+pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     let ips = get_local_ips();
 
@@ -128,14 +131,17 @@ pub async fn listen(inputs: Listen) -> std::io::Result<()> {
     // initialize State struct
     let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
     let state_clone = Arc::clone(& state);
-    
-    let handler =  Arc::new(Mutex::new(move |request: Request<Incoming>| {
-        return request_handler(& state_clone, request);
-    }));
 
     let addr = Arc::new(Mutex::new(Addr {
         host: host.to_string(),
         port: inputs.bind_port
+    }));
+
+    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+        let state_clone_inner = Arc::clone(& state_clone);
+        Box::pin(async move {
+            request_handler(& state_clone_inner, req).await
+        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
     }));
 
     let server_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
@@ -147,13 +153,14 @@ pub async fn listen(inputs: Listen) -> std::io::Result<()> {
         let incoming = TcpListener::bind(&server_addr).await.unwrap();
         loop {
             let (stream, _) = incoming.accept().await.unwrap();
-     
-            let addr_clone = Arc::clone(&addr);
-            let handler_clone = Arc::clone(&handler);
-            let service = service_fn(move |req| { 
-                let loc_addr = addr_clone.lock().unwrap();
-                let loc_handler = handler_clone.lock().unwrap();
-                server(req, loc_addr.clone(), loc_handler.clone())
+            let loc_addr = addr.lock().unwrap().clone();
+            let loc_handler = handler.lock().unwrap().clone();
+            let service = service_fn(move |req| {
+                let addr_clone = loc_addr.clone();
+                let handler_clone = loc_handler.clone();
+                async move {
+                    server(req, addr_clone, handler_clone).await
+                }
             });
 
             if let Err(err) = Builder::new(TokioExecutor::new())
@@ -166,101 +173,141 @@ pub async fn listen(inputs: Listen) -> std::io::Result<()> {
 
     trace!("entering event_monitor");
     // send State struct holding event queue into event monitor to handle heartbeats
-    let _ = match event_monitor(state){
-        Ok(()) => println!("exited event monitor"),
+    let _ = match event_monitor(state).await{
+        Ok(resp) => println!("exited event monitor"),
         Err(_) => println!("event monitor error")
     };
 
-    Ok(())
-
+    Ok(Response::new(Full::default()))
 }
 
 pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
-    // let ips = get_local_ips();
+    let ips = get_local_ips();
 
-    // let (ipstr, all_ipstr) = if inputs.print_v4 {(
-    //     get_matching_ipstr(
-    //         & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
-    //     ),
-    //     get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None)
-    // )} else {(
-    //     get_matching_ipstr(
-    //         & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
-    //     ),
-    //     get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None)
-    // )};
+    let (ipstr, all_ipstr) = if inputs.print_v4 {(
+        get_matching_ipstr(
+            & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
+        ),
+        get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None)
+    )} else {(
+        get_matching_ipstr(
+            & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
+        ),
+        get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None)
+    )};
 
-    // let payload = serialize(& Payload {
-    //     service_addr: ipstr.clone(),
-    //     service_port: inputs.service_port,
-    //     service_claim: 0,
-    //     interface_addr: all_ipstr,
-    //     bind_port: inputs.bind_port,
-    //     key: inputs.key,
-    //     id: 0,
-    //     service_id: 0,
-    // });
+    let payload = serialize(& Payload {
+        service_addr: ipstr.clone(),
+        service_port: inputs.service_port,
+        service_claim: 0,
+        interface_addr: all_ipstr,
+        bind_port: inputs.bind_port,
+        key: inputs.key,
+        id: 0,
+        service_id: 0,
+    });
 
-    // // connect to broker
-    // let client = Client::new();
-    // let msg = serialize_message(& Message{
-    //     header: MessageHeader::PUB,
-    //     body: payload
-    // });
+    // connect to broker
+    // Prepare the HTTPS connector
+    let https_connector = HttpsConnectorBuilder::new()
+        .with_native_roots().unwrap()
+        .https_or_http()
+        .enable_http1()
+        .build();
 
-    // let mut read_fail = 0;
-    // loop {
-    //     sleep(Duration::from_millis(1000));
-    //     trace!("sending request to {}:{}", inputs.host, inputs.port);
-    //     let response = client
-    //     .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
-    //     .timeout(Duration::from_millis(2000))
-    //     .body(msg.clone())
-    //     .send();
-    
-    //     match response {
-    //         Ok(resp) => {
-    //             trace!("Received response: {:?}", resp);
-    //             let body = resp.text().unwrap();
-    //             let m = deserialize_message(& body);
-    //             match m.header {
-    //                 MessageHeader::ACK => {
-    //                     info!("Server acknowledged PUB.");
-    //                     break;
-    //                 }
-    //                 _ => {
-    //                     warn!("Server responds with unexpected message: {:?}", m)
-    //                 }
-    //             }
-    //         }
-    //         Err(e) => {
-    //             read_fail += 1;
-    //             if read_fail > 5 {
-    //                 panic!("Failed to send request to listener: {}", e)
-    //             }
-    //         },
-    //     }
-    // }
+    // Build the Client using the HttpsConnector
+    let client = Client::builder(TokioExecutor::new()).build(https_connector);
 
-    // let host = only_or_error(& ipstr);
-    // let addr = Addr {
-    //     host: host.to_string(),
-    //     port: inputs.bind_port
-    // };
+    let msg = serialize_message(& Message{
+        header: MessageHeader::PUB,
+        body: payload
+    });
 
-    // let handler =  move |request: Request| {
-    //     return heartbeat_handler_helper(request, None, None);
-    // };
+    let mut read_fail = 0;
+    let timeout_duration = Duration::from_millis(2000);
+    loop {
+        sleep(Duration::from_millis(1000));
+        trace!("sending request to {}:{}", inputs.host, inputs.port);
 
-    // // send/receive heartbeats to/from broker
-    // let _ = server(& addr, handler);
+        let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from(msg.clone())))
+        .unwrap();
+
+        let start = Instant::now();
+        let result = timeout(timeout_duration, client.request(req)).await;
+
+        match result {
+            Ok(Ok(resp)) => {
+                trace!("Received response: {:?}", resp);
+                let body = resp.collect().await.unwrap().aggregate();
+                let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                let json = serde_json::to_string(&data).unwrap();
+                let m = deserialize_message(& json);
+                match m.header {
+                    MessageHeader::ACK => {
+                        info!("Server acknowledged PUB.");
+                        break;
+                    }
+                    _ => {
+                        warn!("Server responds with unexpected message: {:?}", m)
+                    }
+                }
+            }
+            _ => {
+                read_fail += 1;
+                if read_fail > 5 {
+                    panic!("Failed to send request to listener")
+                }
+            },
+        }
+    }
+
+    let host = only_or_error(& ipstr);
+    let addr = Arc::new(Mutex::new(Addr {
+        host: host.to_string(),
+        port: inputs.bind_port
+    }));
+
+    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+        Box::pin(async move {
+            heartbeat_handler_helper(req, None, None).await
+        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+    }));
+
+    let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+
+    info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
+
+    // send/receive heartbeats to/from broker
+    let incoming = TcpListener::bind(&handler_addr).await.unwrap();
+    loop {
+        let (stream, _) = incoming.accept().await.unwrap();
+        let loc_addr = addr.lock().unwrap().clone();
+        let loc_handler = handler.lock().unwrap().clone();
+        let service = service_fn(move |req| {
+            let addr_clone = loc_addr.clone();
+            let handler_clone = loc_handler.clone();
+            async move {
+                server(req, addr_clone, handler_clone).await
+            }
+        });
+
+        if let Err(err) = Builder::new(TokioExecutor::new())
+        .serve_connection(TokioIo::new(stream), service)
+        .await {
+            println!("Failed to serve connection: {:?}", err);
+        }
+    }
 
     Ok(Response::new(Full::default()))
 
 }
 
-pub fn claim(inputs: Claim) -> std::io::Result<()> {
+pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     // let ips = get_local_ips();
 
@@ -352,11 +399,10 @@ pub fn claim(inputs: Claim) -> std::io::Result<()> {
     // // send/receive heartbeats to/from broker
     // let _ = server(& addr, handler);
 
-    Ok(())
-
+    Ok(Response::new(Full::default()))
 }
 
-pub fn collect(inputs: Collect) -> std::io::Result<()> {
+pub async fn collect(inputs: Collect) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     // // connect to bind port of service or client
     // let client = Client::new();
@@ -391,11 +437,10 @@ pub fn collect(inputs: Collect) -> std::io::Result<()> {
     //         std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
     // }
 
-    Ok(())
-
+    Ok(Response::new(Full::default()))
 }
 
-pub fn send_msg(inputs: Send) -> std::io::Result<()> {
+pub async fn send_msg(inputs: Send) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     // // connect to bind port of service or client
     // let client = Client::new();
@@ -424,6 +469,5 @@ pub fn send_msg(inputs: Send) -> std::io::Result<()> {
     //         std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
     // }
 
-    Ok(())
-    
+    Ok(Response::new(Full::default()))    
 }

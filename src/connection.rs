@@ -12,6 +12,7 @@ use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use tokio::net::TcpListener;
+use std::future::Future;
 
 
 #[allow(unused_imports)]
@@ -82,7 +83,7 @@ pub fn deserialize_message(payload: & String) -> Message {
 /// Binds to stream and listens for incoming connections, then handles connection using specified handler
 pub async fn server(
     request: Request<Incoming>, addr: Addr, 
-    mut handler: impl FnMut(Request<Incoming>)-> Result<Response<Full<Bytes>>, hyper::Error> + std::marker::Send + 'static + Clone
+    mut handler: impl FnMut(Request<Incoming>)-> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     trace!("Starting server process on: {:?}", addr);
 
@@ -114,7 +115,7 @@ pub async fn server(
 
     match (method, path.as_str()) {
         (Method::POST, p) if p.starts_with("/request_handler") => {
-            handler(request)
+            handler(request).await
         },
         (Method::GET, p) if p.starts_with("/heartbeat_handler") => {
             // {
@@ -122,7 +123,7 @@ pub async fn server(
             //     *last_heartbeat = Some(Instant::now());
             //     println!("Heartbeat received, time updated.");
             // }
-            handler(request)
+            handler(request).await
         },
         _ => {
             *response.status_mut() = StatusCode::NOT_FOUND;

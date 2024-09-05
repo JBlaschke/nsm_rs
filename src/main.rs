@@ -80,27 +80,28 @@ async fn main() -> std::io::Result<()> {
             // Inititate broker
             // Match command line entries with variables in struct
             CLIOperation::Listen(inputs) => {
-                let _ = listen(inputs);
+                println!("matched listen");
+                let _ = listen(inputs).await;
             }
 
             // # Claim
             // Connect to broker and discover available address for data connection.
             CLIOperation::Claim(inputs) => {
-                let _ = claim(inputs);
+                let _ = claim(inputs).await;
             }
             // # Publish
             // Connect to broker and publish address for data connection.
             CLIOperation::Publish(inputs) => {
                 println!("entering publish");
-                let _ = publish(inputs);
+                let _ = publish(inputs).await;
             }
 
             CLIOperation::Collect(inputs) => {
-                let _ = collect(inputs);
+                let _ = collect(inputs).await;
             }
 
             CLIOperation::Send(inputs) => {
-                let _ = send_msg(inputs);
+                let _ = send_msg(inputs).await;
             }
         }
         return Ok(());

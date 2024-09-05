@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+use tokio::time::timeout;
 use std::thread;
 use threadpool::ThreadPool;
 use std::collections::VecDeque;
@@ -12,15 +13,18 @@ use std::io::{self};
 use std::any::Any;
 use std::fmt;
 use lazy_static::lazy_static;
-use reqwest::blocking::Client;
 use hyper::body::{Buf, Bytes, Incoming};
 use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::client::legacy::Client;
+use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::server::conn::auto::Builder;
 use tokio::net::TcpListener;
+use std::future::Future;
 
 
 #[allow(unused_imports)]
@@ -100,24 +104,6 @@ impl FailCounter{
     }
 }
 
-/// Parent trait of objects added to event queue/loop
-/// Intended to encapsulated different types of Events
-pub trait Event: Any + Send + Sync{
-    /// call from event_monitor for specific Event type
-    fn monitor(&mut self) -> std::io::Result<()>;
-    /// allows Event object to be downcasted
-    fn as_any(&mut self) -> &mut dyn Any;
-    /// print event info to debug
-    fn describe(&self) -> String;
-}
-
-/// Allows for printing out event queue of event objects 
-impl fmt::Debug for dyn Event {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Event: {}", self.describe())
-    }
-}
-
 /// Heartbeat Event struct holds metadata for a service/client with a heartbeat
 #[derive(Clone, Debug)]
 pub struct Heartbeat {
@@ -130,57 +116,56 @@ pub struct Heartbeat {
     /// address of service/client
     pub addr: String,
     /// client object for sending heartbeat requests
-    pub client: Client,
+    pub client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_counter: FailCounter,
     /// message sent from client
     pub msg_body: MsgBody,
 }
 
-/// Heartbeats are treated as an Event to handle other types of events in the same queue
-impl Event for Heartbeat {
-
-    /// downcast an Event as a Heartbeat
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    /// print ID and fail_count to debug
-    fn describe(&self) -> String {
-        format!("Heartbeat id: {}, failcount: {}, msg: {}", self.id, self.fail_counter.fail_count, self.msg_body.msg)
-    }
-
+impl Heartbeat {
     /// send a heartbeat to the service/client and check if entity sent one back,
     /// increment fail_count if heartbeat not received when expected
-    fn monitor(&mut self) -> std::io::Result<()>{
+    async fn monitor(&mut self) -> Result<Response<Full<Bytes>>, hyper::Error>{
         
         trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
+        let mut response = Response::new(Full::default());
 
         let message = serialize_message(& Message{
             header: MessageHeader::HB,
             body: serde_json::to_string(& self.msg_body.clone()).unwrap()
         });
-        let response = self.client
-        .get(format!("http://{}/heartbeat_handler", self.addr))
-        .timeout(Duration::from_millis(2000))
-        .body(message)
-        .send();
-    
-        // let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
-        // // allots time for reading response
-        // let start_time = Instant::now();
-        let received = match response {
-            Ok(resp) => {
+        let req = Request::builder()
+        .method(Method::GET)
+        .uri(format!("http://{}/heartbeat_handler", self.addr))
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from(message)))
+        .unwrap();
+        
+        // allots time for reading response
+        let timeout_duration = Duration::from_secs(10);
+        let start = Instant::now();
+        let result = timeout(timeout_duration, self.client.request(req)).await;
+
+        let received = match result {
+            Ok(Ok(resp)) => {
                 trace!("Received response: {:?}", resp);
-                resp.text().unwrap()
+                let body = resp.collect().await.unwrap().aggregate();
+                let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                serde_json::to_string(&data).unwrap()
             }
-            Err(err) => {
+            Ok(Err(e)) => {
                 if self.fail_counter.fail_count == 0 {
                     self.fail_counter.first_increment = Instant::now();
                 }
                 self.fail_counter.increment();
                 trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
-                return Err(io::Error::new(io::ErrorKind::Other, err));
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);            
+            }
+            Err(_) => {
+                *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
+                return Ok(response); 
             }
         };
         if received == "" {
@@ -190,18 +175,20 @@ impl Event for Heartbeat {
             }
             self.fail_counter.increment();
             trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
+            *response.status_mut() = StatusCode::BAD_REQUEST;
         } else {    
             trace!("Received: {:?}", received);
             self.fail_counter.fail_count = 0;
             trace!("Resetting failcount. {}", self.fail_counter.fail_count);
+            *response.status_mut() = StatusCode::OK;
         }
 
-        Ok(())
+        Ok(response)
     }
 }
 
 /// Function loops through State's deque (event queue) to handle events using multithreading 
-pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>{
+pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Response<Full<Bytes>>, hyper::Error>{
 
     trace!("Starting event monitor");
     let (lock, cvar) = &*state;
@@ -249,8 +236,9 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                     }
                 },
                 Err(_e) => {
-                    return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,"Unable to remove item from Vec"));
+                    let mut response = Response::new(Full::default());
+                    *response.status_mut() = StatusCode::BAD_REQUEST;
+                    return Ok(response)
                 }
             }
             shared_data.0 = 0;
@@ -262,7 +250,7 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
             loc_deque.pop_front()
         };
 
-        let mut event = match event {
+        let mut hb = match event {
             Some(tracker) => tracker,
             None => {
                 // pause loop to wait for new events
@@ -281,56 +269,54 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
         cvar.notify_one();
 
         // use a worker from threadpool to handle events with multithreading
-        state_loc.pool.execute(move || {
+        tokio::spawn(async move {
 
             trace!("Passing event to event monitor...");
-            let _ = event.monitor();
+            let _ = hb.monitor().await;
 
             // check heartbeat metadata to see if entity should be added back to event queue 
             // or if client should be claim a new service
-            if let Some(hb) = event.as_any().downcast_mut::<Heartbeat>() {
-                let mut data = data_clone.lock().unwrap();
-                *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id);
-                if data.0 < 10 {
-                    trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
-                    if hb.service_id == (service_id as u64){
-                        trace!("Connecting to new service");
-                        match state_clone.claim(hb.key){
-                            Ok(p) => {
-                                trace!("Claimed new service w/ payload: {:?}", p);
-                                // create new Heartbeat object with new service_id
-                                event = Box::new(Heartbeat {
-                                    key: hb.key,
-                                    id: hb.id,
-                                    service_id: hb.service_id,
-                                    addr: hb.addr.clone(),
-                                    client: hb.client.clone(),
-                                    fail_counter: FailCounter::new(),
-                                    msg_body: hb.msg_body.clone(),
-                                });
-                                {
-                                    // add updated client back to queue 
-                                    let mut loc_deque = deque_clone2.lock().unwrap();
-                                    let _ = loc_deque.push_back(event);
-                                }
-                            }
-                            Err(_err) => {
-                                // no more available services to claim
-                                trace!("Could not connect to new service");
-                                data.0 = 10;
+            let mut data = data_clone.lock().unwrap();
+            *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id);
+            if data.0 < 10 {
+                trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
+                if hb.service_id == (service_id as u64){
+                    trace!("Connecting to new service");
+                    match state_clone.claim(hb.key){
+                        Ok(p) => {
+                            trace!("Claimed new service w/ payload: {:?}", p);
+                            // create new Heartbeat object with new service_id
+                            hb = Heartbeat {
+                                key: hb.key,
+                                id: hb.id,
+                                service_id: hb.service_id,
+                                addr: hb.addr.clone(),
+                                client: hb.client.clone(),
+                                fail_counter: FailCounter::new(),
+                                msg_body: hb.msg_body.clone(),
+                            };
+                            {
+                                // add updated client back to queue 
+                                let mut loc_deque = deque_clone2.lock().unwrap();
+                                let _ = loc_deque.push_back(hb);
                             }
                         }
+                        Err(_err) => {
+                            // no more available services to claim
+                            trace!("Could not connect to new service");
+                            data.0 = 10;
+                        }
                     }
-                    else{
-                        // add event back to queue 
-                        let mut loc_deque = deque_clone2.lock().unwrap();
-                        let _ = loc_deque.push_back(event);
-                        trace!("{:?}", loc_deque);
-                    }
-                } else {
-                    // service or client no longer connected to broker
-                    info!("Dropping event");
                 }
+                else{
+                    // add event back to queue 
+                    let mut loc_deque = deque_clone2.lock().unwrap();
+                    let _ = loc_deque.push_back(hb);
+                    trace!("Deque status {:?}", loc_deque);
+                }
+            } else {
+                // service or client no longer connected to broker
+                info!("Dropping event");
             }
         });
     }
@@ -348,7 +334,7 @@ pub struct State {
     /// increments for each new connection to broker, used for id in payload
     pub seq: u64,
     /// event queue
-    pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>,
+    pub deque: Arc<Mutex<VecDeque<Heartbeat>>>,
     /// true when event queue contains events to handle, false when event queue is empty
     running: bool,
 }
@@ -373,8 +359,17 @@ impl State {
 
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
-        let client = Client::new();
-        
+        // connect to broker
+        // Prepare the HTTPS connector
+        let https_connector = HttpsConnectorBuilder::new()
+            .with_native_roots().unwrap()
+            .https_or_http()
+            .enable_http1()
+            .build();
+
+        // Build the Client using the HttpsConnector
+        let client = Client::builder(TokioExecutor::new()).build(https_connector);     
+
         if let Some(vec) = self.clients.get_mut(&p.key) {
             // find value in clients with matching id
             if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr) {
@@ -384,19 +379,24 @@ impl State {
                     {
                         let mut deque = self.deque.lock().unwrap();
                         if let Some(hb) = deque.iter_mut().find_map(|e| {
-                            e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.id == item.id) }) {
-                                if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
-                                    hb.addr = bind_address.clone();
-                                    hb.client = client;
-                                    trace!("Altering hb {:?}", hb);
-                                    p.id = item.id;
-                                    p.service_id = item.service_id;
-                                    let immutable_hb: &Heartbeat = hb;
-                                    return Ok(immutable_hb.clone());
-                                }
-                                else {
-                                    continue;
-                                }
+                            if e.id == item.id {
+                                Some(e)
+                            } else {
+                                None
+                            }
+                        }) {
+                            if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
+                                hb.addr = bind_address.clone();
+                                hb.client = client;
+                                trace!("Altering hb {:?}", hb);
+                                p.id = item.id;
+                                p.service_id = item.service_id;
+                                let immutable_hb: &Heartbeat = hb;
+                                return Ok(immutable_hb.clone());
+                            }
+                            else {
+                                continue;
+                            }
                         }
                         else{
                             counter += 1;
@@ -429,7 +429,7 @@ impl State {
         {
             // push Heartbeat event to event queue
             let mut loc_deque = self.deque.lock().unwrap();
-            let _ = loc_deque.push_back(Box::new(heartbeat.clone()));
+            let _ = loc_deque.push_back(heartbeat.clone());
         }
 
         // check key with clients hashmap in State
@@ -539,43 +539,50 @@ pub async fn request_handler(
     // receive Payload from incoming connection
     let whole_body = request.collect().await.unwrap().aggregate();
     let mut data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
+    println!("{:?}", data);
     let json = serde_json::to_string(&data).unwrap();
     let message = deserialize_message(& json);
+    println!("{:?}", message);
 
     // // check type of Message, only want to handle PUB or CLAIM Message
-    // let payload = match message.header {
-    //     MessageHeader::HB => panic!("Unexpected HB message encountered!"),
-    //     MessageHeader::ACK => panic!("Unexpected ACK message encountered!"),
-    //     MessageHeader::PUB => deserialize(& message.body),
-    //     MessageHeader::CLAIM => deserialize(& message.body),
-    //     MessageHeader::COL => panic!("Unexpected COL message encountered!"),
-    //     MessageHeader::MSG => Payload::default(),
-    //     MessageHeader::NULL => Payload::default(),
-    // };
+    let payload = match message.header {
+        MessageHeader::HB => panic!("Unexpected HB message encountered!"),
+        MessageHeader::ACK => panic!("Unexpected ACK message encountered!"),
+        MessageHeader::PUB => deserialize(& message.body),
+        MessageHeader::CLAIM => deserialize(& message.body),
+        MessageHeader::COL => panic!("Unexpected COL message encountered!"),
+        MessageHeader::MSG => Payload::default(),
+        MessageHeader::NULL => Payload::default(),
+    };
 
-    // trace!("Request handler received: {:?}", payload);
-    // // handle services (PUB), clients (CLAIM), messages (MSG) appropriately
-    // match message.header {
-    //     MessageHeader::PUB => {
-    //         trace!("Publishing Service: {:?}", payload);
+    trace!("Request handler received: {:?}", payload);
+    let mut response = Response::new(Full::default());
 
-    //         // send acknowledgment of successful request
-    //         let response = Response::from_string(serialize_message( & Message {
-    //             header: MessageHeader::ACK,
-    //             body: "".to_string()
-    //         }));
-    //         request.respond(response).unwrap();
+    // handle services (PUB), clients (CLAIM), messages (MSG) appropriately
+    match message.header {
+        MessageHeader::PUB => {
+            trace!("Publishing Service: {:?}", payload);
 
-    //         let (lock, cvar) = &**state;
-    //         let mut state_loc = lock.lock().unwrap();
+            // send acknowledgment of successful request
+            let json = serialize_message( & Message {
+                header: MessageHeader::ACK,
+                body: "".to_string()
+            });
+            response = Response::builder()
+            .status(StatusCode::OK)
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(json))).unwrap();
 
-    //         let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
-    //         state_loc.running = true; // set running to true for event loop
-    //         cvar.notify_one(); // notify event loop of new Event
+            let (lock, cvar) = &**state;
+            let mut state_loc = lock.lock().unwrap();
 
-    //         println!("Now state:");
-    //         state_loc.print(); // print state of clients hashmap
-    //     },
+            let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
+            state_loc.running = true; // set running to true for event loop
+            cvar.notify_one(); // notify event loop of new Event
+
+            println!("Now state:");
+            state_loc.print(); // print state of clients hashmap
+        },
     //     MessageHeader::CLAIM => {
     //         trace!("Claiming Service: {:?}", payload);
 
@@ -646,16 +653,18 @@ pub async fn request_handler(
     //             warn!("Could not find matching service");
     //         }
 
-    //     }
-    //     _ => {panic!("This should not be reached!");}
-    // }
-    let mut response = Response::new(Full::default());
+        // }
+        _ => {panic!("This should not be reached!");}
+    }
+    // *response.body_mut() = Full::from("Request handler successfully complete");
     Ok(response)
 }
 
 pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: Option<&String>, 
     addr: Option<Addr>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    
+
+    let mut response = Response::new(Full::default());
+
     // retrieve service's payload from client or set an empty message body
     let binding = "".to_string();
     let payload = payload.unwrap_or(&binding);
@@ -670,10 +679,20 @@ pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: O
     let addr_clone = addr.clone();
 
     // start new thread to send/receive heartbeats/messages to/from listener
-    let _ = thread::spawn(move || {
-        let _ = heartbeat_handler(request, &payload_clone, addr_clone);
+    let hb_handler = tokio::spawn(async move {
+        match heartbeat_handler(request, &payload_clone, addr_clone).await {
+            Ok(resp) => {
+                resp
+            },
+            Err(e) => {
+                Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Full::new(Bytes::from("Heartbeat handler error".to_string())))
+                    .unwrap()
+            }
+        }
     });
-    let mut response = Response::new(Full::default());
+    response = hb_handler.await.unwrap();
     return Ok(response);
 }
 
@@ -695,99 +714,102 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
     let start_time = Instant::now();
 
     // receive heartbeat/message
-    let mut body = String::new();
     let mut response = Response::new(Full::default());
-    // while start_time.elapsed() < timeout_duration {
-    //     match request.as_reader().read_to_string(&mut body) {
-    //         Ok(len) => {
-    //             if len == 0{
-    //                 trace!("Connection broken, shutting down");
-    //                 std::process::exit(0);
-    //             }
-    //             break;
-    //         },
-    //         Err(_) => {
-    //             thread::sleep(Duration::from_millis(100));
-    //         }
-    //     }
-    // }
-    // if start_time.elapsed() >= timeout_duration {
-    //     println!("Request timed out");
-    //     let response = Response::from_string("Request timed out").with_status_code(408);
-    //     let _ = request.respond(response).unwrap();
-    //     return Ok(());
-    // }
-    // let message = deserialize_message(& body);
 
-    // // if a MSG: connect to listener to alter the msg value in the service's heartbeat
-    // if matches!(message.header, MessageHeader::MSG){
-    //     let client = Client::new();
+    let body = request.collect().await.unwrap().aggregate();
+    let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+    let json = serde_json::to_string(&data).unwrap();
 
-    //     let msg_body = MsgBody{
-    //         msg: message.body.clone(),
-    //         id: service_id
-    //     };
+    let message = deserialize_message(& json);
+
+    // if a MSG: connect to listener to alter the msg value in the service's heartbeat
+    if matches!(message.header, MessageHeader::MSG){
+        
+        // Prepare the HTTPS connector
+        let https_connector = HttpsConnectorBuilder::new()
+            .with_native_roots().unwrap()
+            .https_or_http()
+            .enable_http1()
+            .build();
+        let client: Client<HttpsConnector<HttpConnector>, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(https_connector);
+
+        let msg_body = MsgBody{
+            msg: message.body.clone(),
+            id: service_id
+        };
     
-    //     let msg = serialize_message( & Message{
-    //             header: MessageHeader::MSG,
-    //             body: serde_json::to_string(& msg_body).unwrap()
-    //     });
-    //     println!("sending request");
-    //     let _ = client
-    //     .post(format!("{}:{}/request_handler", addr.host, addr.port))
-    //     .timeout(Duration::from_millis(2000))
-    //     .body(msg)
-    //     .send();
-    // }
-    // trace!("Heartbeat handler received {:?}", message);
-    // if matches!(message.header, MessageHeader::COL) {
-    //     // payload is empty for services, retrieve and send msg waiting in global variable
-    //     if *payload == "".to_string(){
-    //         // send msg back
-    //         let msg = GLOBAL_MSGBODY.lock().unwrap();
-    //         response = Response::from_string(serialize_message(& Message{
-    //             header: message.header,
-    //             body: serde_json::to_string(&* msg.msg).unwrap()
-    //         }));
-    //     }
-    //     else {
-    //         // payload not empty for clients, send payload w/ address of the paired service
-    //         response = Response::from_string(serialize_message(& Message{
-    //             header: message.header,
-    //             body: payload.clone()
-    //         }));
-    //     }
-    //     trace!("Heartbeat handler has returned request");
-    // }
-    // else if matches!(message.header, MessageHeader::HB | MessageHeader::MSG){
-    //     let msg_body: MsgBody = serde_json::from_str(& message.body.clone()).unwrap();
-    //     // default HB/MSG response to send what was received
-    //     if msg_body.msg.is_empty(){
-    //         response = Response::from_string(serialize_message(& Message{
-    //             header: message.header,
-    //             body: payload.clone()
-    //         }));
-    //     }
-    //     else{
-    //         // store msg received from listener into global msg variable
-    //         let mut msg = GLOBAL_MSGBODY.lock().unwrap();
-    //         *msg = serde_json::from_str(& message.body).unwrap();
-    //         response = Response::from_string(serialize_message(& Message{
-    //             header: message.header,
-    //             body: message.body
-    //         }));
-    //     }   
-    //     trace!("Heartbeat handler has returned request");
-    // }
-    // else {
-    //     warn!(
-    //         "Unexpected request sent to heartbeat_handler: {}",
-    //         message.header
-    //     );
-    //     info!("Dropping request");
-    //     return Ok(());
-    // }
-    // let _ = request.respond(response).unwrap();
+        let msg = serialize_message( & Message{
+                header: MessageHeader::MSG,
+                body: serde_json::to_string(& msg_body).unwrap()
+        });
+
+        let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from(msg)))
+        .unwrap();
+    }
+    trace!("Heartbeat handler received {:?}", message);
+    if matches!(message.header, MessageHeader::COL) {
+        // payload is empty for services, retrieve and send msg waiting in global variable
+        if *payload == "".to_string(){
+            // send msg back
+            let msg = GLOBAL_MSGBODY.lock().unwrap();
+            response = Response::builder()
+            .status(StatusCode::OK)
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(serialize_message(& Message{
+                header: message.header,
+                body: serde_json::to_string(&* msg.msg).unwrap()
+            })))).unwrap();
+        }
+        else {
+            // payload not empty for clients, send payload w/ address of the paired service
+            response = Response::builder()
+            .status(StatusCode::OK)
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(serialize_message(& Message{
+                header: message.header,
+                body: payload.clone()
+            })))).unwrap();
+        }
+        trace!("Heartbeat handler has returned request");
+    }
+    else if matches!(message.header, MessageHeader::HB | MessageHeader::MSG){
+        let msg_body: MsgBody = serde_json::from_str(& message.body.clone()).unwrap();
+        // default HB/MSG response to send what was received
+        if msg_body.msg.is_empty(){
+            response = Response::builder()
+            .status(StatusCode::OK)
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(serialize_message(& Message{
+                header: message.header,
+                body: payload.clone()
+            })))).unwrap();
+        }
+        else{
+            // store msg received from listener into global msg variable
+            let mut msg = GLOBAL_MSGBODY.lock().unwrap();
+            *msg = serde_json::from_str(& message.body).unwrap();
+            response = Response::builder()
+            .status(StatusCode::OK)
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(serialize_message(& Message{
+                header: message.header,
+                body: message.body
+            })))).unwrap();
+        }   
+        trace!("Heartbeat handler has returned request");
+    }
+    else {
+        warn!(
+            "Unexpected request sent to heartbeat_handler: {}",
+            message.header
+        );
+        info!("Dropping request");
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+    }
     Ok(response)
 }
 
