@@ -153,8 +153,12 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
         let incoming = TcpListener::bind(&server_addr).await.unwrap();
         loop {
             let (stream, _) = incoming.accept().await.unwrap();
-            let loc_addr = addr.lock().unwrap().clone();
-            let loc_handler = handler.lock().unwrap().clone();
+            let loc_addr = {
+                addr.lock().unwrap().clone()
+            };
+            let loc_handler = {
+                handler.lock().unwrap().clone()
+            };
             let service = service_fn(move |req| {
                 let addr_clone = loc_addr.clone();
                 let handler_clone = loc_handler.clone();
@@ -166,7 +170,7 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
             if let Err(err) = Builder::new(TokioExecutor::new())
             .serve_connection(TokioIo::new(stream), service)
             .await {
-                println!("Failed to serve connection: {:?}", err);
+                error!("Failed to serve connection: {:?}", err);
             }
         }
     });
@@ -225,7 +229,7 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
     });
 
     let mut read_fail = 0;
-    let timeout_duration = Duration::from_millis(2000);
+    let timeout_duration = Duration::from_millis(6000);
     loop {
         sleep(Duration::from_millis(1000));
         trace!("sending request to {}:{}", inputs.host, inputs.port);
@@ -299,7 +303,7 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
         if let Err(err) = Builder::new(TokioExecutor::new())
         .serve_connection(TokioIo::new(stream), service)
         .await {
-            println!("Failed to serve connection: {:?}", err);
+            error!("Failed to serve connection: {:?}", err);
         }
     }
 
@@ -309,95 +313,143 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
 
 pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
-    // let ips = get_local_ips();
+    let ips = get_local_ips();
 
-    // let (ipstr, _all_ipstr) = if inputs.print_v4 {(
-    //     get_matching_ipstr(
-    //         & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
-    //     ),
-    //     get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None)
-    // )} else {(
-    //     get_matching_ipstr(
-    //         & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
-    //     ),
-    //     get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None)
-    // )};
+    let (ipstr, _all_ipstr) = if inputs.print_v4 {(
+        get_matching_ipstr(
+            & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
+        ),
+        get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None)
+    )} else {(
+        get_matching_ipstr(
+            & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
+        ),
+        get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None)
+    )};
 
-    // let payload = serialize(& Payload {
-    //     service_addr: ipstr.clone(),
-    //     service_port: inputs.port,
-    //     service_claim: epoch(),
-    //     interface_addr: Vec::new(),
-    //     bind_port: inputs.bind_port,
-    //     key: inputs.key,
-    //     id: 0,
-    //     service_id: 0,
-    // });
+    let payload = serialize(& Payload {
+        service_addr: ipstr.clone(),
+        service_port: inputs.port,
+        service_claim: epoch(),
+        interface_addr: Vec::new(),
+        bind_port: inputs.bind_port,
+        key: inputs.key,
+        id: 0,
+        service_id: 0,
+    });
 
-    // // connect to broker
-    // let client = Client::new();
-    // let msg = serialize_message(& Message{
-    //     header: MessageHeader::CLAIM,
-    //     body: payload
-    // });
+    // connect to broker
+    // Prepare the HTTPS connector
+    let https_connector = HttpsConnectorBuilder::new()
+        .with_native_roots().unwrap()
+        .https_or_http()
+        .enable_http1()
+        .build();
+        let client = Client::builder(TokioExecutor::new()).build(https_connector);
+    let msg = serialize_message(& Message{
+        header: MessageHeader::CLAIM,
+        body: payload
+    });
 
-    // let mut read_fail = 0;
-    // let mut service_payload = "".to_string();
+    let mut read_fail = 0;
+    let service_payload = Arc::new(Mutex::new("".to_string()));
+    let timeout_duration = Duration::from_millis(2000);
 
-    // loop {
-    //     sleep(Duration::from_millis(1000));
-    //     trace!("sending request to {}:{}", inputs.host, inputs.port);
-    //     let response = client
-    //     .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
-    //     .timeout(Duration::from_millis(6000))
-    //     .body(msg.clone())
-    //     .send();
+    loop {
+        sleep(Duration::from_millis(1000));
+        trace!("sending request to {}:{}", inputs.host, inputs.port);
+
+        let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from(msg.clone())))
+        .unwrap();
+
+        let start = Instant::now();
+        let result = timeout(timeout_duration, client.request(req)).await;
     
-    //     // check for successful connection to a published service
-    //     match response {
-    //         Ok(resp) => {
-    //             trace!("Received response: {:?}", resp);
-    //             let body = resp.text().unwrap();
-    //             trace!("{:?}", body);
-    //             let message = deserialize_message(& body);
-    //             // print service's address to client
-    //             if matches!(message.header, MessageHeader::ACK){
-    //                 info!("Server acknowledged CLAIM.");
-    //                 println!("{}", message.body);
-    //                 service_payload = message.body;
-    //                 break;
-    //             }
-    //             else{
-    //                 return Err(std::io::Error::new(
-    //                     std::io::ErrorKind::InvalidInput,"Key not found"));
-    //             }
-    //         }
-    //         Err(e) => {
-    //             read_fail += 1;
-    //             if read_fail > 5 {
-    //                 panic!("Failed to send request to listener: {}", e)
-    //             }
-    //         },
-    //     }
-    // }
+        // check for successful connection to a published service
+        match result {
+            Ok(Ok(resp)) => {
+                trace!("Received response: {:?}", resp);
+                let body = resp.collect().await.unwrap().aggregate();
+                let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                let json = serde_json::to_string(&data).unwrap();
+                let m = deserialize_message(& json);
+                // print service's address to client
+                if matches!(m.header, MessageHeader::ACK){
+                    info!("Server acknowledged CLAIM.");
+                    println!("{}", m.body);
+                    let mut service_payload_loc = service_payload.lock().unwrap();
+                    *service_payload_loc = m.body;
+                    break;
+                } else{
+                    panic!("Key not found. Try a different key.")
+                }
+            }
+            _ => {
+                read_fail += 1;
+                if read_fail > 5 {
+                    panic!("Failed to send request to listener")
+                }
+            },
+        }
+    }
 
-    // let broker_addr = Addr{
-    //     host: inputs.host,
-    //     port: inputs.port
-    // };
+    let broker_addr = Arc::new(Mutex::new(Addr{
+        host: inputs.host,
+        port: inputs.port
+    }));
 
-    // let handler =  move |request: Request| {
-    //     return heartbeat_handler_helper(request, Some(&service_payload), Some(&broker_addr));
-    // };
+    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+        let service_payload_value = {
+            let shared_service_payload = Arc::clone(&service_payload);
+            let service_payload_loc = shared_service_payload.lock().unwrap();
+            service_payload_loc.clone()
+        };
+        let broker_addr_value = {
+            let shared_broker_addr = Arc::clone(&broker_addr);
+            let broker_addr_loc = shared_broker_addr.lock().unwrap();
+            broker_addr_loc.clone()
+        };
+        Box::pin(async move {
+            heartbeat_handler_helper(req, Some(&service_payload_value), Some(broker_addr_value)).await
+        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+    }));
 
-    // let host = only_or_error(& ipstr);
-    // let addr = Addr {
-    //     host: host.to_string(),
-    //     port: inputs.bind_port
-    // };
+    let host = only_or_error(& ipstr);
+    let addr = Arc::new(Mutex::new(Addr {
+        host: host.to_string(),
+        port: inputs.bind_port
+    }));
+
+    let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+
+    info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
+
+    // send/receive heartbeats to/from broker
+    let incoming = TcpListener::bind(&handler_addr).await.unwrap();
 
     // // send/receive heartbeats to/from broker
-    // let _ = server(& addr, handler);
+    loop {
+        let (stream, _) = incoming.accept().await.unwrap();
+        let loc_addr = addr.lock().unwrap().clone();
+        let loc_handler = handler.lock().unwrap().clone();
+        let service = service_fn(move |req| {
+            let addr_clone = loc_addr.clone();
+            let handler_clone = loc_handler.clone();
+            async move {
+                server(req, addr_clone, handler_clone).await
+            }
+        });
+
+        if let Err(err) = Builder::new(TokioExecutor::new())
+        .serve_connection(TokioIo::new(stream), service)
+        .await {
+            error!("Failed to serve connection: {:?}", err);
+        }
+    }
 
     Ok(Response::new(Full::default()))
 }

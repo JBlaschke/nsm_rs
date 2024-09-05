@@ -569,9 +569,9 @@ pub async fn request_handler(
                 body: "".to_string()
             });
             response = Response::builder()
-            .status(StatusCode::OK)
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(json))).unwrap();
+                .status(StatusCode::OK)
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(json))).unwrap();
 
             let (lock, cvar) = &**state;
             let mut state_loc = lock.lock().unwrap();
@@ -583,49 +583,55 @@ pub async fn request_handler(
             println!("Now state:");
             state_loc.print(); // print state of clients hashmap
         },
-    //     MessageHeader::CLAIM => {
-    //         trace!("Claiming Service: {:?}", payload);
+        MessageHeader::CLAIM => {
+            trace!("Claiming Service: {:?}", payload);
 
-    //         let (lock, _cvar) = &**state;
-    //         let mut state_loc = lock.lock().unwrap();
-    //         let mut service_id = 0;
-    //         let mut claim_fail = 0; // initiate counter for connection failure
-    //         // loop solves race case when client starts faster than service can be published
-    //         loop {
-    //             // 
-    //             match state_loc.claim(payload.key){
-    //                 Ok(p) => {
-    //                     service_id = (*p).service_id; // capture claimed service's service_id for add()
-    //                     // send acknowledgment of successful service claim with service's payload containing its address
-    //                     let response = Response::from_string(serialize_message( & Message {
-    //                         header: MessageHeader::ACK,
-    //                         body: serialize(p) // address extracted in main to print to client
-    //                     }));
-    //                     request.respond(response).unwrap();
-    //                     break;
-    //                 },
-    //                 _ => {
-    //                     claim_fail += 1;
-    //                     if claim_fail <= 5{
-    //                         sleep(Duration::from_millis(1000));
-    //                         continue;
-    //                     }
-    //                     // notify main() of failure to claim an available service
-    //                     let response = Response::from_string(serialize_message( & Message {
-    //                         header: MessageHeader::NULL,
-    //                         body: "".to_string()
-    //                     }));
-    //                     request.respond(response).unwrap();
-    //                     return Err(std::io::Error::new(
-    //                         std::io::ErrorKind::InvalidInput, "Failed to claim key"));
-    //                 },
-    //             }
-    //         }
-    //         let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
+            let (lock, _cvar) = &**state;
+            let mut state_loc = lock.lock().unwrap();
+            let mut service_id = 0;
+            let mut claim_fail = 0; // initiate counter for connection failure
+            // loop solves race case when client starts faster than service can be published
+            loop {
+                // 
+                match state_loc.claim(payload.key){
+                    Ok(p) => {
+                        service_id = (*p).service_id; // capture claimed service's service_id for add()
+                        // send acknowledgment of successful service claim with service's payload containing its address
+                        let json = serialize_message( & Message {
+                            header: MessageHeader::ACK,
+                            body: serialize(p) // address extracted in main to print to client
+                        });
+                        response = Response::builder()
+                            .status(StatusCode::OK)
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from(json))).unwrap();
+                        break;
+                    },
+                    _ => {
+                        claim_fail += 1;
+                        if claim_fail <= 5{
+                            sleep(Duration::from_millis(1000));
+                            continue;
+                        }
+                        let json = serialize_message( & Message {
+                            header: MessageHeader::NULL,
+                            body: "".to_string()
+                        });
+                        // notify main() of failure to claim an available service
+                        println!("bad request");
+                        response = Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from(json))).unwrap();
+                        return Ok(response);
+                    },
+                }
+            }
+            let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
 
-    //         println!("Now state:");
-    //         state_loc.print(); // print state of clients hashmap
-    //     },
+            println!("Now state:");
+            state_loc.print(); // print state of clients hashmap
+        },
     //     MessageHeader::MSG => {
     //         let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
     //         trace!("Sending Message: {:?}", msg_body);
@@ -656,7 +662,6 @@ pub async fn request_handler(
         // }
         _ => {panic!("This should not be reached!");}
     }
-    // *response.body_mut() = Full::from("Request handler successfully complete");
     Ok(response)
 }
 
