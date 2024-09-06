@@ -211,7 +211,6 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
             // loop is paused while there are no events to handle
             while !state_loc.running {
                 trace!("waiting to run");
-                sleep(Duration::from_millis(1000)).await;
                 let notify_result = timeout(Duration::from_secs(1), notify.notified()).await;
                 match notify_result {
                     Ok(()) => {
@@ -328,7 +327,6 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
             }
         });
     }
-    sleep(Duration::from_millis(1000)).await;
 }
 
 /// Keep track of all connected clients/services, holds event loop and threadpool
