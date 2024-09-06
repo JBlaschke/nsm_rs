@@ -2,10 +2,9 @@
 
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use std::sync::{Arc, Mutex, Condvar};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
-use tokio::time::timeout;
+use std::sync::{Arc, Condvar};
+use tokio::sync::Notify;
+use tokio::time::{sleep, Instant, timeout, Duration};
 use std::thread;
 use threadpool::ThreadPool;
 use std::collections::VecDeque;
@@ -23,6 +22,7 @@ use hyper_util::client::legacy::Client;
 use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::server::conn::auto::Builder;
+use tokio::sync::Mutex;
 use tokio::net::TcpListener;
 use std::future::Future;
 
@@ -188,13 +188,13 @@ impl Heartbeat {
 }
 
 /// Function loops through State's deque (event queue) to handle events using multithreading 
-pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Response<Full<Bytes>>, hyper::Error>{
+pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Response<Full<Bytes>>, hyper::Error>{
 
     trace!("Starting event monitor");
-    let (lock, cvar) = &*state;
+    let (lock, notify) = &*state;
 
     let deque_clone = {
-        let state_loc = lock.lock().unwrap();
+        let state_loc = lock.lock().await;
         Arc::clone(& state_loc.deque)
     };
 
@@ -205,24 +205,32 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Respon
     // loop runs while events are in the queue
     loop {
         {
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = {
+                lock.lock().await
+            };
             // loop is paused while there are no events to handle
             while !state_loc.running {
                 trace!("waiting to run");
-                let (new_state_loc, result) = cvar.wait_timeout(state_loc, Duration::from_secs(1)).unwrap();
-                state_loc = new_state_loc;
-                if result.timed_out() {
-                    // Set running to true and notify
-                    state_loc.running = true;
-                    cvar.notify_one();
+                sleep(Duration::from_millis(1000)).await;
+                let notify_result = timeout(Duration::from_secs(1), notify.notified()).await;
+                match notify_result {
+                    Ok(()) => {
+                        trace!("Processing next events");
+                    }
+                    Err(_) => {
+                        // Timeout occurred, modify the state
+                        trace!("Timeout occurred, modifying state...");
+                        state_loc.running = true;
+                        notify.notify_one();
+                    }
                 }
             }
         }
 
-        let mut shared_data = data.lock().unwrap();
+        let mut shared_data = data.lock().await;
         // if connection is dead, remove it
         if shared_data.0 == 10{
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3){
                 Ok(m) => {
                     match m.header {
@@ -246,7 +254,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Respon
 
         // pop event from queue 
         let event = {
-            let mut loc_deque = deque_clone.lock().unwrap();
+            let mut loc_deque = deque_clone.lock().await;
             loc_deque.pop_front()
         };
 
@@ -254,19 +262,19 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Respon
             Some(tracker) => tracker,
             None => {
                 // pause loop to wait for new events
-                let mut state_loc = lock.lock().unwrap();
+                let mut state_loc = lock.lock().await;
                 state_loc.running = false;
-                cvar.notify_one();
+                notify.notify_one();
                 continue;
             }
         };
 
         let deque_clone2 = Arc::clone(& deque_clone);
         let data_clone = Arc::clone(&data);
-        let mut state_loc = lock.lock().unwrap();
+        let mut state_loc = lock.lock().await;
         let mut state_clone = state_loc.clone();
         state_loc.running = true;
-        cvar.notify_one();
+        notify.notify_one();
 
         // use a worker from threadpool to handle events with multithreading
         tokio::spawn(async move {
@@ -276,7 +284,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Respon
 
             // check heartbeat metadata to see if entity should be added back to event queue 
             // or if client should be claim a new service
-            let mut data = data_clone.lock().unwrap();
+            let mut data = data_clone.lock().await;
             *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id);
             if data.0 < 10 {
                 trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
@@ -297,7 +305,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Respon
                             };
                             {
                                 // add updated client back to queue 
-                                let mut loc_deque = deque_clone2.lock().unwrap();
+                                let mut loc_deque = deque_clone2.lock().await;
                                 let _ = loc_deque.push_back(hb);
                             }
                         }
@@ -310,7 +318,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Respon
                 }
                 else{
                     // add event back to queue 
-                    let mut loc_deque = deque_clone2.lock().unwrap();
+                    let mut loc_deque = deque_clone2.lock().await;
                     let _ = loc_deque.push_back(hb);
                     trace!("Deque status {:?}", loc_deque);
                 }
@@ -320,6 +328,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> Result<Respon
             }
         });
     }
+    sleep(Duration::from_millis(1000)).await;
 }
 
 /// Keep track of all connected clients/services, holds event loop and threadpool
@@ -355,7 +364,7 @@ impl State {
     }
 
     /// adds new services/clients to State struct and creates Event object to add to event loop 
-    pub fn add(&mut self, mut p: Payload, service_id: u64) -> std::io::Result<Heartbeat>{
+    pub async fn add(&mut self, mut p: Payload, service_id: u64) -> Result<Heartbeat, hyper::Error>{
 
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
@@ -377,7 +386,7 @@ impl State {
                 let mut counter = 0;
                 while counter < 10 {
                     {
-                        let mut deque = self.deque.lock().unwrap();
+                        let mut deque = self.deque.lock().await;
                         if let Some(hb) = deque.iter_mut().find_map(|e| {
                             if e.id == item.id {
                                 Some(e)
@@ -402,7 +411,7 @@ impl State {
                             counter += 1;
                         }
                     }
-                    sleep(Duration::from_millis(1000));
+                    sleep(Duration::from_millis(1000)).await;
                 }
                 if counter == 10 {
                     warn!("Could not find matching service");
@@ -428,7 +437,7 @@ impl State {
         trace!("Adding new connection to queue");
         {
             // push Heartbeat event to event queue
-            let mut loc_deque = self.deque.lock().unwrap();
+            let mut loc_deque = self.deque.lock().await;
             let _ = loc_deque.push_back(heartbeat.clone());
         }
 
@@ -532,7 +541,7 @@ pub fn deserialize(payload: & String) -> Payload {
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
 pub async fn request_handler(
-    state: &Arc<(Mutex<State>, Condvar)>, mut request: Request<Incoming>
+    state: &Arc<(Mutex<State>, Notify)>, mut request: Request<Incoming>
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     trace!("Starting request handler");
 
@@ -573,12 +582,12 @@ pub async fn request_handler(
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(json))).unwrap();
 
-            let (lock, cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
+            let (lock, notify) = &**state;
+            let mut state_loc = lock.lock().await;
 
-            let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
+            let _ = state_loc.add(payload, 0).await; // add service to clients hashmap and event loop 
             state_loc.running = true; // set running to true for event loop
-            cvar.notify_one(); // notify event loop of new Event
+            notify.notify_one(); // notify event loop of new Event
 
             println!("Now state:");
             state_loc.print(); // print state of clients hashmap
@@ -586,8 +595,8 @@ pub async fn request_handler(
         MessageHeader::CLAIM => {
             trace!("Claiming Service: {:?}", payload);
 
-            let (lock, _cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
+            let (lock, _notify) = &**state;
+            let mut state_loc = lock.lock().await;
             let mut service_id = 0;
             let mut claim_fail = 0; // initiate counter for connection failure
             // loop solves race case when client starts faster than service can be published
@@ -610,7 +619,7 @@ pub async fn request_handler(
                     _ => {
                         claim_fail += 1;
                         if claim_fail <= 5{
-                            sleep(Duration::from_millis(1000));
+                            sleep(Duration::from_millis(1000)).await;
                             continue;
                         }
                         let json = serialize_message( & Message {
@@ -627,7 +636,7 @@ pub async fn request_handler(
                     },
                 }
             }
-            let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
+            let _ = state_loc.add(payload, service_id).await; // add client to clients hashmap and event loop
 
             println!("Now state:");
             state_loc.print(); // print state of clients hashmap
@@ -636,13 +645,13 @@ pub async fn request_handler(
     //         let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
     //         trace!("Sending Message: {:?}", msg_body);
 
-    //         let (lock, _cvar) = &**state;
-    //         let state_loc = lock.lock().unwrap();
+    //         let (lock, _notify) = &**state;
+    //         let state_loc = lock.lock().await;
 
     //         let mut counter = 0;
     //         while counter < 10 {
     //             {
-    //                 let mut deque = state_loc.deque.lock().unwrap();
+    //                 let mut deque = state_loc.deque.lock().await;
     //                 if let Some(hb) = deque.iter_mut().find_map(|e| {
     //                     e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
     //                         hb.msg_body = msg_body.clone();
@@ -665,23 +674,23 @@ pub async fn request_handler(
     Ok(response)
 }
 
-pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: Option<&String>, 
-    addr: Option<Addr>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: Option<&Arc<Mutex<String>>>, 
+    addr: Option<Arc<Mutex<Addr>>>) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     let mut response = Response::new(Full::default());
 
     // retrieve service's payload from client or set an empty message body
-    let binding = "".to_string();
+    let binding = Arc::new(Mutex::new("".to_string()));
     let payload = payload.unwrap_or(&binding);
-    let payload_clone = payload.clone();
+    let payload_clone = payload.lock().await.clone();
 
-    let empty_addr = Addr{
+    let empty_addr = Arc::new(Mutex::new(Addr{
         host: "".to_string(),
         port: 0
-    };
+    }));
     // client uses listener's address to send msg, service does not need addr
     let addr = addr.unwrap_or(empty_addr);
-    let addr_clone = addr.clone();
+    let addr_clone = addr.lock().await.clone();
 
     // start new thread to send/receive heartbeats/messages to/from listener
     let hb_handler = tokio::spawn(async move {
@@ -760,7 +769,7 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
         // payload is empty for services, retrieve and send msg waiting in global variable
         if *payload == "".to_string(){
             // send msg back
-            let msg = GLOBAL_MSGBODY.lock().unwrap();
+            let msg = GLOBAL_MSGBODY.lock().await;
             response = Response::builder()
             .status(StatusCode::OK)
             .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -795,7 +804,7 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
         }
         else{
             // store msg received from listener into global msg variable
-            let mut msg = GLOBAL_MSGBODY.lock().unwrap();
+            let mut msg = GLOBAL_MSGBODY.lock().await;
             *msg = serde_json::from_str(& message.body).unwrap();
             response = Response::builder()
             .status(StatusCode::OK)
@@ -831,7 +840,7 @@ mod tests {
     fn test_claim_key_DNE() {
 
         let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
+        let (lock, _notify) = &*state;
         
         // add published services to State struct with two copies of 10 keys
         for x in 1..21{
@@ -846,7 +855,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let seq = state_loc.seq;
             let cl: &mut Vec<Payload> = state_loc.clients.entry(p.key).or_insert(Vec::new());
             p.id = seq;
@@ -857,11 +866,11 @@ mod tests {
         // claim published services with matching keys
         for x in 1..21{
             let k: f64 = (1000 + x/2) as f64;
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let _ = state_loc.claim(k.floor() as u64);
         }
         // try to claim a key that does not exist in State
-        let mut state_loc = lock.lock().unwrap();
+        let mut state_loc = lock.lock().await;
         let result = state_loc.claim(2000);
         assert!(result.is_err());
     }
@@ -871,7 +880,7 @@ mod tests {
     fn test_claim_filled_services() {
 
         let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
+        let (lock, _notify) = &*state;
         
         // add published services to State struct with two copies of 10 keys
         for x in 1..21{
@@ -886,7 +895,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let seq = state_loc.seq;
             let cl: &mut Vec<Payload> = state_loc.clients.entry(p.key).or_insert(Vec::new());
             p.id = seq;
@@ -897,11 +906,11 @@ mod tests {
         // claim published services with matching keys
         for x in 1..21{
             let k: f64 = (1000 + x/2) as f64;
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let _ = state_loc.claim(k.floor() as u64);
         }
         // try to claim existing key without available service
-        let mut state_loc = lock.lock().unwrap();
+        let mut state_loc = lock.lock().await;
         let result = state_loc.claim(1000);
         assert!(result.is_err());
     }
@@ -911,7 +920,7 @@ mod tests {
     fn test_add() {
 
         let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
+        let (lock, _notify) = &*state;
 
         let _listener = TcpListener::bind("127.0.0.1:12010");
         
@@ -928,7 +937,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let result = state_loc.add(p, 0);
             assert!(result.is_ok());
         }
@@ -949,7 +958,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let mut service_id = 0;
             match state_loc.claim(p.key){
                 Ok(pl) => service_id = (*pl).service_id,
@@ -966,7 +975,7 @@ mod tests {
     fn test_rmv_client() {
     
         let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
+        let (lock, _notify) = &*state;
 
         sleep(Duration::from_millis(500));
         let _listener = TcpListener::bind("127.0.0.1:12010");
@@ -984,7 +993,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.add(p, 0);
         }
 
@@ -1004,7 +1013,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let mut service_id = 0;
             match state_loc.claim(p.key){
                 Ok(pl) => service_id = (*pl).service_id,
@@ -1014,12 +1023,12 @@ mod tests {
         }
         {
             // State contains all services and clients
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.print();
         }
         // remove all clients from State
         for x in 1..21{
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let k: f64 = (1000 + x/2) as f64;
             // id = x+20 : services' ids are 1-21
             // service_id = x : client's service_ids match services' ids
@@ -1028,7 +1037,7 @@ mod tests {
         }
         {
             // State only contains clients
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.print();
         }
     }
@@ -1038,7 +1047,7 @@ mod tests {
     fn test_rmv_service() {
 
         let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
+        let (lock, _notify) = &*state;
 
         sleep(Duration::from_millis(500));
         let _listener = TcpListener::bind("127.0.0.1:12010");
@@ -1056,7 +1065,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.add(p, 0);
         }
 
@@ -1076,7 +1085,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let mut service_id = 0;
             match state_loc.claim(p.key){
                 Ok(pl) => service_id = (*pl).service_id,
@@ -1086,12 +1095,12 @@ mod tests {
         }
         {
             // State contains all services and clients
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.print();
         }
         // remove all services from State
         for x in 1..21{
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let k: f64 = (1000 + x/2) as f64;
             // id = x: services' ids are 1-21
             // service_id = x : id == service_id
@@ -1100,7 +1109,7 @@ mod tests {
         }
         {
             // State only contains clients
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.print();
         }
     }
@@ -1110,7 +1119,7 @@ mod tests {
     fn test_rmv_clients_and_services() {
 
         let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
+        let (lock, _notify) = &*state;
 
         sleep(Duration::from_millis(500));
         let _listener = TcpListener::bind("127.0.0.1:12010");
@@ -1128,7 +1137,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.add(p, 0);
         }
 
@@ -1148,7 +1157,7 @@ mod tests {
                 id: 0,
                 service_id: 0,
             };
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let mut service_id = 0;
             match state_loc.claim(p.key){
                 Ok(pl) => service_id = (*pl).service_id,
@@ -1158,12 +1167,12 @@ mod tests {
         }
         {
             // State contains all services and clients
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.print();
         }
         // remove all services from State
         for x in 1..21{
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             let k: f64 = (1000 + x/2) as f64;
             // id = x: services' ids are 1-21
             // service_id = x : id == service_id
@@ -1174,7 +1183,7 @@ mod tests {
         }
         {
             // State only contains clients
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             state_loc.print();
         }
     }
@@ -1488,7 +1497,7 @@ mod tests {
                 fail_counter: FailCounter::new(),
                 msg_body: MsgBody::default(),
             };
-            let mut loc_stream = hb.stream.lock().unwrap();
+            let mut loc_stream = hb.stream.lock().await;
             let _ = stream_write(&mut loc_stream, & serialize_message(
                 & Message {
                     header: MessageHeader::HB,
@@ -1502,7 +1511,7 @@ mod tests {
                         Ok(s) => {
                             trace!("new connection");
                             let shared_s = Arc::new(Mutex::new(s));
-                            let mut loc_s = shared_s.lock().unwrap();
+                            let mut loc_s = shared_s.lock().await;
                             let response_a = match stream_read(&mut loc_s) {
                                 Ok(m) => deserialize_message(& m),
                                 Err(err) => panic!("failed to read from stream")

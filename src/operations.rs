@@ -10,7 +10,8 @@ use crate::utils::{only_or_error, epoch};
 use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
 
 use std::thread;
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::{Arc, Condvar};
+use tokio::sync::Notify;
 use std::thread::sleep;
 use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
@@ -23,6 +24,7 @@ use hyper_util::client::legacy::Client;
 use hyper_rustls::HttpsConnectorBuilder;
 use tokio::net::TcpListener;
 use tokio::time::{timeout, Duration, Instant};
+use tokio::sync::Mutex;
 use std::future::Future;
 
 #[allow(unused_imports)]
@@ -129,7 +131,7 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
     let host = only_or_error(& ipstr);
 
     // initialize State struct
-    let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
+    let state = Arc::new((Mutex::new(State::new()), Notify::new()));
     let state_clone = Arc::clone(& state);
 
     let addr = Arc::new(Mutex::new(Addr {
@@ -154,10 +156,10 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
         loop {
             let (stream, _) = incoming.accept().await.unwrap();
             let loc_addr = {
-                addr.lock().unwrap().clone()
+                addr.lock().await.clone()
             };
             let loc_handler = {
-                handler.lock().unwrap().clone()
+                handler.lock().await.clone()
             };
             let service = service_fn(move |req| {
                 let addr_clone = loc_addr.clone();
@@ -181,7 +183,6 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
         Ok(resp) => println!("exited event monitor"),
         Err(_) => println!("event monitor error")
     };
-
     Ok(Response::new(Full::default()))
 }
 
@@ -276,11 +277,11 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
         port: inputs.bind_port
     }));
 
-    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+    let handler = Arc::new(move |req: Request<Incoming>| {
         Box::pin(async move {
             heartbeat_handler_helper(req, None, None).await
         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
-    }));
+    });
 
     let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
 
@@ -290,13 +291,18 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
     let incoming = TcpListener::bind(&handler_addr).await.unwrap();
     loop {
         let (stream, _) = incoming.accept().await.unwrap();
-        let loc_addr = addr.lock().unwrap().clone();
-        let loc_handler = handler.lock().unwrap().clone();
+        let addr_clone = Arc::clone(&addr);
+        let handler_clone = Arc::clone(&handler);
+
+        // Clone the necessary state and handler for each request
         let service = service_fn(move |req| {
-            let addr_clone = loc_addr.clone();
-            let handler_clone = loc_handler.clone();
+            let addr_clone_inner = Arc::clone(&addr_clone);
+            let handler_clone_inner = Arc::clone(&handler_clone);
             async move {
-                server(req, addr_clone, handler_clone).await
+                let addr = addr_clone_inner.lock().await.clone();
+                server(req, addr, move |req| {
+                    handler_clone_inner(req)
+                }).await
             }
         });
 
@@ -381,7 +387,7 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
                 if matches!(m.header, MessageHeader::ACK){
                     info!("Server acknowledged CLAIM.");
                     println!("{}", m.body);
-                    let mut service_payload_loc = service_payload.lock().unwrap();
+                    let mut service_payload_loc = service_payload.lock().await;
                     *service_payload_loc = m.body;
                     break;
                 } else{
@@ -403,16 +409,8 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
     }));
 
     let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-        let service_payload_value = {
-            let shared_service_payload = Arc::clone(&service_payload);
-            let service_payload_loc = shared_service_payload.lock().unwrap();
-            service_payload_loc.clone()
-        };
-        let broker_addr_value = {
-            let shared_broker_addr = Arc::clone(&broker_addr);
-            let broker_addr_loc = shared_broker_addr.lock().unwrap();
-            broker_addr_loc.clone()
-        };
+        let service_payload_value = Arc::clone(&service_payload);
+        let broker_addr_value = Arc::clone(&broker_addr);
         Box::pin(async move {
             heartbeat_handler_helper(req, Some(&service_payload_value), Some(broker_addr_value)).await
         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
@@ -434,8 +432,8 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
     // // send/receive heartbeats to/from broker
     loop {
         let (stream, _) = incoming.accept().await.unwrap();
-        let loc_addr = addr.lock().unwrap().clone();
-        let loc_handler = handler.lock().unwrap().clone();
+        let loc_addr = addr.lock().await.clone();
+        let loc_handler = handler.lock().await.clone();
         let service = service_fn(move |req| {
             let addr_clone = loc_addr.clone();
             let handler_clone = loc_handler.clone();

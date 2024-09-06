@@ -85,7 +85,6 @@ pub async fn server(
     request: Request<Incoming>, addr: Addr, 
     mut handler: impl FnMut(Request<Incoming>)-> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    trace!("Starting server process on: {:?}", addr);
 
     // // Shared state to track the last heartbeat time
     // let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
