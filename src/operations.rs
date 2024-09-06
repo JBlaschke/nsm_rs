@@ -10,9 +10,8 @@ use crate::utils::{only_or_error, epoch};
 use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
 
 use std::thread;
-use std::sync::{Arc, Condvar};
+use std::sync::Arc;
 use tokio::sync::Notify;
-use std::thread::sleep;
 use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full, Empty};
@@ -23,7 +22,7 @@ use hyper_util::server::conn::auto::Builder;
 use hyper_util::client::legacy::Client;
 use hyper_rustls::HttpsConnectorBuilder;
 use tokio::net::TcpListener;
-use tokio::time::{timeout, Duration, Instant};
+use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio::sync::Mutex;
 use std::future::Future;
 
@@ -134,38 +133,29 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
     let state = Arc::new((Mutex::new(State::new()), Notify::new()));
     let state_clone = Arc::clone(& state);
 
-    let addr = Arc::new(Mutex::new(Addr {
-        host: host.to_string(),
-        port: inputs.bind_port
-    }));
-
-    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-        let state_clone_inner = Arc::clone(& state_clone);
-        Box::pin(async move {
-            request_handler(& state_clone_inner, req).await
-        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
-    }));
-
     let server_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
 
     info!("Starting listener started on: {}:{}", host.to_string(), inputs.bind_port);
 
+    trace!("entering event_monitor");
+    // send State struct holding event queue into event monitor to handle heartbeats
+    let event_loop = tokio::task::spawn(async move {
+        let _ = match event_monitor(state).await{
+            Ok(resp) => println!("exited event monitor"),
+            Err(_) => println!("event monitor error")
+        };
+    });
+
     // thread handles incoming connections and adds them to State and event queue
-    tokio::task::spawn(async move {
-        let incoming = TcpListener::bind(&server_addr).await.unwrap();
-        loop {
-            let (stream, _) = incoming.accept().await.unwrap();
-            let loc_addr = {
-                addr.lock().await.clone()
-            };
-            let loc_handler = {
-                handler.lock().await.clone()
-            };
+    let incoming = TcpListener::bind(&server_addr).await.unwrap();
+    loop {
+        let state_clone_inner = Arc::clone(& state_clone);
+        let (stream, _) = incoming.accept().await.unwrap();
+        tokio::task::spawn(async move {
             let service = service_fn(move |req| {
-                let addr_clone = loc_addr.clone();
-                let handler_clone = loc_handler.clone();
+                let state_clone = Arc::clone(& state_clone_inner);
                 async move {
-                    server(req, addr_clone, handler_clone).await
+                    server(Some(&state_clone), req, None, None).await
                 }
             });
 
@@ -174,15 +164,9 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
             .await {
                 error!("Failed to serve connection: {:?}", err);
             }
-        }
-    });
-
-    trace!("entering event_monitor");
-    // send State struct holding event queue into event monitor to handle heartbeats
-    let _ = match event_monitor(state).await{
-        Ok(resp) => println!("exited event monitor"),
-        Err(_) => println!("event monitor error")
-    };
+        });
+    }
+    event_loop.await;
     Ok(Response::new(Full::default()))
 }
 
@@ -232,7 +216,7 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
     let mut read_fail = 0;
     let timeout_duration = Duration::from_millis(6000);
     loop {
-        sleep(Duration::from_millis(1000));
+        sleep(Duration::from_millis(1000)).await;
         trace!("sending request to {}:{}", inputs.host, inputs.port);
 
         let req = Request::builder()
@@ -272,45 +256,26 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
     }
 
     let host = only_or_error(& ipstr);
-    let addr = Arc::new(Mutex::new(Addr {
-        host: host.to_string(),
-        port: inputs.bind_port
-    }));
-
-    let handler = Arc::new(move |req: Request<Incoming>| {
-        Box::pin(async move {
-            heartbeat_handler_helper(req, None, None).await
-        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
-    });
 
     let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
-
     info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
-
     // send/receive heartbeats to/from broker
     let incoming = TcpListener::bind(&handler_addr).await.unwrap();
     loop {
         let (stream, _) = incoming.accept().await.unwrap();
-        let addr_clone = Arc::clone(&addr);
-        let handler_clone = Arc::clone(&handler);
+        tokio::task::spawn(async move {
+            let service = service_fn(move |req| {
+                async move {
+                    server(None, req, None, None).await
+                }
+            });
 
-        // Clone the necessary state and handler for each request
-        let service = service_fn(move |req| {
-            let addr_clone_inner = Arc::clone(&addr_clone);
-            let handler_clone_inner = Arc::clone(&handler_clone);
-            async move {
-                let addr = addr_clone_inner.lock().await.clone();
-                server(req, addr, move |req| {
-                    handler_clone_inner(req)
-                }).await
+            if let Err(err) = Builder::new(TokioExecutor::new())
+            .serve_connection(TokioIo::new(stream), service)
+            .await {
+                error!("Failed to serve connection: {:?}", err);
             }
         });
-
-        if let Err(err) = Builder::new(TokioExecutor::new())
-        .serve_connection(TokioIo::new(stream), service)
-        .await {
-            error!("Failed to serve connection: {:?}", err);
-        }
     }
 
     Ok(Response::new(Full::default()))
@@ -359,10 +324,10 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
 
     let mut read_fail = 0;
     let service_payload = Arc::new(Mutex::new("".to_string()));
-    let timeout_duration = Duration::from_millis(2000);
+    let timeout_duration = Duration::from_millis(6000);
 
     loop {
-        sleep(Duration::from_millis(1000));
+        sleep(Duration::from_millis(1000)).await;
         trace!("sending request to {}:{}", inputs.host, inputs.port);
 
         let req = Request::builder()
@@ -394,10 +359,16 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
                     panic!("Key not found. Try a different key.")
                 }
             }
-            _ => {
+            Ok(Err(e)) => {
                 read_fail += 1;
                 if read_fail > 5 {
                     panic!("Failed to send request to listener")
+                }
+            },
+            Err(_) => {
+                read_fail += 1;
+                if read_fail > 5 {
+                    panic!("Requests to listener timed out")
                 }
             },
         }
@@ -408,45 +379,33 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
         port: inputs.port
     }));
 
-    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-        let service_payload_value = Arc::clone(&service_payload);
-        let broker_addr_value = Arc::clone(&broker_addr);
-        Box::pin(async move {
-            heartbeat_handler_helper(req, Some(&service_payload_value), Some(broker_addr_value)).await
-        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
-    }));
-
     let host = only_or_error(& ipstr);
-    let addr = Arc::new(Mutex::new(Addr {
-        host: host.to_string(),
-        port: inputs.bind_port
-    }));
 
-    let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+    let bind_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
 
     info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
 
     // send/receive heartbeats to/from broker
-    let incoming = TcpListener::bind(&handler_addr).await.unwrap();
-
-    // // send/receive heartbeats to/from broker
+    let incoming = TcpListener::bind(&bind_addr).await.unwrap();
     loop {
+        let service_payload_inner = Arc::clone(&service_payload);
+        let broker_addr_inner = Arc::clone(&broker_addr);
         let (stream, _) = incoming.accept().await.unwrap();
-        let loc_addr = addr.lock().await.clone();
-        let loc_handler = handler.lock().await.clone();
-        let service = service_fn(move |req| {
-            let addr_clone = loc_addr.clone();
-            let handler_clone = loc_handler.clone();
-            async move {
-                server(req, addr_clone, handler_clone).await
+        tokio::task::spawn(async move {
+            let service = service_fn(move |req| {
+                let service_payload_clone = Arc::clone(&service_payload_inner);
+                let broker_addr_clone = Arc::clone(&broker_addr_inner); 
+                async move {
+                    server(None, req, Some(&service_payload_clone), Some(broker_addr_clone)).await
+                }
+            });
+
+            if let Err(err) = Builder::new(TokioExecutor::new())
+            .serve_connection(TokioIo::new(stream), service)
+            .await {
+                error!("Failed to serve connection: {:?}", err);
             }
         });
-
-        if let Err(err) = Builder::new(TokioExecutor::new())
-        .serve_connection(TokioIo::new(stream), service)
-        .await {
-            error!("Failed to serve connection: {:?}", err);
-        }
     }
 
     Ok(Response::new(Full::default()))

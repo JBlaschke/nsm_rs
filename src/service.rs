@@ -205,9 +205,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
     // loop runs while events are in the queue
     loop {
         {
-            let mut state_loc = {
-                lock.lock().await
-            };
+            let mut state_loc = lock.lock().await;
             // loop is paused while there are no events to handle
             while !state_loc.running {
                 trace!("waiting to run");
@@ -289,7 +287,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                 trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
                 if hb.service_id == (service_id as u64){
                     trace!("Connecting to new service");
-                    match state_clone.claim(hb.key){
+                    match state_clone.claim(hb.key).await{
                         Ok(p) => {
                             trace!("Claimed new service w/ payload: {:?}", p);
                             // create new Heartbeat object with new service_id
@@ -379,7 +377,7 @@ impl State {
 
         if let Some(vec) = self.clients.get_mut(&p.key) {
             // find value in clients with matching id
-            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr) {
+            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr && item.service_port == p.service_port) {
                 let item = &vec[pos];
                 let mut counter = 0;
                 while counter < 10 {
@@ -497,7 +495,7 @@ impl State {
     /// search clients hashmap for an available service with matching key,
     /// set service's service_claim equal to ecpoch time to match the new client
     #[allow(dead_code)]
-    pub fn claim(&mut self, k:u64) -> Result<&mut Payload, u64> {
+    pub async fn claim(&mut self, k:u64) -> Result<&mut Payload, u64> {
         match self.clients.get_mut(& k) {
 
             Some(value) => {
@@ -539,9 +537,11 @@ pub fn deserialize(payload: & String) -> Payload {
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
 pub async fn request_handler(
-    state: &Arc<(Mutex<State>, Notify)>, mut request: Request<Incoming>
+    state: Option<&Arc<(Mutex<State>, Notify)>>, mut request: Request<Incoming>
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     trace!("Starting request handler");
+
+    let state = state.unwrap();
 
     // receive Payload from incoming connection
     let whole_body = request.collect().await.unwrap().aggregate();
@@ -600,7 +600,7 @@ pub async fn request_handler(
             // loop solves race case when client starts faster than service can be published
             loop {
                 // 
-                match state_loc.claim(payload.key){
+                match state_loc.claim(payload.key).await{
                     Ok(p) => {
                         service_id = (*p).service_id; // capture claimed service's service_id for add()
                         // send acknowledgment of successful service claim with service's payload containing its address
@@ -617,7 +617,7 @@ pub async fn request_handler(
                     _ => {
                         claim_fail += 1;
                         if claim_fail <= 5{
-                            sleep(Duration::from_millis(1000)).await;
+                            sleep(Duration::from_millis(200)).await;
                             continue;
                         }
                         let json = serialize_message( & Message {
@@ -634,6 +634,7 @@ pub async fn request_handler(
                     },
                 }
             }
+            println!("adding client");
             let _ = state_loc.add(payload, service_id).await; // add client to clients hashmap and event loop
 
             println!("Now state:");
@@ -691,20 +692,20 @@ pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: O
     let addr_clone = addr.lock().await.clone();
 
     // start new thread to send/receive heartbeats/messages to/from listener
-    let hb_handler = tokio::spawn(async move {
-        match heartbeat_handler(request, &payload_clone, addr_clone).await {
-            Ok(resp) => {
-                resp
-            },
-            Err(e) => {
-                Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Full::new(Bytes::from("Heartbeat handler error".to_string())))
-                    .unwrap()
-            }
+    // let hb_handler = tokio::spawn(async move {
+    response = match heartbeat_handler(request, &payload_clone, addr_clone).await {
+        Ok(resp) => {
+            resp
+        },
+        Err(e) => {
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from("Heartbeat handler error".to_string())))
+                .unwrap()
         }
-    });
-    response = hb_handler.await.unwrap();
+    };
+    // });
+    // response = hb_handler.await.unwrap();
     return Ok(response);
 }
 

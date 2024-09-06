@@ -2,7 +2,7 @@
 
 use std::fmt;
 use serde::{Serialize, Deserialize};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
@@ -12,8 +12,10 @@ use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use tokio::net::TcpListener;
+use tokio::sync::{Mutex, Notify};
 use std::future::Future;
 
+use crate::service::{State, request_handler, heartbeat_handler_helper};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -82,9 +84,8 @@ pub fn deserialize_message(payload: & String) -> Message {
 
 /// Binds to stream and listens for incoming connections, then handles connection using specified handler
 pub async fn server(
-    request: Request<Incoming>, addr: Addr, 
-    mut handler: impl FnMut(Request<Incoming>)-> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    state: Option<&Arc<(Mutex<State>, Notify)>>, request: Request<Incoming>, payload: Option<&Arc<Mutex<String>>>, 
+    addr: Option<Arc<Mutex<Addr>>>) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     // // Shared state to track the last heartbeat time
     // let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
@@ -114,7 +115,7 @@ pub async fn server(
 
     match (method, path.as_str()) {
         (Method::POST, p) if p.starts_with("/request_handler") => {
-            handler(request).await
+            request_handler(state, request).await
         },
         (Method::GET, p) if p.starts_with("/heartbeat_handler") => {
             // {
@@ -122,7 +123,7 @@ pub async fn server(
             //     *last_heartbeat = Some(Instant::now());
             //     println!("Heartbeat received, time updated.");
             // }
-            handler(request).await
+            heartbeat_handler_helper(request, payload, addr).await
         },
         _ => {
             *response.status_mut() = StatusCode::NOT_FOUND;
