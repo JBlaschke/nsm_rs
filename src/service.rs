@@ -733,10 +733,6 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
         // receive heartbeat/message
         let request = match stream_read(loc_stream) {
             Ok(message) => {
-                if message == "".to_string(){
-                    trace!("Connection broken, shutting down");
-                    std::process::exit(0);
-                }
                 deserialize_message(& message)
             },
             Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
@@ -795,8 +791,9 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
                 }));
             }
             trace!("Heartbeat handler has returned request");
+            return Ok(())
         }
-        else if matches!(request.header, MessageHeader::HB | MessageHeader::MSG){
+        else if matches!(request.header, MessageHeader::HB){
             let msg_body: MsgBody = serde_json::from_str(& request.body.clone()).unwrap();
             // default HB/MSG response to send what was received
             if msg_body.msg.is_empty(){
@@ -815,6 +812,13 @@ pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr
                 }));
             }   
             trace!("Heartbeat handler has returned request");
+        }
+        else if matches!(request.header, MessageHeader::MSG){
+            let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                header: MessageHeader::ACK,
+                body: request.body.clone(),
+            }));
+            return Ok(())
         }
         else {
             warn!(
