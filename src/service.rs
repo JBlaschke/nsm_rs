@@ -20,7 +20,7 @@ use log::{debug, error, info, trace, warn};
 use crate::utils::{only_or_error, epoch};
 use crate::connection::{
     MessageHeader, Message, Addr, connect, send, receive, stream_read, stream_write, 
-    serialize_message, deserialize_message, connect_with_retry
+    serialize_message, deserialize_message,
 };
 
 /// Store client or service metadata
@@ -209,17 +209,6 @@ impl Event for Heartbeat {
             }
             self.fail_counter.increment();
             trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
-            // *loc_stream = match connect_with_retry(self.addr.clone()){
-            //     Ok(s) => s,
-            //     Err(err) => return Err(std::io::Error::new(
-            //         std::io::ErrorKind::InvalidInput, "HB Failed")
-            //     )
-            // };
-            // println!("writing to heartbeat handler");
-            // let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-            //     header: MessageHeader::NULL,
-            //     body: "".to_string()
-            // }));
         } else {    
             trace!("Received: {:?}", received);
             self.fail_counter.fail_count = 0;
@@ -427,7 +416,8 @@ impl State {
         
         if let Some(vec) = self.clients.get_mut(&p.key) {
             // find value in clients with matching id
-            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr) {
+            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr 
+                && item.service_port == p.service_port) {
                 let item = &vec[pos];
                 let mut counter = 0;
                 while counter < 10 {
