@@ -658,7 +658,7 @@ pub async fn request_handler(
                 {
                     let mut deque = state_loc.deque.lock().await;
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
-                        if e.service_id == msg_body.id {
+                        if e.id == msg_body.id {
                             println!("found id");
                             Some(e)
                         } else {
@@ -682,7 +682,7 @@ pub async fn request_handler(
                         counter += 1;
                     }
                 }
-                sleep(Duration::from_millis(1000));
+                sleep(Duration::from_millis(1000)).await;
             }
             if counter == 10 {
                 warn!("Could not find matching service");
@@ -757,8 +757,9 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
     let message = deserialize_message(& json);
 
     // if a MSG: connect to listener to alter the msg value in the service's heartbeat
+    trace!("Heartbeat handler received {:?}", message);
+
     if matches!(message.header, MessageHeader::MSG){
-        
         // Prepare the HTTPS connector
         let https_connector = HttpsConnectorBuilder::new()
             .with_native_roots().unwrap()
@@ -825,9 +826,15 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
                 }
             };
         }
+        response = Response::builder()
+        .status(StatusCode::OK)
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from(serialize_message(& Message{
+            header: MessageHeader::ACK,
+            body: message.body.clone()
+        })))).unwrap();
     }
-    trace!("Heartbeat handler received {:?}", message);
-    if matches!(message.header, MessageHeader::COL) {
+    else if matches!(message.header, MessageHeader::COL) {
         // payload is empty for services, retrieve and send msg waiting in global variable
         if *payload == "".to_string(){
             // send msg back
