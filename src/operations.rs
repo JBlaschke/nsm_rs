@@ -488,10 +488,8 @@ pub async fn collect(inputs: Collect) -> Result<(), std::io::Error> {
                 _ => warn!("Server responds with unexpected message: {:?}", m),
             }
         }
-        Ok(Err(_e)) => return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
-        Err(_e) => return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput, "Timed out reading request.")),
+        Ok(Err(_e)) => panic!("Failed to collect message."),
+        Err(_e) => panic!("Timed out reading response")
     }
 
     Ok(())
@@ -508,14 +506,14 @@ pub async fn send_msg(inputs: Send) -> Result<(), std::io::Error> {
     let client = Client::builder(TokioExecutor::new()).build(https_connector);
     let msg = serialize_message(& Message{
         header: MessageHeader::MSG,
-        body: inputs.msg
+        body: serde_json::to_string(&inputs.msg).unwrap()
     });
     let timeout_duration = Duration::from_millis(6000);
 
     println!("sending request to {}:{}", inputs.host, inputs.port);
     let req = Request::builder()
-    .method(Method::POST)
-    .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+    .method(Method::GET)
+    .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
     .header(hyper::header::CONTENT_TYPE, "application/json")
     .body(Full::new(Bytes::from(msg.clone())))
     .unwrap();
@@ -535,10 +533,8 @@ pub async fn send_msg(inputs: Send) -> Result<(), std::io::Error> {
                 _ => warn!("Server responds with unexpected message: {:?}", m),
             }
         }
-        Ok(Err(_e)) => return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
-        Err(_e) => return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput, "Timed out reading response"))
+        Ok(Err(_e)) => panic!("Failed to collect message."),
+        Err(_e) => panic!("Timed out reading response")
     }
 
     Ok(())    

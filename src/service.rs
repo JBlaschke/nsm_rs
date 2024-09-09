@@ -646,6 +646,7 @@ pub async fn request_handler(
             state_loc.print().await; // print state of clients hashmap
         },
         MessageHeader::MSG => {
+            info!("adding msg to queue");
             let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
             trace!("Sending Message: {:?}", msg_body);
 
@@ -667,6 +668,14 @@ pub async fn request_handler(
                     }) {
                         hb.msg_body = msg_body.clone();
                         trace!("Altering hb message {:?}", hb);
+                        let json = serialize_message( & Message {
+                            header: MessageHeader::MSG,
+                            body: message.body.clone()
+                        });
+                        response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from(json))).unwrap();
                         break;
                     }
                     else{
@@ -767,13 +776,55 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
                 header: MessageHeader::MSG,
                 body: serde_json::to_string(& msg_body).unwrap()
         });
+        let mut read_fail = 0;
+        loop {
+            sleep(Duration::from_millis(1000)).await;
+            trace!("sent message to listener on {:?}", addr);
 
-        let req = Request::builder()
-        .method(Method::POST)
-        .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from(msg)))
-        .unwrap();
+            let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(msg.clone())))
+            .unwrap();
+
+            let start = Instant::now();
+            let result = timeout(timeout_duration, client.request(req)).await;
+        
+            match result {
+                Ok(Ok(resp)) => {
+                    trace!("Received response: {:?}", resp);
+                    let body = resp.collect().await.unwrap().aggregate();
+                    let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                    let json = serde_json::to_string(&data).unwrap();
+                    let m = deserialize_message(& json);
+                    match m.header {
+                        MessageHeader::MSG => info!("Request acknowledged: {:?}", m),
+                        _ => warn!("Server responds with unexpected message: {:?}", m),
+                    }
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: MessageHeader::ACK,
+                        body: "".to_string()
+                    })))).unwrap();
+                    break;
+                }
+                Ok(Err(_e)) => {
+                    read_fail += 1;
+                    if read_fail > 5 {
+                        panic!("Failed to send request to listener")
+                    }
+                }
+                Err(_e) => {
+                    read_fail += 1;
+                    if read_fail > 5 {
+                        panic!("Request timed out")
+                    }
+                }
+            };
+        }
     }
     trace!("Heartbeat handler received {:?}", message);
     if matches!(message.header, MessageHeader::COL) {
@@ -801,7 +852,8 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
         }
         trace!("Heartbeat handler has returned request");
     }
-    else if matches!(message.header, MessageHeader::HB | MessageHeader::MSG){
+    else if matches!(message.header, MessageHeader::HB){
+        println!("{:?}", message.clone());
         let msg_body: MsgBody = serde_json::from_str(& message.body.clone()).unwrap();
         // default HB/MSG response to send what was received
         if msg_body.msg.is_empty(){

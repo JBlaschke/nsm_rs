@@ -62,7 +62,7 @@ impl fmt::Display for MessageHeader {
 }
 
 /// Send messages in body that are identified by MessageHeader
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Message {
     /// Specify type of Message
     pub header: MessageHeader,
@@ -114,7 +114,7 @@ pub async fn server(
 
     match (method, path.as_str()) {
         (Method::POST, p) if p.starts_with("/request_handler") => {
-            println!("received request");
+            info!("received request");
             handler(request).await
         },
         (Method::GET, p) if p.starts_with("/heartbeat_handler") => {
@@ -123,6 +123,7 @@ pub async fn server(
             //     *last_heartbeat = Some(Instant::now());
             //     println!("Heartbeat received, time updated.");
             // }
+            info!("received hb request");
             handler(request).await
         },
         _ => {
