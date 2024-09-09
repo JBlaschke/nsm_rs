@@ -15,8 +15,6 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 use std::future::Future;
 
-use crate::service::{State, request_handler, heartbeat_handler_helper};
-
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
@@ -84,8 +82,9 @@ pub fn deserialize_message(payload: & String) -> Message {
 
 /// Binds to stream and listens for incoming connections, then handles connection using specified handler
 pub async fn server(
-    state: Option<&Arc<(Mutex<State>, Notify)>>, request: Request<Incoming>, payload: Option<&Arc<Mutex<String>>>, 
-    addr: Option<Arc<Mutex<Addr>>>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    request: Request<Incoming>, 
+    mut handler: impl FnMut(Request<Incoming>)-> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     // // Shared state to track the last heartbeat time
     // let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
@@ -115,7 +114,8 @@ pub async fn server(
 
     match (method, path.as_str()) {
         (Method::POST, p) if p.starts_with("/request_handler") => {
-            request_handler(state, request).await
+            println!("received request");
+            handler(request).await
         },
         (Method::GET, p) if p.starts_with("/heartbeat_handler") => {
             // {
@@ -123,7 +123,7 @@ pub async fn server(
             //     *last_heartbeat = Some(Instant::now());
             //     println!("Heartbeat received, time updated.");
             // }
-            heartbeat_handler_helper(request, payload, addr).await
+            handler(request).await
         },
         _ => {
             *response.status_mut() = StatusCode::NOT_FOUND;

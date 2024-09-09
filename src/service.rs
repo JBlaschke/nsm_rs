@@ -8,7 +8,7 @@ use tokio::time::{sleep, Instant, timeout, Duration};
 use std::thread;
 use threadpool::ThreadPool;
 use std::collections::VecDeque;
-use std::io::{self};
+use std::io::{self, Error as IoError};
 use std::any::Any;
 use std::fmt;
 use lazy_static::lazy_static;
@@ -228,7 +228,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
         // if connection is dead, remove it
         if shared_data.0 == 10{
             let mut state_loc = lock.lock().await;
-            match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3){
+            match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3).await{
                 Ok(m) => {
                     match m.header {
                         MessageHeader::PUB => {
@@ -275,6 +275,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
 
         // use a worker from threadpool to handle events with multithreading
         tokio::spawn(async move {
+            sleep(Duration::from_millis(1000)).await;
 
             trace!("Passing event to event monitor...");
             let _ = hb.monitor().await;
@@ -324,6 +325,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                 info!("Dropping event");
             }
         });
+        sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -362,6 +364,7 @@ impl State {
     /// adds new services/clients to State struct and creates Event object to add to event loop 
     pub async fn add(&mut self, mut p: Payload, service_id: u64) -> Result<Heartbeat, hyper::Error>{
 
+        println!("adding service");
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
         // connect to broker
@@ -380,13 +383,17 @@ impl State {
             if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr && item.service_port == p.service_port) {
                 let item = &vec[pos];
                 let mut counter = 0;
+                println!("{:?}", item);
                 while counter < 10 {
                     {
-                        let mut deque = self.deque.lock().await;
-                        if let Some(hb) = deque.iter_mut().find_map(|e| {
+                        let mut deque_loc = self.deque.lock().await;
+                        println!("searching for item {:?}", deque_loc);
+                        if let Some(hb) = deque_loc.iter_mut().find_map(|e| {
                             if e.id == item.id {
+                                println!("found id");
                                 Some(e)
                             } else {
+                                println!("id not found");
                                 None
                             }
                         }) {
@@ -398,9 +405,6 @@ impl State {
                                 p.service_id = item.service_id;
                                 let immutable_hb: &Heartbeat = hb;
                                 return Ok(immutable_hb.clone());
-                            }
-                            else {
-                                continue;
                             }
                         }
                         else{
@@ -448,7 +452,7 @@ impl State {
     }
 
     /// remove service/client from clients hashmap in State when Heartbeat fails
-    pub fn rmv(&mut self, k: u64, id: u64, service_id: u64) -> std::io::Result<Message>{
+    pub async fn rmv(&mut self, k: u64, id: u64, service_id: u64) -> Result<Message, IoError>{
         trace!("Current state: {:?}", self.clients);
 
         let mut removed_item = None;
@@ -488,6 +492,7 @@ impl State {
                 body: "".to_string()
             }); 
         }
+        // Convert the IoError to a HyperError
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Failed to remove item from state"));
     }
@@ -514,7 +519,7 @@ impl State {
     }
 
     /// print all entries in clients hashmap
-    pub fn print(&mut self) {
+    pub async fn print(&mut self) {
         for (key, values) in & self.clients {
             for v in values {
                 println!("{}: {:?}", key, v);
@@ -537,11 +542,9 @@ pub fn deserialize(payload: & String) -> Payload {
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
 pub async fn request_handler(
-    state: Option<&Arc<(Mutex<State>, Notify)>>, mut request: Request<Incoming>
+    state: &Arc<(Mutex<State>, Notify)>, mut request: Request<Incoming>
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     trace!("Starting request handler");
-
-    let state = state.unwrap();
 
     // receive Payload from incoming connection
     let whole_body = request.collect().await.unwrap().aggregate();
@@ -588,7 +591,7 @@ pub async fn request_handler(
             notify.notify_one(); // notify event loop of new Event
 
             println!("Now state:");
-            state_loc.print(); // print state of clients hashmap
+            state_loc.print().await; // print state of clients hashmap
         },
         MessageHeader::CLAIM => {
             trace!("Claiming Service: {:?}", payload);
@@ -599,9 +602,10 @@ pub async fn request_handler(
             let mut claim_fail = 0; // initiate counter for connection failure
             // loop solves race case when client starts faster than service can be published
             loop {
-                // 
+                println!("{:?}", state_loc.clients.clone());
                 match state_loc.claim(payload.key).await{
                     Ok(p) => {
+                        println!("found key");
                         service_id = (*p).service_id; // capture claimed service's service_id for add()
                         // send acknowledgment of successful service claim with service's payload containing its address
                         let json = serialize_message( & Message {
@@ -614,7 +618,8 @@ pub async fn request_handler(
                             .body(Full::new(Bytes::from(json))).unwrap();
                         break;
                     },
-                    _ => {
+                    Err(e) => {
+                        println!("looking for key, not found: {:?}", e);
                         claim_fail += 1;
                         if claim_fail <= 5{
                             sleep(Duration::from_millis(200)).await;
@@ -638,36 +643,43 @@ pub async fn request_handler(
             let _ = state_loc.add(payload, service_id).await; // add client to clients hashmap and event loop
 
             println!("Now state:");
-            state_loc.print(); // print state of clients hashmap
+            state_loc.print().await; // print state of clients hashmap
         },
-    //     MessageHeader::MSG => {
-    //         let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
-    //         trace!("Sending Message: {:?}", msg_body);
+        MessageHeader::MSG => {
+            let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
+            trace!("Sending Message: {:?}", msg_body);
 
-    //         let (lock, _notify) = &**state;
-    //         let state_loc = lock.lock().await;
+            let (lock, _notify) = &**state;
+            let state_loc = lock.lock().await;
 
-    //         let mut counter = 0;
-    //         while counter < 10 {
-    //             {
-    //                 let mut deque = state_loc.deque.lock().await;
-    //                 if let Some(hb) = deque.iter_mut().find_map(|e| {
-    //                     e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
-    //                         hb.msg_body = msg_body.clone();
-    //                         trace!("Altering hb message {:?}", hb);
-    //                         break;
-    //                 }
-    //                 else{
-    //                     counter += 1;
-    //                 }
-    //             }
-    //             sleep(Duration::from_millis(1000));
-    //         }
-    //         if counter == 10 {
-    //             warn!("Could not find matching service");
-    //         }
+            let mut counter = 0;
+            while counter < 10 {
+                {
+                    let mut deque = state_loc.deque.lock().await;
+                    if let Some(hb) = deque.iter_mut().find_map(|e| {
+                        if e.service_id == msg_body.id {
+                            println!("found id");
+                            Some(e)
+                        } else {
+                            println!("id not found");
+                            None
+                        }
+                    }) {
+                        hb.msg_body = msg_body.clone();
+                        trace!("Altering hb message {:?}", hb);
+                        break;
+                    }
+                    else{
+                        counter += 1;
+                    }
+                }
+                sleep(Duration::from_millis(1000));
+            }
+            if counter == 10 {
+                warn!("Could not find matching service");
+            }
 
-        // }
+        }
         _ => {panic!("This should not be reached!");}
     }
     Ok(response)
@@ -773,7 +785,7 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
             .status(StatusCode::OK)
             .header(hyper::header::CONTENT_TYPE, "application/json")
             .body(Full::new(Bytes::from(serialize_message(& Message{
-                header: message.header,
+                header: MessageHeader::ACK,
                 body: serde_json::to_string(&* msg.msg).unwrap()
             })))).unwrap();
         }
@@ -783,7 +795,7 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
             .status(StatusCode::OK)
             .header(hyper::header::CONTENT_TYPE, "application/json")
             .body(Full::new(Bytes::from(serialize_message(& Message{
-                header: message.header,
+                header: MessageHeader::ACK,
                 body: payload.clone()
             })))).unwrap();
         }

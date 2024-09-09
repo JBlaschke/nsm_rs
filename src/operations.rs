@@ -140,22 +140,29 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
     trace!("entering event_monitor");
     // send State struct holding event queue into event monitor to handle heartbeats
     let event_loop = tokio::task::spawn(async move {
-        let _ = match event_monitor(state).await{
+        let _ = match event_monitor(state_clone).await{
             Ok(resp) => println!("exited event monitor"),
             Err(_) => println!("event monitor error")
         };
     });
 
+    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+        let state_clone = Arc::clone(& state);
+        Box::pin(async move {
+            request_handler(& state_clone, req).await
+        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+    }));
+    
     // thread handles incoming connections and adds them to State and event queue
     let incoming = TcpListener::bind(&server_addr).await.unwrap();
     loop {
-        let state_clone_inner = Arc::clone(& state_clone);
         let (stream, _) = incoming.accept().await.unwrap();
+        let loc_handler = handler.lock().await.clone();
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
-                let state_clone = Arc::clone(& state_clone_inner);
+                let handler_clone = loc_handler.clone();
                 async move {
-                    server(Some(&state_clone), req, None, None).await
+                    server(req, handler_clone).await
                 }
             });
 
@@ -166,6 +173,7 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
             }
         });
     }
+
     event_loop.await;
     Ok(Response::new(Full::default()))
 }
@@ -246,10 +254,16 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
                     }
                 }
             }
-            _ => {
+            Ok(Err(e)) => {
                 read_fail += 1;
                 if read_fail > 5 {
                     panic!("Failed to send request to listener")
+                }
+            },
+            Err(_) => {
+                read_fail += 1;
+                if read_fail > 5 {
+                    panic!("Requests to listener timed out")
                 }
             },
         }
@@ -257,16 +271,24 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
 
     let host = only_or_error(& ipstr);
 
+    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+        Box::pin(async move {
+            heartbeat_handler_helper(req, None, None).await
+        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+    }));
+
     let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
     info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
     // send/receive heartbeats to/from broker
     let incoming = TcpListener::bind(&handler_addr).await.unwrap();
     loop {
         let (stream, _) = incoming.accept().await.unwrap();
+        let loc_handler = handler.lock().await.clone();
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
+                let handler_clone = loc_handler.clone();
                 async move {
-                    server(None, req, None, None).await
+                    server(req, handler_clone).await
                 }
             });
 
@@ -356,7 +378,10 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
                     *service_payload_loc = m.body;
                     break;
                 } else{
-                    panic!("Key not found. Try a different key.")
+                    read_fail += 1;
+                    if read_fail > 5 {
+                        panic!("Key not found. Try a different key.")
+                    }
                 }
             }
             Ok(Err(e)) => {
@@ -381,6 +406,14 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
 
     let host = only_or_error(& ipstr);
 
+    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+        let service_payload_value = Arc::clone(&service_payload);
+        let broker_addr_value = Arc::clone(&broker_addr);
+        Box::pin(async move {
+            heartbeat_handler_helper(req, Some(&service_payload_value), Some(broker_addr_value)).await
+        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+    }));
+
     let bind_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
 
     info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
@@ -388,15 +421,13 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
     // send/receive heartbeats to/from broker
     let incoming = TcpListener::bind(&bind_addr).await.unwrap();
     loop {
-        let service_payload_inner = Arc::clone(&service_payload);
-        let broker_addr_inner = Arc::clone(&broker_addr);
+        let loc_handler = handler.lock().await.clone();
         let (stream, _) = incoming.accept().await.unwrap();
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
-                let service_payload_clone = Arc::clone(&service_payload_inner);
-                let broker_addr_clone = Arc::clone(&broker_addr_inner); 
+                let handler_clone = loc_handler.clone();
                 async move {
-                    server(None, req, Some(&service_payload_clone), Some(broker_addr_clone)).await
+                    server(req, handler_clone).await
                 }
             });
 
@@ -411,72 +442,104 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
     Ok(Response::new(Full::default()))
 }
 
-pub async fn collect(inputs: Collect) -> Result<Response<Full<Bytes>>, hyper::Error> {
+pub async fn collect(inputs: Collect) -> Result<(), std::io::Error> {
 
-    // // connect to bind port of service or client
-    // let client = Client::new();
-    // let msg = serialize_message(& Message{
-    //     header: MessageHeader::COL,
-    //     body: "".to_string()
-    // });
+    // connect to bind port of service or client
+    // Prepare the HTTPS connector
+    let https_connector = HttpsConnectorBuilder::new()
+        .with_native_roots().unwrap()
+        .https_or_http()
+        .enable_http1()
+        .build();
+    let client = Client::builder(TokioExecutor::new()).build(https_connector);
+    let msg = serialize_message(& Message{
+        header: MessageHeader::COL,
+        body: "".to_string()
+    });
+    let timeout_duration = Duration::from_millis(6000);
 
-    // println!("sending request to {}:{}", inputs.host, inputs.port);
-    // let response = client
-    // .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
-    // .body(msg)
-    // .send();
+    let req = Request::builder()
+    .method(Method::GET)
+    .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
+    .header(hyper::header::CONTENT_TYPE, "application/json")
+    .body(Full::new(Bytes::from(msg.clone())))
+    .unwrap();
 
-    // match response {
-    //     Ok(resp) => {
-    //         trace!("Received response: {:?}", resp);
-    //         let body = resp.text().unwrap();
-    //         let m = deserialize_message(& body);
-    //         match m.header {
-    //             MessageHeader::ACK => {
-    //                 info!("Request acknowledged.");
-    //                 if m.body.is_empty() {
-    //                     panic!("Payload not found in heartbeat.");
-    //                 }
-    //                 println!("{:?}", m.body);
-    //             },
-    //             _ => warn!("Server responds with unexpected message: {:?}", m),
-    //         }
-    //     }
-    //     Err(_e) => return Err(std::io::Error::new(
-    //         std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
-    // }
+    let start = Instant::now();
+    let result = timeout(timeout_duration, client.request(req)).await;
 
-    Ok(Response::new(Full::default()))
+    println!("sending request to {}:{}", inputs.host, inputs.port);
+
+    match result {
+        Ok(Ok(resp)) => {
+            trace!("Received response: {:?}", resp);
+            let body = resp.collect().await.unwrap().aggregate();
+            let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+            let json = serde_json::to_string(&data).unwrap();
+            let m = deserialize_message(& json);
+            match m.header {
+                MessageHeader::ACK => {
+                    info!("Request acknowledged.");
+                    if m.body.is_empty() {
+                        panic!("Payload not found in heartbeat.");
+                    }
+                    println!("{:?}", m.body);
+                },
+                _ => warn!("Server responds with unexpected message: {:?}", m),
+            }
+        }
+        Ok(Err(_e)) => return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
+        Err(_e) => return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Timed out reading request.")),
+    }
+
+    Ok(())
 }
 
-pub async fn send_msg(inputs: Send) -> Result<Response<Full<Bytes>>, hyper::Error> {
+pub async fn send_msg(inputs: Send) -> Result<(), std::io::Error> {
 
-    // // connect to bind port of service or client
-    // let client = Client::new();
-    // let msg = serialize_message(& Message{
-    //     header: MessageHeader::MSG,
-    //     body: inputs.msg
-    // });
+    // connect to bind port of service or client
+    let https_connector = HttpsConnectorBuilder::new()
+        .with_native_roots().unwrap()
+        .https_or_http()
+        .enable_http1()
+        .build();
+    let client = Client::builder(TokioExecutor::new()).build(https_connector);
+    let msg = serialize_message(& Message{
+        header: MessageHeader::MSG,
+        body: inputs.msg
+    });
+    let timeout_duration = Duration::from_millis(6000);
 
-    // println!("sending request to {}:{}", inputs.host, inputs.port);
-    // let response = client
-    // .post(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
-    // .body(msg)
-    // .send();
+    println!("sending request to {}:{}", inputs.host, inputs.port);
+    let req = Request::builder()
+    .method(Method::POST)
+    .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+    .header(hyper::header::CONTENT_TYPE, "application/json")
+    .body(Full::new(Bytes::from(msg.clone())))
+    .unwrap();
 
-    // match response {
-    //     Ok(resp) => {
-    //         trace!("Received response: {:?}", resp);
-    //         let body = resp.text().unwrap();
-    //         let m = deserialize_message(& body);
-    //         match m.header {
-    //             MessageHeader::ACK => info!("Request acknowledged: {:?}", m),
-    //             _ => warn!("Server responds with unexpected message: {:?}", m),
-    //         }
-    //     }
-    //     Err(_e) => return Err(std::io::Error::new(
-    //         std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
-    // }
+    let start = Instant::now();
+    let result = timeout(timeout_duration, client.request(req)).await;
 
-    Ok(Response::new(Full::default()))    
+    match result {
+        Ok(Ok(resp)) => {
+            trace!("Received response: {:?}", resp);
+            let body = resp.collect().await.unwrap().aggregate();
+            let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+            let json = serde_json::to_string(&data).unwrap();
+            let m = deserialize_message(& json);
+            match m.header {
+                MessageHeader::ACK => info!("Request acknowledged: {:?}", m),
+                _ => warn!("Server responds with unexpected message: {:?}", m),
+            }
+        }
+        Ok(Err(_e)) => return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Failed to collect message.")),
+        Err(_e) => return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Timed out reading response"))
+    }
+
+    Ok(())    
 }
