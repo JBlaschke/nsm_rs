@@ -25,6 +25,7 @@ use hyper_util::server::conn::auto::Builder;
 use tokio::sync::Mutex;
 use tokio::net::TcpListener;
 use std::future::Future;
+use rustls::ClientConfig;
 
 
 #[allow(unused_imports)]
@@ -343,13 +344,15 @@ pub struct State {
     /// event queue
     pub deque: Arc<Mutex<VecDeque<Heartbeat>>>,
     /// true when event queue contains events to handle, false when event queue is empty
-    running: bool,
+    pub running: bool,
+    /// tls client configuration to send heartbeat messages
+    pub tls: ClientConfig
 }
 
 
 impl State {
     /// inititates State struct with empty and default variables
-    pub fn new() -> State {
+    pub fn new(tls: ClientConfig) -> State {
         State{
             clients: HashMap::new(),
             claims: HashMap::new(),
@@ -358,6 +361,7 @@ impl State {
             seq: 1,
             deque: Arc::new(Mutex::new(VecDeque::new())),
             running: false,
+            tls
         }
     }
 
@@ -370,7 +374,7 @@ impl State {
         // connect to broker
         // Prepare the HTTPS connector
         let https_connector = HttpsConnectorBuilder::new()
-            .with_native_roots().unwrap()
+            .with_tls_config(self.tls.clone())
             .https_or_http()
             .enable_http1()
             .build();
@@ -695,7 +699,7 @@ pub async fn request_handler(
 }
 
 pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: Option<&Arc<Mutex<String>>>, 
-    addr: Option<Arc<Mutex<Addr>>>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    addr: Option<Arc<Mutex<Addr>>>, tls: ClientConfig) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     let mut response = Response::new(Full::default());
 
@@ -714,7 +718,7 @@ pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: O
 
     // start new thread to send/receive heartbeats/messages to/from listener
     // let hb_handler = tokio::spawn(async move {
-    response = match heartbeat_handler(request, &payload_clone, addr_clone).await {
+    response = match heartbeat_handler(request, &payload_clone, addr_clone, tls).await {
         Ok(resp) => {
             resp
         },
@@ -732,7 +736,8 @@ pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: O
 
 /// Receive a heartbeat from broker and send one back to show life of connection.
 /// If a client, HB message contains payload of connected service to use in Collect()
-pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String, addr: Addr)
+pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
+     addr: Addr, tls: ClientConfig)
     -> Result<Response<Full<Bytes>>, hyper::Error> {
     trace!("Starting heartbeat handler");
 
@@ -762,7 +767,7 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
     if matches!(message.header, MessageHeader::MSG){
         // Prepare the HTTPS connector
         let https_connector = HttpsConnectorBuilder::new()
-            .with_native_roots().unwrap()
+            .with_tls_config(tls)
             .https_or_http()
             .enable_http1()
             .build();

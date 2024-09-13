@@ -55,7 +55,9 @@ pub struct Listen {
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>,
     /// port for listening for incoming connections
-    pub bind_port: i32
+    pub bind_port: i32,
+    /// optional path to certificate manager
+    pub root_ca: Option<String>
 }
 
 /// Connect to broker and discover available address for data connection.
@@ -91,7 +93,9 @@ pub struct Claim {
     /// port for sending heartbeats to broker
     pub bind_port: i32,
     /// match to an available published service
-    pub key: u64
+    pub key: u64,
+    /// optional path to certificate manager
+    pub root_ca: Option<String>
 }
 
 
@@ -128,7 +132,9 @@ pub struct Publish {
     /// port for service/client connection
     pub service_port: i32,
     /// uniqueley identifies service
-    pub key: u64
+    pub key: u64,
+    /// optional path to certificate manager
+    pub root_ca: Option<String>
 }
 
 /// Collect heartbeats/messages inside event loop
@@ -154,7 +160,9 @@ pub struct Collect {
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>,
     /// uniqueley identifies service
-    pub key: u64
+    pub key: u64,
+    /// optional path to certificate manager
+    pub root_ca: Option<String>
 }
 
 /// Send a message from the client to the service through broker
@@ -182,5 +190,7 @@ pub struct Send {
     /// contains user-defined message
     pub msg: String,
     /// uniqueley identifies service
-    pub key: u64
+    pub key: u64,
+    /// optional path to certificate manager
+    pub root_ca: Option<String>
 }

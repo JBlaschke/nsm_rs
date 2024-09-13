@@ -9,7 +9,9 @@ use crate::utils::{only_or_error, epoch};
 
 use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
 
-use std::thread;
+use crate::tls::{load_certs, load_private_key, load_ca};
+
+use std::env;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use std::net::SocketAddr;
@@ -25,6 +27,8 @@ use tokio::net::TcpListener;
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio::sync::Mutex;
 use std::future::Future;
+use rustls::{ServerConfig, RootCertStore};
+use tokio_rustls::TlsAcceptor;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -111,10 +115,28 @@ pub fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 }
 
 pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    trace!("Setting up listener...");
+
+    // Set a process wide default crypto provider.
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(feature = "aws-lc-rs")]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Load public certificate.
+    let cert_path = env::var("LISTEN_CERT_PATH").expect("CERT_PATH not set");
+    let certs = load_certs(&cert_path).await.unwrap();
+    let key_path = env::var("LISTEN_KEY_PATH").expect("KEY_PATH not set");
+    let key = load_private_key(&key_path).await.unwrap();
+    
+    // Build TLS configuration.
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| error!("{}", e.to_string())).unwrap();
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
 
     let ips = get_local_ips();
-
-    trace!("Start setting up listener...");
 
     // identify local ip address
     let ipstr = if inputs.print_v4 {
@@ -127,17 +149,12 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
         )
     };
     
-    let host = only_or_error(& ipstr);
-
     // initialize State struct
-    let state = Arc::new((Mutex::new(State::new()), Notify::new()));
+    let tls = load_ca(inputs.root_ca).await;
+    let state = Arc::new((Mutex::new(State::new(tls)), Notify::new()));
     let state_clone = Arc::clone(& state);
 
-    let server_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
-
-    info!("Starting listener started on: {}:{}", host.to_string(), inputs.bind_port);
-
-    trace!("entering event_monitor");
+    trace!("Entering event monitor");
     // send State struct holding event queue into event monitor to handle heartbeats
     let event_loop = tokio::task::spawn(async move {
         let _ = match event_monitor(state_clone).await{
@@ -153,21 +170,34 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
     }));
     
-    // thread handles incoming connections and adds them to State and event queue
+    let host = only_or_error(& ipstr);
+    let server_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
     let incoming = TcpListener::bind(&server_addr).await.unwrap();
+    let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+    info!("Listening on: {}:{}", host.to_string(), inputs.bind_port);
+    let service = service_fn(move |req: Request<Incoming>| {
+        let handler_clone = Arc::clone(&handler);
+        async move {
+            let loc_handler = handler_clone.lock().await.clone();
+            server(req, loc_handler).await
+        }
+    });
     loop {
-        let (stream, _) = incoming.accept().await.unwrap();
-        let loc_handler = handler.lock().await.clone();
+        let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
+        let tls_acceptor = tls_acceptor.clone();
+        let service_clone = service.clone();
+        // thread handles incoming connections and adds them to State and event queue
         tokio::task::spawn(async move {
-            let service = service_fn(move |req| {
-                let handler_clone = loc_handler.clone();
-                async move {
-                    server(req, handler_clone).await
+            let tls_stream = match tls_acceptor.accept(tcp_stream).await {
+                Ok(tls_stream) => tls_stream,
+                Err(err) => {
+                    eprintln!("failed to perform tls handshake: {err:#}");
+                    return;
                 }
-            });
+            };
 
             if let Err(err) = Builder::new(TokioExecutor::new())
-            .serve_connection(TokioIo::new(stream), service)
+            .serve_connection(TokioIo::new(tls_stream), service_clone)
             .await {
                 error!("Failed to serve connection: {:?}", err);
             }
@@ -179,6 +209,26 @@ pub async fn listen(inputs: Listen) -> Result<Response<Full<Bytes>>, hyper::Erro
 }
 
 pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    // Set a process wide default crypto provider.
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(feature = "aws-lc-rs")]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Load public certificate.
+    // let cert_path = env::var("PUBLISH_CERT_PATH").expect("CERT_PATH not set");
+    // let certs = load_certs(&cert_path).await.unwrap();
+    // let key_path = env::var("PUBLISH_KEY_PATH").expect("KEY_PATH not set");
+    // let key = load_private_key(&key_path).await.unwrap();
+        
+    // Build TLS configuration.
+    // let mut server_config = ServerConfig::builder()
+    //     .with_no_client_auth()
+    //     .with_single_cert(certs, key)
+    //     .map_err(|e| error!("{}", e.to_string())).unwrap();
+    // server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+
+    let tls = load_ca(inputs.root_ca).await;
 
     let ips = get_local_ips();
 
@@ -208,11 +258,12 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
     // connect to broker
     // Prepare the HTTPS connector
     let https_connector = HttpsConnectorBuilder::new()
-        .with_native_roots().unwrap()
+        .with_tls_config(tls.clone())
         .https_or_http()
         .enable_http1()
         .build();
 
+    println!("configured https connector: {:?} with tls: {:?}", https_connector, tls.clone());
     // Build the Client using the HttpsConnector
     let client = Client::builder(TokioExecutor::new()).build(https_connector);
 
@@ -229,7 +280,7 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
 
         let req = Request::builder()
         .method(Method::POST)
-        .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+        .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .body(Full::new(Bytes::from(msg.clone())))
         .unwrap();
@@ -269,42 +320,72 @@ pub async fn publish(inputs: Publish) -> Result<Response<Full<Bytes>>, hyper::Er
         }
     }
 
-    let host = only_or_error(& ipstr);
+    // let host = only_or_error(& ipstr);
 
-    let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-        Box::pin(async move {
-            heartbeat_handler_helper(req, None, None).await
-        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
-    }));
+    // let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+    //     let tls_clone = tls.clone();
+    //     Box::pin(async move {
+    //         heartbeat_handler_helper(req, None, None, tls_clone).await
+    //     }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+    // }));
 
-    let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
-    info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
-    // send/receive heartbeats to/from broker
-    let incoming = TcpListener::bind(&handler_addr).await.unwrap();
-    loop {
-        let (stream, _) = incoming.accept().await.unwrap();
-        let loc_handler = handler.lock().await.clone();
-        tokio::task::spawn(async move {
-            let service = service_fn(move |req| {
-                let handler_clone = loc_handler.clone();
-                async move {
-                    server(req, handler_clone).await
-                }
-            });
+    // let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+    // info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
+    // // send/receive heartbeats to/from broker
+    // let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+    // let incoming = TcpListener::bind(&handler_addr).await.unwrap();
+    // let service = service_fn(move |req: Request<Incoming>| {
+    //     let handler_clone = Arc::clone(&handler);
+    //     async move {
+    //         let loc_handler = handler_clone.lock().await.clone();
+    //         server(req, loc_handler).await
+    //     }
+    // });
+    // loop {
+    //     let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
+    //     let tls_acceptor = tls_acceptor.clone();
+    //     let service_clone = service.clone();
+    //     tokio::task::spawn(async move {
+    //         let tls_stream = match tls_acceptor.accept(tcp_stream).await {
+    //             Ok(tls_stream) => tls_stream,
+    //             Err(err) => {
+    //                 eprintln!("failed to perform tls handshake: {err:#}");
+    //                 return;
+    //             }
+    //         };
 
-            if let Err(err) = Builder::new(TokioExecutor::new())
-            .serve_connection(TokioIo::new(stream), service)
-            .await {
-                error!("Failed to serve connection: {:?}", err);
-            }
-        });
-    }
+    //         if let Err(err) = Builder::new(TokioExecutor::new())
+    //         .serve_connection(TokioIo::new(tls_stream), service_clone)
+    //         .await {
+    //             error!("Failed to serve connection: {:?}", err);
+    //         }
+    //     });
+    // }
 
     Ok(Response::new(Full::default()))
 
 }
 
 pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    // Set a process wide default crypto provider.
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(feature = "aws-lc-rs")]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Load public certificate.
+    let certs = load_certs("examples/sample.pem").await.unwrap();  //change location
+    // Load private key.
+    let key = load_private_key("examples/sample.rsa").await.unwrap(); //change location
+        
+    // Build TLS configuration.
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| error!("{}", e.to_string())).unwrap();
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+
+    let tls = load_ca(inputs.root_ca).await;
 
     let ips = get_local_ips();
 
@@ -334,7 +415,7 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
     // connect to broker
     // Prepare the HTTPS connector
     let https_connector = HttpsConnectorBuilder::new()
-        .with_native_roots().unwrap()
+        .with_tls_config(tls.clone())
         .https_or_http()
         .enable_http1()
         .build();
@@ -409,30 +490,41 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
     let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
         let service_payload_value = Arc::clone(&service_payload);
         let broker_addr_value = Arc::clone(&broker_addr);
+        let tls_clone = tls.clone();
         Box::pin(async move {
-            heartbeat_handler_helper(req, Some(&service_payload_value), Some(broker_addr_value)).await
+            heartbeat_handler_helper(req, Some(&service_payload_value), Some(broker_addr_value), tls_clone).await
         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
     }));
 
-    let bind_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+    let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
 
     info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
 
     // send/receive heartbeats to/from broker
-    let incoming = TcpListener::bind(&bind_addr).await.unwrap();
+    let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+    let incoming = TcpListener::bind(&handler_addr).await.unwrap();
+    let service = service_fn(move |req: Request<Incoming>| {
+        let handler_clone = Arc::clone(&handler);
+        async move {
+            let loc_handler = handler_clone.lock().await.clone();
+            server(req, loc_handler).await
+        }
+    });
     loop {
-        let loc_handler = handler.lock().await.clone();
-        let (stream, _) = incoming.accept().await.unwrap();
+        let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
+        let tls_acceptor = tls_acceptor.clone();
+        let service_clone = service.clone();
         tokio::task::spawn(async move {
-            let service = service_fn(move |req| {
-                let handler_clone = loc_handler.clone();
-                async move {
-                    server(req, handler_clone).await
+            let tls_stream = match tls_acceptor.accept(tcp_stream).await {
+                Ok(tls_stream) => tls_stream,
+                Err(err) => {
+                    eprintln!("failed to perform tls handshake: {err:#}");
+                    return;
                 }
-            });
+            };
 
             if let Err(err) = Builder::new(TokioExecutor::new())
-            .serve_connection(TokioIo::new(stream), service)
+            .serve_connection(TokioIo::new(tls_stream), service_clone)
             .await {
                 error!("Failed to serve connection: {:?}", err);
             }
@@ -443,11 +535,18 @@ pub async fn claim(inputs: Claim) -> Result<Response<Full<Bytes>>, hyper::Error>
 }
 
 pub async fn collect(inputs: Collect) -> Result<(), std::io::Error> {
+    // Set a process wide default crypto provider.
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(feature = "aws-lc-rs")]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let tls = load_ca(inputs.root_ca).await;
 
     // connect to bind port of service or client
     // Prepare the HTTPS connector
     let https_connector = HttpsConnectorBuilder::new()
-        .with_native_roots().unwrap()
+        .with_tls_config(tls)
         .https_or_http()
         .enable_http1()
         .build();
@@ -496,10 +595,17 @@ pub async fn collect(inputs: Collect) -> Result<(), std::io::Error> {
 }
 
 pub async fn send_msg(inputs: Send) -> Result<(), std::io::Error> {
+    // Set a process wide default crypto provider.
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(feature = "aws-lc-rs")]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let tls = load_ca(inputs.root_ca).await;
 
     // connect to bind port of service or client
-    let https_connector = HttpsConnectorBuilder::new()
-        .with_native_roots().unwrap()
+    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls)
         .https_or_http()
         .enable_http1()
         .build();

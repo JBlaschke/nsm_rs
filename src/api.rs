@@ -143,6 +143,7 @@ pub async fn handle_publish(request: Request<Incoming>) -> Result<Response<Full<
         bind_port,
         service_port,
         key,
+        root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
     });
     Ok(response)
 }
@@ -216,6 +217,8 @@ pub async fn handle_claim(request: Request<Incoming>) -> Result<Response<Full<By
     //     starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
     //     bind_port,
     //     key,
+    //     root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
+
     // });
     let mut response = Response::new(Full::default());
     Ok(response)
@@ -278,6 +281,7 @@ pub async fn handle_collect(request: Request<Incoming>) -> Result<Response<Full<
     //     name,
     //     starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
     //     key,
+    //     root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
     // });
     let mut response = Response::new(Full::default());
     Ok(response)
@@ -350,6 +354,7 @@ pub async fn handle_send(request: Request<Incoming>) -> Result<Response<Full<Byt
     //     starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
     //     msg,
     //     key,
+    //     root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
     // });
     let mut response = Response::new(Full::default());
     Ok(response)

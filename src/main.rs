@@ -9,6 +9,7 @@ mod connection;
 mod service;
 mod utils;
 mod models; 
+mod tls;
 
 mod operations;
 use operations::{list_interfaces, list_ips, listen, claim, publish, collect, send_msg};

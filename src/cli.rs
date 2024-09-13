@@ -106,6 +106,14 @@ pub fn init() -> ArgMatches {
             .num_args(1)
             .required(false)
         )
+        .arg(
+            Arg::new("root_ca")
+            .long("root_ca")
+            .value_name("CA")
+            .help("Root certificate manager store path")
+            .num_args(1)
+            .required(false)
+        )
         .get_matches();
 
         return args;
@@ -181,13 +189,15 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let port = * args.get_one::<i32>("bind_port").unwrap();
             let name =   args.get_one::<String>("interface_name").unwrap();
             let starting_octets = args.get_one::<String>("ip_start");
+            let root_ca = args.get_one::<String>("root_ca");
             return CLIOperation::Listen(
                 Listen{
                     print_v4: print_v4,
                     print_v6:print_v6,
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
-                    bind_port: port
+                    bind_port: port,
+                    root_ca: root_ca.cloned()
                 }
             )
         }
@@ -203,6 +213,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let name = args.get_one::<String>("interface_name").unwrap();
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
+            let root_ca = args.get_one::<String>("root_ca");
             return CLIOperation::Claim(
                 Claim{
                     print_v4: print_v4,
@@ -212,7 +223,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
-                    key: key
+                    key: key,
+                    root_ca: root_ca.cloned()
                 }
             )
         }
@@ -230,6 +242,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
             let service_port    = * args.get_one::<i32>("service_port").unwrap();
+            let root_ca = args.get_one::<String>("root_ca");
             return CLIOperation::Publish(
                 Publish {
                     print_v4: print_v4,
@@ -240,7 +253,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
                     service_port: service_port,
-                    key: key
+                    key: key,
+                    root_ca: root_ca.cloned()
                 }
             )
         }
@@ -253,6 +267,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let name = args.get_one::<String>("interface_name").unwrap();
             let starting_octets =   args.get_one::<String>("ip_start");
             let key  = * args.get_one::<u64>("key").unwrap();
+            let root_ca = args.get_one::<String>("root_ca");
             return CLIOperation::Collect(
                 Collect{
                     print_v4: print_v4,
@@ -261,7 +276,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     port: port,
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
-                    key: key
+                    key: key,
+                    root_ca: root_ca.cloned()
                 }
             )
         }
@@ -276,6 +292,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let name = args.get_one::<String>("interface_name").unwrap();
             let starting_octets =   args.get_one::<String>("ip_start");
             let msg = args.get_one::<String>("msg").unwrap();
+            let root_ca = args.get_one::<String>("root_ca");
             return CLIOperation::Send(
                 Send {
                     print_v4: print_v4,
@@ -285,7 +302,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
                     msg: msg.to_string(),
-                    key: key
+                    key: key,
+                    root_ca: root_ca.cloned()
                 }
             )
         }
