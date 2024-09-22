@@ -1,0 +1,104 @@
+//! # Introduction
+//! 
+//! NERSC Service Mesh manages traffic between service clusters and compute nodes.
+//! A "connection broker" with a fixed address passes the address of a service cluster
+//! for compute nodes to connect to and run a job.
+
+mod service;
+
+mod network;
+use network::{get_local_ips, get_matching_ipstr};
+
+mod connection;
+use connection::ComType;
+
+mod utils;
+use utils::{only_or_error, epoch};
+
+mod cli;
+use cli::{init, parse, CLIOperation};
+
+mod operations;
+use operations::{list_interfaces, list_ips, listen, claim, publish, collect, send_msg};
+
+mod models;
+use models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
+
+mod tls;
+
+use std::thread;
+use std::net::TcpStream;
+use std::sync::{Arc, Mutex, Condvar};
+use std::time::Duration;
+use std::thread::sleep;
+use lazy_static::lazy_static;
+
+#[allow(unused_imports)]
+use log::{debug, error, info, trace, warn};
+use env_logger::Env;
+
+
+/// Entry point for service mesh operations
+///
+/// ## CLIOperations
+/// - ListInterfaces - outputs the interfaces on a given device
+/// - ListIPs - outputs the IP addresses on some interface
+/// - Listen - initiates connection broker, keeps track of services and clients
+/// - Claim - connect to broker to receive the address of an available service
+/// - Publish - connect to broker to publish address of a new service
+/// ### Note
+///  see cli module for more details
+fn main() -> std::io::Result<()> {
+    let args = parse(& init());
+
+    let logging_env = Env::default()
+        .filter_or("NSM_LOG_LEVEL", "warn")
+        .write_style_or("NSM_LOG_STYLE", "always");
+    env_logger::init_from_env(logging_env);
+
+    info!("Started NERSC Service MESH");
+    trace!("Input args: {:?}", args);
+
+    let ips = get_local_ips();
+
+    match args {
+
+        // # ListInterfaces
+        // Lists available interfaces on device
+        CLIOperation::ListInterfaces(inputs) => {
+            let _ = list_interfaces(inputs);
+        }
+
+        // Lists available IP addresses on interface
+        // Match command line entries with variables in struct
+        CLIOperation::ListIPs(inputs) => {
+            let _ = list_ips(inputs);
+        }
+
+        // Inititate broker
+        // Match command line entries with variables in struct
+        CLIOperation::Listen(inputs) => {
+            let _ = listen(inputs, ComType::TCP);
+        }
+
+        // # Claim
+        // Connect to broker and discover available address for data connection.
+        CLIOperation::Claim(inputs) => {
+            let _ = claim(inputs, ComType::TCP);
+        }
+        // # Publish
+        // Connect to broker and publish address for data connection.
+        CLIOperation::Publish(inputs) => {
+            let _ = publish(inputs, ComType::TCP);
+        }
+
+        CLIOperation::Collect(inputs) => {
+            let _ = collect(inputs, ComType::TCP);
+        }
+
+        CLIOperation::Send(inputs) => {
+            let _ = send_msg(inputs, ComType::TCP);
+        }
+    }
+    Ok(())
+}

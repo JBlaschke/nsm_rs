@@ -1,369 +1,166 @@
-use crate::operations::{list_interfaces, list_ips, claim, publish, collect, send_msg};
+//! # Introduction
+//! 
+//! NERSC Service Mesh manages traffic between service clusters and compute nodes.
+//! A "connection broker" with a fixed address passes the address of a service cluster
+//! for compute nodes to connect to and run a job.
 
-use crate::models::{ListInterfaces, ListIPs, Claim, Publish, Collect, Send};
+mod network;
+mod service;
+mod utils;
+mod models; 
+mod tls;
 
-use hyper::http::{Method, Request, Response, StatusCode, Uri};
+mod connection;
+use connection::ComType;
+
+mod operations;
+use operations::{list_interfaces, list_ips, listen, claim, publish, collect, send_msg};
+
+mod cli;
+use cli::{init, parse, CLIOperation};
+
+mod api_builder;
+use api_builder::{handle_claim, handle_collect, handle_publish, handle_list_interfaces,
+    handle_list_ips, handle_send};
+
+#[allow(unused_imports)]
+use log::{debug, error, info, trace, warn};
+use env_logger::Env;
+
+use std::net::SocketAddr;
+use clap::ArgMatches;
+use hyper::http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use tokio::net::TcpListener;
-use std::collections::HashMap;
-use url::Url;
 
-pub async fn handle_list_interfaces(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let mut response = Response::new(Full::default());
+/// Entry point for service mesh operations
+///
+/// ## CLIOperations
+/// - ListInterfaces - outputs the interfaces on a given device
+/// - ListIPs - outputs the IP addresses on some interface
+/// - Listen - initiates connection broker, keeps track of services and clients
+/// - Claim - connect to broker to receive the address of an available service
+/// - Publish - connect to broker to publish address of a new service
+/// ### Note
+///  see cli module for more details
 
-    let url_str = format!("http://localhost{}", request.uri().to_string());
-    let parsed_url = Url::parse(&url_str).unwrap();
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
 
-    // Extract query parameters into a HashMap
-    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+    let matches = init();
 
-    let _ = match list_interfaces(ListInterfaces {
-        verbose: query_pairs.get("verbose").map_or(false, |v| v == "true"),
-        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-    }) {
-        Ok(_output) => {
-            *response.body_mut() = Full::from("Successful request to list_interfaces")
-        },
-        Err(e) => {
-            *response.body_mut() = Full::from(format!("Error processing request: {}", e))
+    if matches.contains_id("operation") {
+        //cli entry
+        let args = parse(& matches);
+
+        let logging_env = Env::default()
+            .filter_or("NSM_LOG_LEVEL", "warn")
+            .write_style_or("NSM_LOG_STYLE", "always");
+        env_logger::init_from_env(logging_env);
+
+        info!("Started NERSC Service MESH");
+        trace!("Input args: {:?}", args);
+
+
+        match args {
+
+            // # ListInterfaces
+            // Lists available interfaces on device
+            CLIOperation::ListInterfaces(inputs) => {
+                let _ = list_interfaces(inputs);
+            }
+
+            // Lists available IP addresses on interface
+            // Match command line entries with variables in struct
+            CLIOperation::ListIPs(inputs) => {
+                let _ = list_ips(inputs);
+            }
+
+            // Inititate broker
+            // Match command line entries with variables in struct
+            CLIOperation::Listen(inputs) => {
+                let _ = listen(inputs, ComType::API).await;
+            }
+
+            // # Claim
+            // Connect to broker and discover available address for data connection.
+            CLIOperation::Claim(inputs) => {
+                let _ = claim(inputs, ComType::API).await;
+            }
+            // # Publish
+            // Connect to broker and publish address for data connection.
+            CLIOperation::Publish(inputs) => {
+                let _ = publish(inputs, ComType::API).await;
+            }
+
+            CLIOperation::Collect(inputs) => {
+                let _ = collect(inputs, ComType::API).await;
+            }
+
+            CLIOperation::Send(inputs) => {
+                let _ = send_msg(inputs, ComType::API).await;
+            }
         }
-    };
-    Ok(response)
-}
-
-pub async fn handle_list_ips(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let mut response = Response::new(Full::default());
-
-    let url_str = format!("http://localhost{}", request.uri().to_string());
-    let parsed_url = Url::parse(&url_str).unwrap();
-
-    // Extract query parameters into a HashMap
-    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
-    println!("{:?}", query_pairs);
-
-    let name = match query_pairs.get("name") {
-        Some(n) => n.to_string(),
-        None => {
-            *response.body_mut() = Full::from("Error: 'name' parameter is required.");
-            return Ok(response);
-        }
-    };
-
-    let _ = match list_ips(ListIPs {
-        verbose: query_pairs.get("verbose").map_or(false, |v| v == "true"),
-        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-        name,
-        starting_octets: query_pairs.get("starting_octets").cloned(),
-    }) {
-        Ok(_output) => {
-            *response.body_mut() = Full::from("Successful request to list_interfaces")
-        },
-        Err(e) => {
-            *response.body_mut() = Full::from(format!("Error processing request: {}", e))
-        }
-    };
-    Ok(response)
-}
-
-pub async fn handle_publish(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {    
-    let mut response = Response::new(Full::default());
-
-    let url_str = format!("http://localhost{}", request.uri().path().to_string());
-    let parsed_url = Url::parse(&url_str).unwrap();
-
-    // Extract query parameters into a HashMap
-    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
-    println!("starting publish ");
-
-    let name = match query_pairs.get("name") {
-        Some(n) => n.to_string(),
-        None => {
-            *response.body_mut() = Full::from("Error: 'name' parameter is required.");
-            return Ok(response);
-        }
-    };
-
-    let host = match query_pairs.get("host") {
-        Some(n) => n.to_string(),
-        None => {
-            *response.body_mut() = Full::from("Error: 'host' parameter is required.");
-            return Ok(response);
-        }
-    };
-
-    let port = match query_pairs.get("port")
-        .and_then(|p| p.parse::<i32>().ok()) {
-        Some(port) => port,
-        None => {
-            *response.body_mut() = Full::from("Error: 'port' parameter is required.");
-            return Ok(response);
-        }
-    };
-
-    let bind_port = match query_pairs.get("bind_port")
-    .and_then(|p| p.parse::<i32>().ok()) {
-    Some(port) => port,
-    None => {
-        *response.body_mut() = Full::from("Error: 'bind_port' parameter is required.");
-        return Ok(response);
+        return Ok(());
     }
-    };
-
-    let service_port = match query_pairs.get("service_port")
-    .and_then(|p| p.parse::<i32>().ok()) {
-    Some(port) => port,
-    None => {
-        *response.body_mut() = Full::from("Error: 'service_port' parameter is required.");
-        return Ok(response);
-    }
-    };  
-
-    let key = match query_pairs.get("key")
-    .and_then(|p| p.parse::<u64>().ok()) {
-    Some(k) => k,
-    None => {
-        *response.body_mut() = Full::from("Error: 'key' parameter is required.");
-        return Ok(response);
-    }
-    };
+    else {
+        // api entry
+        println!("Starting service on 0.0.0.0.1:8080");
+        let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
+        let incoming = TcpListener::bind(&addr).await?;
+        loop {
+            let (stream, _) = incoming.accept().await?;
     
-    let _result = publish(Publish {
-        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-        host,
-        port,
-        name,
-        starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
-        bind_port,
-        service_port,
-        key,
-        root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
-    });
-    Ok(response)
-}
-
-pub async fn handle_claim(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    // let url_str = format!("http://localhost{}", request.uri().path().to_string());
-    // let parsed_url = Url::parse(&url_str).unwrap();
-
-    // // Extract query parameters into a HashMap
-    // let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
-
-    // let name = match query_pairs.get("name") {
-    //     Some(n) => n.to_string(),
-    //     None => {
-    //         let response = Response::from_string("Error: 'name' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let host = match query_pairs.get("host") {
-    //     Some(n) => n.to_string(),
-    //     None => {
-    //         let response = Response::from_string("Error: 'host' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let port = match query_pairs.get("port")
-    //     .and_then(|p| p.parse::<i32>().ok()) {
-    //     Some(port) => port,
-    //     None => {
-    //         let response = Response::from_string("Error: 'port' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let bind_port = match query_pairs.get("bind_port")
-    // .and_then(|p| p.parse::<i32>().ok()) {
-    // Some(port) => port,
-    // None => {
-    //     let response = Response::from_string("Error: 'bind_port' parameter is required.")
-    //         .with_status_code(400);
-    //     let _ = request.respond(response);
-    //     return;
-    // }
-    // };
-
-    // let key = match query_pairs.get("key")
-    // .and_then(|p| p.parse::<u64>().ok()) {
-    // Some(k) => k,
-    // None => {
-    //     let response = Response::from_string("Error: 'key' parameter is required.")
-    //         .with_status_code(400);
-    //     let _ = request.respond(response);
-    //     return;
-    // }
-    // };
-
-    // let _result = claim(Claim {
-    //     print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-    //     print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-    //     host,
-    //     port,
-    //     name,
-    //     starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
-    //     bind_port,
-    //     key,
-    //     root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
-
-    // });
-    let mut response = Response::new(Full::default());
-    Ok(response)
-}
-
-pub async fn handle_collect(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    // let url_str = format!("http://localhost{}", request.uri().path().to_string());
-    // let parsed_url = Url::parse(&url_str).unwrap();
-
-    // // Extract query parameters into a HashMap
-    // let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
-
-    // let name = match query_pairs.get("name") {
-    //     Some(n) => n.to_string(),
-    //     None => {
-    //         let response = Response::from_string("Error: 'name' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let host = match query_pairs.get("host") {
-    //     Some(n) => n.to_string(),
-    //     None => {
-    //         let response = Response::from_string("Error: 'host' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let port = match query_pairs.get("port")
-    //     .and_then(|p| p.parse::<i32>().ok()) {
-    //     Some(port) => port,
-    //     None => {
-    //         let response = Response::from_string("Error: 'port' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let key = match query_pairs.get("key")
-    // .and_then(|p| p.parse::<u64>().ok()) {
-    // Some(k) => k,
-    // None => {
-    //     let response = Response::from_string("Error: 'key' parameter is required.")
-    //         .with_status_code(400);
-    //     let _ = request.respond(response);
-    //     return;
-    // }
-    // };
-
-    // let _result = collect(Collect {
-    //     print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-    //     print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-    //     host,
-    //     port,
-    //     name,
-    //     starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
-    //     key,
-    //     root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
-    // });
-    let mut response = Response::new(Full::default());
-    Ok(response)
-}
-
-pub async fn handle_send(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    // let url_str = format!("http://localhost{}", request.uri().path().to_string());
-    // let parsed_url = Url::parse(&url_str).unwrap();
-
-    // // Extract query parameters into a HashMap
-    // let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+            tokio::task::spawn(async move {
+                let service = service_fn(move |req| handle_requests(req));
     
-    // let name = match query_pairs.get("name") {
-    //     Some(n) => n.to_string(),
-    //     None => {
-    //         let response = Response::from_string("Error: 'name' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
+                if let Err(err) = Builder::new(TokioExecutor::new())
+                .serve_connection(TokioIo::new(stream), service)
+                .await {
+                    println!("Failed to serve connection: {:?}", err);
+                }
+            });
+        }
+    }
 
-    // let host = match query_pairs.get("host") {
-    //     Some(n) => n.to_string(),
-    //     None => {
-    //         let response = Response::from_string("Error: 'host' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let port = match query_pairs.get("port")
-    //     .and_then(|p| p.parse::<i32>().ok()) {
-    //     Some(port) => port,
-    //     None => {
-    //         let response = Response::from_string("Error: 'port' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let msg = match query_pairs.get("msg") {
-    //     Some(n) => n.to_string(),
-    //     None => {
-    //         let response = Response::from_string("Error: 'msg' parameter is required.")
-    //             .with_status_code(400);
-    //         let _ = request.respond(response);
-    //         return;
-    //     }
-    // };
-
-    // let key = match query_pairs.get("key")
-    // .and_then(|p| p.parse::<u64>().ok()) {
-    // Some(k) => k,
-    // None => {
-    //     let response = Response::from_string("Error: 'key' parameter is required.")
-    //         .with_status_code(400);
-    //     let _ = request.respond(response);
-    //     return;
-    // }
-    // };
-    // let _result = send_msg(Send {
-    //     print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-    //     print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-    //     host,
-    //     port,
-    //     name,
-    //     starting_octets: Some(query_pairs.get("starting_octets").unwrap_or(&"".to_string()).clone()),
-    //     msg,
-    //     key,
-    //     root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
-    // });
-    let mut response = Response::new(Full::default());
-    Ok(response)
+    return Ok(());
 }
 
-// fn handle_task_id_update(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+async fn handle_requests(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let mut response = Response::new(Full::default());
 
-// }
-
-// fn handle_task_update(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-
-// }
+    match (method, path.as_str()) {
+        (Method::GET, p) if p.starts_with("/list_interfaces") => {
+            handle_list_interfaces(request).await
+        },
+        (Method::GET, p) if p.starts_with("/list_ips") => {
+            handle_list_ips(request).await
+        },
+        (Method::POST, p) if p.starts_with("/publish") => {
+            handle_publish(request).await
+        },
+        (Method::GET, p) if p.starts_with("/claim") => {
+            handle_claim(request).await
+        },
+        (Method::GET, p) if p.starts_with("/collect") => {
+            handle_collect(request).await
+        },
+        (Method::POST, p) if p.starts_with("/send") => {
+            handle_send(request).await
+        },
+        // (Method::Get, "/task_update") => {
+        //     let _ = handle_task_update(request);
+        // },
+        _ => {
+            // Return 404 not found response.
+            *response.status_mut() = StatusCode::NOT_FOUND;
+            Ok(response)
+        }
+    }
+}

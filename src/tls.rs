@@ -7,10 +7,10 @@ use hyper_rustls::ConfigBuilderExt;
 use log::{debug, error, info, trace, warn};
 
 // Load public certificate from file.
-pub async fn load_certs(filename: &str) -> Result<Vec<CertificateDer<'static>>, std::io::Error> {
-    println!("{}", filename);
+async fn load_certs() -> Result<Vec<CertificateDer<'static>>, std::io::Error> {
+    let filename = env::var("CERT_PATH").expect("CERT_PATH not set");
     // Open certificate file.
-    let certfile = fs::File::open(filename)
+    let certfile = fs::File::open(filename.clone())
         .map_err(|e| error!("{}", format!("failed to open {}: {}", filename, e))).unwrap();
     let mut reader = io::BufReader::new(certfile);
 
@@ -19,9 +19,10 @@ pub async fn load_certs(filename: &str) -> Result<Vec<CertificateDer<'static>>, 
 }
 
 // Load private key from file
-pub async fn load_private_key(filename: &str) -> Result<PrivateKeyDer<'static>, std::io::Error> {
+async fn load_private_key() -> Result<PrivateKeyDer<'static>, std::io::Error> {
+    let filename = env::var("KEY_PATH").expect("KEY_PATH not set");
     // Open keyfile.
-    let keyfile = fs::File::open(filename)
+    let keyfile = fs::File::open(filename.clone())
         .map_err(|e| error!("{}", format!("failed to open {}: {}", filename, e))).unwrap();
     let mut reader = io::BufReader::new(keyfile);
 
@@ -29,7 +30,7 @@ pub async fn load_private_key(filename: &str) -> Result<PrivateKeyDer<'static>, 
     rustls_pemfile::private_key(&mut reader).map(|key| key.unwrap())
 }
 
-pub async fn load_ca(root_ca: Option<String>) -> ClientConfig{
+pub async fn load_ca(root_ca: Option<String>) -> Result<ClientConfig, std::io::Error>{
     let mut ca = match root_ca {
         Some(ref path) => {
             let f = fs::File::open(path)
@@ -58,5 +59,26 @@ pub async fn load_ca(root_ca: Option<String>) -> ClientConfig{
                 .with_native_roots().unwrap()
                 .with_no_client_auth(),
     };
-    return tls;
+    Ok(tls)
+}
+
+pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
+        // Set a process wide default crypto provider.
+        #[cfg(feature = "ring")]
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        #[cfg(feature = "aws-lc-rs")]
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        // Load public certificate.
+        let certs = load_certs().await.unwrap();
+        let key = load_private_key().await.unwrap();
+
+        // Build TLS configuration.
+        let mut server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| error!("{}", e.to_string())).unwrap();
+        server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+
+        Ok(server_config)
 }

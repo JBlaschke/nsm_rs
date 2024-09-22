@@ -23,7 +23,7 @@ use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::server::conn::auto::Builder;
 use tokio::sync::Mutex;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use std::future::Future;
 use rustls::ClientConfig;
 
@@ -32,8 +32,8 @@ use rustls::ClientConfig;
 use log::{debug, error, info, trace, warn};
 
 use crate::utils::{only_or_error, epoch};
-use crate::connection::{
-    MessageHeader, Message, Addr, serialize_message, deserialize_message};
+use crate::connection::{MessageHeader, Message, Addr, send, receive,
+     serialize_message, deserialize_message, collect_request};
 
 /// Store client or service metadata
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -346,13 +346,13 @@ pub struct State {
     /// true when event queue contains events to handle, false when event queue is empty
     pub running: bool,
     /// tls client configuration to send heartbeat messages
-    pub tls: ClientConfig
+    pub tls: Option<ClientConfig>
 }
 
 
 impl State {
-    /// inititates State struct with empty and default variables
-    pub fn new(tls: ClientConfig) -> State {
+    /// inititate State struct with empty and default variables
+    pub fn new(tls: Option<ClientConfig>) -> State {
         State{
             clients: HashMap::new(),
             claims: HashMap::new(),
@@ -374,7 +374,7 @@ impl State {
         // connect to broker
         // Prepare the HTTPS connector
         let https_connector = HttpsConnectorBuilder::new()
-            .with_tls_config(self.tls.clone())
+            .with_tls_config(self.tls.clone().unwrap())
             .https_or_http()
             .enable_http1()
             .build();
@@ -546,17 +546,18 @@ pub fn deserialize(payload: & String) -> Payload {
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
 pub async fn request_handler(
-    state: &Arc<(Mutex<State>, Notify)>, mut request: Request<Incoming>
+    state: &Arc<(Mutex<State>, Notify)>, stream: Option<Arc<Mutex<TcpStream>>>, 
+    mut request: Option<Request<Incoming>>
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     trace!("Starting request handler");
 
     // receive Payload from incoming connection
-    let whole_body = request.collect().await.unwrap().aggregate();
-    let mut data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
-    println!("{:?}", data);
-    let json = serde_json::to_string(&data).unwrap();
-    let message = deserialize_message(& json);
-    println!("{:?}", message);
+    let message = match (&stream, &mut request) {
+        (Some(s), None) => receive(&s).await.unwrap(),
+        (None, Some(r)) => collect_request(r.body_mut()).await.unwrap(), 
+        _ => panic!("Unexpected state: no stream or request.")
+    };
+
 
     // // check type of Message, only want to handle PUB or CLAIM Message
     let payload = match message.header {
@@ -577,120 +578,139 @@ pub async fn request_handler(
         MessageHeader::PUB => {
             trace!("Publishing Service: {:?}", payload);
 
-            // send acknowledgment of successful request
-            let json = serialize_message( & Message {
-                header: MessageHeader::ACK,
-                body: "".to_string()
-            });
-            response = Response::builder()
-                .status(StatusCode::OK)
-                .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(Full::new(Bytes::from(json))).unwrap();
-
             let (lock, notify) = &**state;
             let mut state_loc = lock.lock().await;
 
-            let _ = state_loc.add(payload, 0).await; // add service to clients hashmap and event loop 
-            state_loc.running = true; // set running to true for event loop
-            notify.notify_one(); // notify event loop of new Event
-
-            println!("Now state:");
-            state_loc.print().await; // print state of clients hashmap
-        },
-        MessageHeader::CLAIM => {
-            trace!("Claiming Service: {:?}", payload);
-
-            let (lock, _notify) = &**state;
-            let mut state_loc = lock.lock().await;
-            let mut service_id = 0;
-            let mut claim_fail = 0; // initiate counter for connection failure
-            // loop solves race case when client starts faster than service can be published
-            loop {
-                println!("{:?}", state_loc.clients.clone());
-                match state_loc.claim(payload.key).await{
-                    Ok(p) => {
-                        println!("found key");
-                        service_id = (*p).service_id; // capture claimed service's service_id for add()
-                        // send acknowledgment of successful service claim with service's payload containing its address
-                        let json = serialize_message( & Message {
-                            header: MessageHeader::ACK,
-                            body: serialize(p) // address extracted in main to print to client
-                        });
-                        response = Response::builder()
-                            .status(StatusCode::OK)
-                            .header(hyper::header::CONTENT_TYPE, "application/json")
-                            .body(Full::new(Bytes::from(json))).unwrap();
-                        break;
-                    },
-                    Err(e) => {
-                        println!("looking for key, not found: {:?}", e);
-                        claim_fail += 1;
-                        if claim_fail <= 5{
-                            sleep(Duration::from_millis(200)).await;
-                            continue;
-                        }
-                        let json = serialize_message( & Message {
-                            header: MessageHeader::NULL,
-                            body: "".to_string()
-                        });
-                        // notify main() of failure to claim an available service
-                        println!("bad request");
-                        response = Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .header(hyper::header::CONTENT_TYPE, "application/json")
-                            .body(Full::new(Bytes::from(json))).unwrap();
-                        return Ok(response);
-                    },
-                }
-            }
-            println!("adding client");
-            let _ = state_loc.add(payload, service_id).await; // add client to clients hashmap and event loop
-
-            println!("Now state:");
-            state_loc.print().await; // print state of clients hashmap
-        },
-        MessageHeader::MSG => {
-            info!("adding msg to queue");
-            let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
-            trace!("Sending Message: {:?}", msg_body);
-
-            let (lock, _notify) = &**state;
-            let state_loc = lock.lock().await;
-
-            let mut counter = 0;
-            while counter < 10 {
-                {
-                    let mut deque = state_loc.deque.lock().await;
-                    if let Some(hb) = deque.iter_mut().find_map(|e| {
-                        if e.id == msg_body.id {
-                            println!("found id");
-                            Some(e)
-                        } else {
-                            println!("id not found");
-                            None
-                        }
-                    }) {
-                        hb.msg_body = msg_body.clone();
-                        trace!("Altering hb message {:?}", hb);
-                        let json = serialize_message( & Message {
-                            header: MessageHeader::MSG,
-                            body: message.body.clone()
-                        });
-                        response = Response::builder()
+            match (stream, request) {
+                (Some(s), None) => {
+                    let _ = state_loc.add(payload, 0).await; // add service to clients hashmap and event loop 
+                    state_loc.running = true; // set running to true for event loop
+                    notify.notify_one(); // notify event loop of new Event
+        
+                    println!("Now state:");
+                    state_loc.print().await; // print state of clients hashmap
+                },
+                (None, Some(r)) => {
+                    // send acknowledgment of successful request
+                    let json = serialize_message( & Message {
+                        header: MessageHeader::ACK,
+                        body: "".to_string()
+                    });
+                    response = Response::builder()
                         .status(StatusCode::OK)
                         .header(hyper::header::CONTENT_TYPE, "application/json")
                         .body(Full::new(Bytes::from(json))).unwrap();
-                        break;
-                    }
-                    else{
-                        counter += 1;
-                    }
-                }
-                sleep(Duration::from_millis(1000)).await;
-            }
-            if counter == 10 {
-                warn!("Could not find matching service");
-            }
+                    
+                    // add service to clients hashmap and event loop
+                    let _ = state_loc.add(payload, 0).await;
+                    state_loc.running = true; // set running to true for event loop
+                    notify.notify_one(); // notify event loop of new Event
+
+                    // print state of clients hashmap
+                    println!("Now state:");
+                    state_loc.print().await;
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
+            };
+        },
+        MessageHeader::CLAIM => {
+            // trace!("Claiming Service: {:?}", payload);
+
+            // let (lock, notify) = &**state;
+            // let mut state_loc = async move {
+            //     lock.lock().await
+            // };
+            // let mut service_id = 0;
+            // let mut claim_fail = 0; // initiate counter for connection failure
+            // // loop solves race case when client starts faster than service can be published
+            // loop {
+            //     println!("{:?}", state_loc.clients.clone());
+            //     match state_loc.claim(payload.key).await{
+            //         Ok(p) => {
+            //             println!("found key");
+            //             service_id = (*p).service_id; // capture claimed service's service_id for add()
+            //             // send acknowledgment of successful service claim with service's payload containing its address
+            //             let json = serialize_message( & Message {
+            //                 header: MessageHeader::ACK,
+            //                 body: serialize(p) // address extracted in main to print to client
+            //             });
+            //             response = Response::builder()
+            //                 .status(StatusCode::OK)
+            //                 .header(hyper::header::CONTENT_TYPE, "application/json")
+            //                 .body(Full::new(Bytes::from(json))).unwrap();
+            //             break;
+            //         },
+            //         Err(e) => {
+            //             println!("looking for key, not found: {:?}", e);
+            //             claim_fail += 1;
+            //             if claim_fail <= 5{
+            //                 sleep(Duration::from_millis(200)).await;
+            //                 continue;
+            //             }
+            //             let json = serialize_message( & Message {
+            //                 header: MessageHeader::NULL,
+            //                 body: "".to_string()
+            //             });
+            //             // notify main() of failure to claim an available service
+            //             println!("bad request");
+            //             response = Response::builder()
+            //                 .status(StatusCode::BAD_REQUEST)
+            //                 .header(hyper::header::CONTENT_TYPE, "application/json")
+            //                 .body(Full::new(Bytes::from(json))).unwrap();
+            //             return Ok(response);
+            //         },
+            //     }
+            // }
+            // println!("adding client");
+            // let _ = state_loc.add(payload, service_id).await; // add client to clients hashmap and event loop
+
+            // println!("Now state:");
+            // state_loc.print().await; // print state of clients hashmap
+        },
+        MessageHeader::MSG => {
+            // info!("adding msg to queue");
+            // let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
+            // trace!("Sending Message: {:?}", msg_body);
+
+            // let (lock, notify) = &**state;
+            // let mut state_loc = async move {
+            //     lock.lock().await
+            // };
+
+            // let mut counter = 0;
+            // while counter < 10 {
+            //     {
+            //         let mut deque = state_loc.deque.lock().await;
+            //         if let Some(hb) = deque.iter_mut().find_map(|e| {
+            //             if e.id == msg_body.id {
+            //                 println!("found id");
+            //                 Some(e)
+            //             } else {
+            //                 println!("id not found");
+            //                 None
+            //             }
+            //         }) {
+            //             hb.msg_body = msg_body.clone();
+            //             trace!("Altering hb message {:?}", hb);
+            //             let json = serialize_message( & Message {
+            //                 header: MessageHeader::MSG,
+            //                 body: message.body.clone()
+            //             });
+            //             response = Response::builder()
+            //             .status(StatusCode::OK)
+            //             .header(hyper::header::CONTENT_TYPE, "application/json")
+            //             .body(Full::new(Bytes::from(json))).unwrap();
+            //             break;
+            //         }
+            //         else{
+            //             counter += 1;
+            //         }
+            //     }
+            //     sleep(Duration::from_millis(1000)).await;
+            // }
+            // if counter == 10 {
+            //     warn!("Could not find matching service");
+            // }
 
         }
         _ => {panic!("This should not be reached!");}
