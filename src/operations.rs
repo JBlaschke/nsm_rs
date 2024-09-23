@@ -33,8 +33,8 @@ use tokio_rustls::TlsAcceptor;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-pub fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
-    let ips = get_local_ips();
+pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
+    let ips = get_local_ips().await;
 
     if inputs.print_v4 {info!("Listing Matching IPv4 Interfaces");}
     if inputs.print_v6 {info!("Listing Matching IPv6 Interfaces");}
@@ -76,16 +76,16 @@ pub fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
 
 }
 
-pub fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
+pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
-    let ips = get_local_ips();
+    let ips = get_local_ips().await;
     
     if inputs.print_v4 {info!("Listing Matching IPv4 Addresses");}
     if inputs.print_v6 {info!("Listing Matching IPv6 Addresses");}
     if inputs.print_v4 {
         let ipstr = get_matching_ipstr(
             & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
-        );
+        ).await;
         if inputs.verbose {println!("IPv4 Addresses for {}:", inputs.name);}
         for ip in ipstr {
             if inputs.verbose {
@@ -99,7 +99,7 @@ pub fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
     if inputs.print_v6 {
         let ipstr = get_matching_ipstr(
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
-        );
+        ).await;
         if inputs.verbose {println!("IPv6 Addresses for {}:", inputs.name);}
         for ip in ipstr {
             if inputs.verbose {
@@ -116,24 +116,26 @@ pub fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
 pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes>>), hyper::Error> {
     trace!("Setting up listener...");
-    let ips = get_local_ips();
+    let ips = get_local_ips().await;
 
     // identify local ip address
     let ipstr = if inputs.print_v4 {
         get_matching_ipstr(
             & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
-        )
+        ).await
     } else {
         get_matching_ipstr(
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
-        )
+        ).await
     };
+    println!("done searching for addresses");
     let host = only_or_error(& ipstr);
     let mut state = Arc::new((Mutex::new(State::new(None)), Notify::new()));
     let state_clone = Arc::clone(& state);
-
+    println!("state initiated");
     match com{
         ComType::TCP => {
+            println!("entering tcp mode");
             let state_clone = Arc::clone(& state);
 
             let handler =  move |stream: Arc<Mutex<TcpStream>>| {
@@ -142,7 +144,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
                     return request_handler(& state_clone, Some(stream), None).await;
                 }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
             };
-
+            println!("handler set");
             let addr = Addr {
                 host: host.to_string(),
                 port: inputs.bind_port
@@ -153,7 +155,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
             // thread handles incoming connections and adds them to State and event queue
             let _thread_handler = tokio::spawn(async move {
                 let _ = tcp_server(& addr, handler).await;
-            }).await.unwrap();
+            });
         },
         ComType::API => {
             let server_config = tls_config().await.unwrap();
@@ -223,18 +225,18 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
     let server_config = tls_config().await.unwrap();
     let tls = load_ca(inputs.root_ca).await.unwrap();
 
-    let ips = get_local_ips();
+    let ips = get_local_ips().await;
 
     let (ipstr, all_ipstr) = if inputs.print_v4 {(
         get_matching_ipstr(
             & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
-        ),
-        get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None)
+        ).await,
+        get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None).await
     )} else {(
         get_matching_ipstr(
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
-        ),
-        get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None)
+        ).await,
+        get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None).await
     )};
 
     let payload = serialize(& Payload {
@@ -364,18 +366,18 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
     let server_config = tls_config().await.unwrap();
     let tls = load_ca(inputs.root_ca).await.unwrap();
 
-    let ips = get_local_ips();
+    let ips = get_local_ips().await;
 
     let (ipstr, _all_ipstr) = if inputs.print_v4 {(
         get_matching_ipstr(
             & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
-        ),
-        get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None)
+        ).await,
+        get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None).await
     )} else {(
         get_matching_ipstr(
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
-        ),
-        get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None)
+        ).await,
+        get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None).await
     )};
 
     let payload = serialize(& Payload {

@@ -48,7 +48,8 @@ use env_logger::Env;
 /// - Publish - connect to broker to publish address of a new service
 /// ### Note
 ///  see cli module for more details
-fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     let args = parse(& init());
 
     let logging_env = Env::default()
@@ -59,45 +60,43 @@ fn main() -> std::io::Result<()> {
     info!("Started NERSC Service MESH");
     trace!("Input args: {:?}", args);
 
-    let ips = get_local_ips();
-
     match args {
 
         // # ListInterfaces
         // Lists available interfaces on device
         CLIOperation::ListInterfaces(inputs) => {
-            let _ = list_interfaces(inputs);
+            let _ = list_interfaces(inputs).await;
         }
 
         // Lists available IP addresses on interface
         // Match command line entries with variables in struct
         CLIOperation::ListIPs(inputs) => {
-            let _ = list_ips(inputs);
+            let _ = list_ips(inputs).await;
         }
 
         // Inititate broker
         // Match command line entries with variables in struct
         CLIOperation::Listen(inputs) => {
-            let _ = listen(inputs, ComType::TCP);
+            let _ = listen(inputs, ComType::TCP).await;
         }
 
         // # Claim
         // Connect to broker and discover available address for data connection.
         CLIOperation::Claim(inputs) => {
-            let _ = claim(inputs, ComType::TCP);
+            let _ = claim(inputs, ComType::TCP).await;
         }
         // # Publish
         // Connect to broker and publish address for data connection.
         CLIOperation::Publish(inputs) => {
-            let _ = publish(inputs, ComType::TCP);
+            let _ = publish(inputs, ComType::TCP).await;
         }
 
         CLIOperation::Collect(inputs) => {
-            let _ = collect(inputs, ComType::TCP);
+            let _ = collect(inputs, ComType::TCP).await;
         }
 
         CLIOperation::Send(inputs) => {
-            let _ = send_msg(inputs, ComType::TCP);
+            let _ = send_msg(inputs, ComType::TCP).await;
         }
     }
     Ok(())

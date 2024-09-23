@@ -27,7 +27,7 @@ pub async fn handle_list_interfaces(request: Request<Incoming>) -> Result<Respon
         verbose: query_pairs.get("verbose").map_or(false, |v| v == "true"),
         print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
         print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-    }) {
+    }).await {
         Ok(_output) => {
             *response.body_mut() = Full::from("Successful request to list_interfaces")
         },
@@ -62,7 +62,7 @@ pub async fn handle_list_ips(request: Request<Incoming>) -> Result<Response<Full
         print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
         name,
         starting_octets: query_pairs.get("starting_octets").cloned(),
-    }) {
+    }).await {
         Ok(_output) => {
             *response.body_mut() = Full::from("Successful request to list_interfaces")
         },
