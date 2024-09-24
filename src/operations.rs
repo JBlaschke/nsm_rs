@@ -128,14 +128,12 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
         ).await
     };
-    println!("done searching for addresses");
     let host = only_or_error(& ipstr);
     let mut state = Arc::new((Mutex::new(State::new(None)), Notify::new()));
     let state_clone = Arc::clone(& state);
-    println!("state initiated");
+   
     match com{
         ComType::TCP => {
-            println!("entering tcp mode");
             let state_clone = Arc::clone(& state);
 
             let handler =  move |stream: Arc<Mutex<TcpStream>>| {
@@ -144,7 +142,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
                     return request_handler(& state_clone, Some(stream), None).await;
                 }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
             };
-            println!("handler set");
+
             let addr = Addr {
                 host: host.to_string(),
                 port: inputs.bind_port
@@ -159,8 +157,8 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
         },
         ComType::API => {
             let server_config = tls_config().await.unwrap();
-            // initialize State struct
             let tls = load_ca(inputs.root_ca).await.unwrap();
+            // initialize State struct using tls
             state = Arc::new((Mutex::new(State::new(Some(tls))), Notify::new()));
             let state_clone = Arc::clone(& state);
 
@@ -222,9 +220,6 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
 
 pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
-    let server_config = tls_config().await.unwrap();
-    let tls = load_ca(inputs.root_ca).await.unwrap();
-
     let ips = get_local_ips().await;
 
     let (ipstr, all_ipstr) = if inputs.print_v4 {(
@@ -249,114 +244,165 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         id: 0,
         service_id: 0,
     });
+    let host = only_or_error(& ipstr);
 
-    // connect to broker
-    // Prepare the HTTPS connector
-    let https_connector = HttpsConnectorBuilder::new()
-        .with_tls_config(tls.clone())
-        .https_or_http()
-        .enable_http1()
-        .build();
+    let addr = Addr {
+        host: host.to_string(),
+        port: inputs.bind_port
+    };
 
-    println!("configured https connector: {:?} with tls: {:?}", https_connector, tls.clone());
-    // Build the Client using the HttpsConnector
-    let client = Client::builder(TokioExecutor::new()).build(https_connector);
+    match com{
+        ComType::TCP => {
+            // connect to broker
+            let stream = match connect(& Addr{
+                host: inputs.host, port: inputs.port}){
+                    Ok(s) => s,
+                    Err(_e) => {
+                        return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
+                        }
+            };
+            let stream_mut = Arc::new(Mutex::new(stream));
+            let ack = send(& stream_mut, & Message{
+                header: MessageHeader::PUB,
+                body: payload
+            });
 
-    let msg = serialize_message(& Message{
-        header: MessageHeader::PUB,
-        body: payload
-    });
-
-    let mut read_fail = 0;
-    let timeout_duration = Duration::from_millis(6000);
-    loop {
-        sleep(Duration::from_millis(1000)).await;
-        trace!("sending request to {}:{}", inputs.host, inputs.port);
-
-        let req = Request::builder()
-        .method(Method::POST)
-        .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from(msg.clone())))
-        .unwrap();
-
-        let start = Instant::now();
-        let result = timeout(timeout_duration, client.request(req)).await;
-
-        match result {
-            Ok(Ok(resp)) => {
-                trace!("Received response: {:?}", resp);
-                let body = resp.collect().await.unwrap().aggregate();
-                let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
-                let json = serde_json::to_string(&data).unwrap();
-                let m = deserialize_message(& json);
-                match m.header {
-                    MessageHeader::ACK => {
-                        info!("Server acknowledged PUB.");
-                        break;
+            // check for successful connection
+            match ack {
+                Ok(m) => {
+                    trace!("Received response: {:?}", m);
+                    match m.header {
+                        MessageHeader::ACK => {
+                            info!("Server acknowledged PUB.")
+                        }
+                        _ => {
+                            warn!("Server responds with unexpected message: {:?}", m)
+                        }
                     }
-                    _ => {
-                        warn!("Server responds with unexpected message: {:?}", m)
-                    }
+                }
+                Err(e) => {
+                    error!("Encountered error: {:?}", e);
                 }
             }
-            Ok(Err(e)) => {
-                read_fail += 1;
-                if read_fail > 5 {
-                    panic!("Failed to send request to listener")
+
+            let handler =  move |stream: Arc<Mutex<TcpStream>>| {
+                return heartbeat_handler_helper(stream, None, None);
+            };
+
+            // send/receive heartbeats to/from broker
+            let _ = tcp_server(& addr, handler);
+        },
+        ComType::API => {
+            let server_config = tls_config().await.unwrap();
+            let tls = load_ca(inputs.root_ca).await.unwrap();
+            // connect to broker
+            // Prepare the HTTPS connector
+            let https_connector = HttpsConnectorBuilder::new()
+            .with_tls_config(tls.clone())
+            .https_or_http()
+            .enable_http1()
+            .build();
+
+            println!("configured https connector: {:?} with tls: {:?}", https_connector, tls.clone());
+            // Build the Client using the HttpsConnector
+            let client = Client::builder(TokioExecutor::new()).build(https_connector);
+
+            let msg = serialize_message(& Message{
+                header: MessageHeader::PUB,
+                body: payload
+            });
+
+            let mut read_fail = 0;
+            let timeout_duration = Duration::from_millis(6000);
+            loop {
+                sleep(Duration::from_millis(1000)).await;
+                trace!("sending request to {}:{}", inputs.host, inputs.port);
+
+                let req = Request::builder()
+                .method(Method::POST)
+                .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(msg.clone())))
+                .unwrap();
+
+                let start = Instant::now();
+                let result = timeout(timeout_duration, client.request(req)).await;
+
+                match result {
+                    Ok(Ok(resp)) => {
+                        trace!("Received response: {:?}", resp);
+                        let body = resp.collect().await.unwrap().aggregate();
+                        let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                        let json = serde_json::to_string(&data).unwrap();
+                        let m = deserialize_message(& json);
+                        match m.header {
+                            MessageHeader::ACK => {
+                                info!("Server acknowledged PUB.");
+                                break;
+                            }
+                            _ => {
+                                warn!("Server responds with unexpected message: {:?}", m)
+                            }
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        read_fail += 1;
+                        if read_fail > 5 {
+                            panic!("Failed to send request to listener")
+                        }
+                    },
+                    Err(_) => {
+                        read_fail += 1;
+                        if read_fail > 5 {
+                            panic!("Requests to listener timed out")
+                        }
+                    },
                 }
-            },
-            Err(_) => {
-                read_fail += 1;
-                if read_fail > 5 {
-                    panic!("Requests to listener timed out")
-                }
-            },
+            }
+
+            // let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+            //     let tls_clone = tls.clone();
+            //     Box::pin(async move {
+            //         heartbeat_handler_helper(req, None, None, tls_clone).await
+            //     }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+            // }));
+
+            // let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+            // info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
+            // // send/receive heartbeats to/from broker
+            // let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+            // let incoming = TcpListener::bind(&handler_addr).await.unwrap();
+            // let service = service_fn(move |req: Request<Incoming>| {
+            //     let handler_clone = Arc::clone(&handler);
+            //     async move {
+            //         let loc_handler = handler_clone.lock().await.clone();
+            //         api_server(req, loc_handler).await
+            //     }
+            // });
+            // loop {
+            //     let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
+            //     let tls_acceptor = tls_acceptor.clone();
+            //     let service_clone = service.clone();
+            //     tokio::task::spawn(async move {
+            //         let tls_stream = match tls_acceptor.accept(tcp_stream).await {
+            //             Ok(tls_stream) => tls_stream,
+            //             Err(err) => {
+            //                 eprintln!("failed to perform tls handshake: {err:#}");
+            //                 return;
+            //             }
+            //         };
+
+            //         if let Err(err) = Builder::new(TokioExecutor::new())
+            //         .serve_connection(TokioIo::new(tls_stream), service_clone)
+            //         .await {
+            //             error!("Failed to serve connection: {:?}", err);
+            //         }
+            //     });
+            // }
+
         }
     }
-
-    // let host = only_or_error(& ipstr);
-
-    // let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-    //     let tls_clone = tls.clone();
-    //     Box::pin(async move {
-    //         heartbeat_handler_helper(req, None, None, tls_clone).await
-    //     }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
-    // }));
-
-    // let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
-    // info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
-    // // send/receive heartbeats to/from broker
-    // let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
-    // let incoming = TcpListener::bind(&handler_addr).await.unwrap();
-    // let service = service_fn(move |req: Request<Incoming>| {
-    //     let handler_clone = Arc::clone(&handler);
-    //     async move {
-    //         let loc_handler = handler_clone.lock().await.clone();
-    //         api_server(req, loc_handler).await
-    //     }
-    // });
-    // loop {
-    //     let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
-    //     let tls_acceptor = tls_acceptor.clone();
-    //     let service_clone = service.clone();
-    //     tokio::task::spawn(async move {
-    //         let tls_stream = match tls_acceptor.accept(tcp_stream).await {
-    //             Ok(tls_stream) => tls_stream,
-    //             Err(err) => {
-    //                 eprintln!("failed to perform tls handshake: {err:#}");
-    //                 return;
-    //             }
-    //         };
-
-    //         if let Err(err) = Builder::new(TokioExecutor::new())
-    //         .serve_connection(TokioIo::new(tls_stream), service_clone)
-    //         .await {
-    //             error!("Failed to serve connection: {:?}", err);
-    //         }
-    //     });
-    // }
-
     Ok(Response::new(Full::default()))
 
 }
