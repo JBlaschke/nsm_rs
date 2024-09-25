@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::time::timeout;
 use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
@@ -105,10 +106,12 @@ pub async fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result
 pub async fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
     let mut buf = [0; 1024];
     let mut message = String::new();
+    let failure_duration = Duration::from_secs(6);
     loop {
-        let bytes_read = match stream.read(&mut buf).await {
-            Ok(n) => n,
-            Err(err) => { return Err(err); }
+        let bytes_read = match timeout(failure_duration, stream.read(&mut buf)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(err)) => return Err(err),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Read timed out"))
         };
         let s = std::str::from_utf8(&buf[..bytes_read]).unwrap();
         message.push_str(s);

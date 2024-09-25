@@ -32,8 +32,8 @@ use rustls::ClientConfig;
 use log::{debug, error, info, trace, warn};
 
 use crate::utils::{only_or_error, epoch};
-use crate::connection::{MessageHeader, Message, Addr, send, receive,
-     serialize_message, deserialize_message, collect_request};
+use crate::connection::{MessageHeader, Message, Addr, ComType, send, receive,
+     serialize_message, deserialize_message, collect_request, stream_write, stream_read};
 
 /// Store client or service metadata
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -116,8 +116,10 @@ pub struct Heartbeat {
     pub service_id: u64,
     /// address of service/client
     pub addr: String,
+    /// stream used to send heartbeats to client
+    pub stream: Option<Arc<Mutex<TcpStream>>>,
     /// client object for sending heartbeat requests
-    pub client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    pub client: Option<Client<HttpsConnector<HttpConnector>, Full<Bytes>>>,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_counter: FailCounter,
     /// message sent from client
@@ -127,7 +129,7 @@ pub struct Heartbeat {
 impl Heartbeat {
     /// send a heartbeat to the service/client and check if entity sent one back,
     /// increment fail_count if heartbeat not received when expected
-    async fn monitor(&mut self) -> Result<Response<Full<Bytes>>, hyper::Error>{
+    async fn monitor(&mut self) -> Result<Response<Full<Bytes>>, std::io::Error>{
         
         trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
         let mut response = Response::new(Full::default());
@@ -136,39 +138,83 @@ impl Heartbeat {
             header: MessageHeader::HB,
             body: serde_json::to_string(& self.msg_body.clone()).unwrap()
         });
-        let req = Request::builder()
-        .method(Method::GET)
-        .uri(format!("http://{}/heartbeat_handler", self.addr))
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from(message)))
-        .unwrap();
-        
-        // allots time for reading response
-        let timeout_duration = Duration::from_secs(10);
-        let start = Instant::now();
-        let result = timeout(timeout_duration, self.client.request(req)).await;
 
-        let received = match result {
-            Ok(Ok(resp)) => {
-                trace!("Received response: {:?}", resp);
-                let body = resp.collect().await.unwrap().aggregate();
-                let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
-                serde_json::to_string(&data).unwrap()
-            }
-            Ok(Err(e)) => {
-                if self.fail_counter.fail_count == 0 {
-                    self.fail_counter.first_increment = Instant::now();
-                }
-                self.fail_counter.increment();
-                trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
-                *response.status_mut() = StatusCode::BAD_REQUEST;
-                return Ok(response);            
-            }
-            Err(_) => {
-                *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
-                return Ok(response); 
-            }
+        let received = match (&self.stream, &self.client){
+            (Some(s), None) => {
+                let mut loc_stream = s.lock().await;
+                
+                trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
+                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                    header: MessageHeader::HB,
+                    body: serde_json::to_string(& self.msg_body.clone()).unwrap()
+                })).await;
+            
+                // allots time for reading from stream
+                let received = match stream_read(&mut loc_stream).await {
+                    Ok(message) => message,
+                    Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
+                        self.fail_counter.increment();
+                        trace!("ConnectionReset error");
+                        return Err(std::io::Error::new(err.kind(), err.to_string()));
+                    }
+                    Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
+                        self.fail_counter.increment();
+                        trace!("ConnectionAborted error");
+                        return Err(std::io::Error::new(err.kind(), err.to_string()));
+                    }
+                    Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                        self.fail_counter.increment();
+                        trace!("TimeOut error");
+                        return Err(std::io::Error::new(err.kind(), err.to_string()));
+                    }
+                    Err(err) => {
+                        // open connection, read timed out
+                        if self.fail_counter.fail_count == 0 {
+                            self.fail_counter.first_increment = Instant::now();
+                        }
+                        self.fail_counter.increment();
+                        trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
+                        return Err(err);
+                    }
+                };
+                received
+            },
+            (None, Some(c)) => {
+                let req = Request::builder()
+                .method(Method::GET)
+                .uri(format!("http://{}/heartbeat_handler", self.addr))
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(message)))
+                .unwrap();
+                
+                // allots time for reading response
+                let timeout_duration = Duration::from_secs(10);
+                let start = Instant::now();
+                let received = match timeout(timeout_duration, c.request(req)).await {
+                    Ok(Ok(mut resp)) => {
+                        trace!("Received response: {:?}", resp);
+                        let msg = collect_request(resp.body_mut()).await.unwrap();
+                        serialize_message(&msg)
+                    }
+                    Ok(Err(e)) => {
+                        if self.fail_counter.fail_count == 0 {
+                            self.fail_counter.first_increment = Instant::now();
+                        }
+                        self.fail_counter.increment();
+                        trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
+                        *response.status_mut() = StatusCode::BAD_REQUEST;
+                        return Ok(response);            
+                    }
+                    Err(_) => {
+                        *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
+                        return Ok(response); 
+                    }
+                };
+                received
+            },
+            _ => panic!("Unexpected state: no stream or client.")
         };
+        
         if received == "" {
             // broken connection
             if self.fail_counter.fail_count == 0 {
@@ -298,6 +344,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                                 id: hb.id,
                                 service_id: hb.service_id,
                                 addr: hb.addr.clone(),
+                                stream: hb.stream.clone(),
                                 client: hb.client.clone(),
                                 fail_counter: FailCounter::new(),
                                 msg_body: hb.msg_body.clone(),
@@ -366,25 +413,55 @@ impl State {
     }
 
     /// adds new services/clients to State struct and creates Event object to add to event loop 
-    pub async fn add(&mut self, mut p: Payload, service_id: u64) -> Result<Heartbeat, hyper::Error>{
+    pub async fn add(&mut self, mut p: Payload, service_id: u64, com: ComType) -> Result<Heartbeat, std::io::Error>{
 
         println!("adding service");
+
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
-        // connect to broker
-        // Prepare the HTTPS connector
-        let https_connector = HttpsConnectorBuilder::new()
-            .with_tls_config(self.tls.clone().unwrap())
-            .https_or_http()
-            .enable_http1()
-            .build();
 
-        // Build the Client using the HttpsConnector
-        let client = Client::builder(TokioExecutor::new()).build(https_connector);     
+        let (stream, client) = match com {
+            ComType::TCP => {
+                let mut bind_fail = 0;
+                // broker connects to service/client bind_port for heartbeats
+                // loop solves connection race case 
+                let hb_stream = loop {
+                    match TcpStream::connect(bind_address.clone()).await {
+                        Ok(stream) => break stream,
+                        Err(err) => {
+                            bind_fail += 1;
+                            if bind_fail > 5{
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput, "Service failed to connect to bind port"));
+                            }
+                            trace!("{}",format!("Retrying connection: {}", err));
+                            sleep(Duration::from_millis(1000));
+                            continue;
+                        }
+                    }
+                };
+                let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
+                (Some(shared_hb_stream), None)
+            },
+            ComType::API => {
+                // connect to broker
+                // Prepare the HTTPS connector
+                let https_connector = HttpsConnectorBuilder::new()
+                    .with_tls_config(self.tls.clone().unwrap())
+                    .https_or_http()
+                    .enable_http1()
+                    .build();
+
+                // Build the Client using the HttpsConnector
+                let client = Client::builder(TokioExecutor::new()).build(https_connector);     
+                (None, Some(client))
+            }
+        };
 
         if let Some(vec) = self.clients.get_mut(&p.key) {
             // find value in clients with matching id
-            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr && item.service_port == p.service_port) {
+            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr
+                 && item.service_port == p.service_port) {
                 let item = &vec[pos];
                 let mut counter = 0;
                 println!("{:?}", item);
@@ -403,6 +480,7 @@ impl State {
                         }) {
                             if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
                                 hb.addr = bind_address.clone();
+                                hb.stream = stream;
                                 hb.client = client;
                                 trace!("Altering hb {:?}", hb);
                                 p.id = item.id;
@@ -434,6 +512,7 @@ impl State {
             id: self.seq,
             service_id: temp_id,
             addr: bind_address.clone(),
+            stream,
             client,
             fail_counter: FailCounter::new(),
             msg_body: MsgBody::default(),
@@ -583,7 +662,7 @@ pub async fn request_handler(
 
             match (stream, request) {
                 (Some(s), None) => {
-                    let _ = state_loc.add(payload, 0).await; // add service to clients hashmap and event loop 
+                    let _ = state_loc.add(payload, 0, ComType::TCP).await; // add service to clients hashmap and event loop 
                     state_loc.running = true; // set running to true for event loop
                     notify.notify_one(); // notify event loop of new Event
         
@@ -602,7 +681,7 @@ pub async fn request_handler(
                         .body(Full::new(Bytes::from(json))).unwrap();
                     
                     // add service to clients hashmap and event loop
-                    let _ = state_loc.add(payload, 0).await;
+                    let _ = state_loc.add(payload, 0, ComType::API).await;
                     state_loc.running = true; // set running to true for event loop
                     notify.notify_one(); // notify event loop of new Event
 
@@ -718,8 +797,9 @@ pub async fn request_handler(
     Ok(response)
 }
 
-pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: Option<&Arc<Mutex<String>>>, 
-    addr: Option<Arc<Mutex<Addr>>>, tls: ClientConfig) -> Result<Response<Full<Bytes>>, hyper::Error> {
+pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>, 
+    mut request: Option<Request<Incoming>>, payload: Option<&Arc<Mutex<String>>>, 
+    addr: Option<Arc<Mutex<Addr>>>, tls: Option<ClientConfig>) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     let mut response = Response::new(Full::default());
 
@@ -738,7 +818,7 @@ pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: O
 
     // start new thread to send/receive heartbeats/messages to/from listener
     // let hb_handler = tokio::spawn(async move {
-    response = match heartbeat_handler(request, &payload_clone, addr_clone, tls).await {
+    response = match heartbeat_handler(stream, request, &payload_clone, addr_clone, tls).await {
         Ok(resp) => {
             resp
         },
@@ -756,11 +836,17 @@ pub async fn heartbeat_handler_helper(mut request: Request<Incoming>, payload: O
 
 /// Receive a heartbeat from broker and send one back to show life of connection.
 /// If a client, HB message contains payload of connected service to use in Collect()
-pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
-     addr: Addr, tls: ClientConfig)
+pub async fn heartbeat_handler(stream: Option<Arc<Mutex<TcpStream>>>, 
+    mut request: Option<Request<Incoming>>, payload: &String,
+     addr: Addr, tls: Option<ClientConfig>)
     -> Result<Response<Full<Bytes>>, hyper::Error> {
     trace!("Starting heartbeat handler");
 
+    let message = match (&stream, &mut request) {
+        (Some(s), None) => receive(&s).await.unwrap(),
+        (None, Some(r)) => collect_request(r.body_mut()).await.unwrap(), 
+        _ => panic!("Unexpected state: no stream or request.")
+    };
     // set service_id to know which service to send msg to
     let mut service_id = 0;
     if *payload != "".to_string() {
@@ -775,19 +861,13 @@ pub async fn heartbeat_handler(mut request: Request<Incoming>, payload: &String,
     // receive heartbeat/message
     let mut response = Response::new(Full::default());
 
-    let body = request.collect().await.unwrap().aggregate();
-    let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
-    let json = serde_json::to_string(&data).unwrap();
-
-    let message = deserialize_message(& json);
-
     // if a MSG: connect to listener to alter the msg value in the service's heartbeat
     trace!("Heartbeat handler received {:?}", message);
 
     if matches!(message.header, MessageHeader::MSG){
         // Prepare the HTTPS connector
         let https_connector = HttpsConnectorBuilder::new()
-            .with_tls_config(tls)
+            .with_tls_config(tls.unwrap())
             .https_or_http()
             .enable_http1()
             .build();
