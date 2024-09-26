@@ -32,7 +32,7 @@ use rustls::ClientConfig;
 use log::{debug, error, info, trace, warn};
 
 use crate::utils::{only_or_error, epoch};
-use crate::connection::{MessageHeader, Message, Addr, ComType, send, receive,
+use crate::connection::{MessageHeader, Message, Addr, ComType, connect, send, receive,
      serialize_message, deserialize_message, collect_request, stream_write, stream_read};
 
 /// Store client or service metadata
@@ -816,18 +816,35 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     let addr = addr.unwrap_or(empty_addr);
     let addr_clone = addr.lock().await.clone();
 
-    // start new thread to send/receive heartbeats/messages to/from listener
-    // let hb_handler = tokio::spawn(async move {
-    response = match heartbeat_handler(stream, request, &payload_clone, addr_clone, tls).await {
-        Ok(resp) => {
-            resp
+    // send/receive heartbeats/messages to/from listener
+    // loop for tcp constantly checks for heartbeats in stream
+    // one handler call for each http request
+    
+    response = match (&stream, &mut request) {
+        (Some(s), None) => {
+            loop {
+                heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone.clone(), None).await;
+            }
+            response
         },
-        Err(e) => {
-            Response::builder()
+        (None, Some(r)) => {
+            response = match heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone, tls).await {
+                Ok(resp) => {
+                    resp
+                },
+                Err(e) => {
+                    Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Full::new(Bytes::from("Heartbeat handler error".to_string())))
+                        .unwrap()
+                }
+            };
+            response
+        }, 
+        _ => Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(Full::new(Bytes::from("Heartbeat handler error".to_string())))
                 .unwrap()
-        }
     };
     // });
     // response = hb_handler.await.unwrap();
@@ -836,15 +853,38 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
 
 /// Receive a heartbeat from broker and send one back to show life of connection.
 /// If a client, HB message contains payload of connected service to use in Collect()
-pub async fn heartbeat_handler(stream: Option<Arc<Mutex<TcpStream>>>, 
-    mut request: Option<Request<Incoming>>, payload: &String,
+pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>, 
+    mut request: &mut Option<Request<Incoming>>, payload: &String,
      addr: Addr, tls: Option<ClientConfig>)
-    -> Result<Response<Full<Bytes>>, hyper::Error> {
+    -> Result<Response<Full<Bytes>>, std::io::Error> {
     trace!("Starting heartbeat handler");
 
-    let message = match (&stream, &mut request) {
-        (Some(s), None) => receive(&s).await.unwrap(),
-        (None, Some(r)) => collect_request(r.body_mut()).await.unwrap(), 
+    let message = match (stream, &mut *request) {
+        (Some(s), None) => {
+            let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+            match stream_read(loc_stream).await {
+                Ok(message) => {
+                    deserialize_message(& message)
+                },
+                Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
+                    trace!("ConnectionReset error");
+                    std::process::exit(0);
+                }
+                Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
+                    trace!("ConnectionAborted error");
+                    std::process::exit(0);
+                }
+                Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                    trace!("TimeOut error");
+                    std::process::exit(0);
+                }
+                Err(err) => {
+                    trace!("Unknown error reading from stream");
+                    std::process::exit(0);
+                }
+            }
+        },
+        (None, Some(r)) => collect_request((&mut *r).body_mut()).await.unwrap(), 
         _ => panic!("Unexpected state: no stream or request.")
     };
     // set service_id to know which service to send msg to
@@ -865,102 +905,149 @@ pub async fn heartbeat_handler(stream: Option<Arc<Mutex<TcpStream>>>,
     trace!("Heartbeat handler received {:?}", message);
 
     if matches!(message.header, MessageHeader::MSG){
-        // Prepare the HTTPS connector
-        let https_connector = HttpsConnectorBuilder::new()
-            .with_tls_config(tls.unwrap())
-            .https_or_http()
-            .enable_http1()
-            .build();
-        let client: Client<HttpsConnector<HttpConnector>, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(https_connector);
+        match (stream, &mut *request) {
+            (Some(s), None) => {
+                let listen_stream = match connect(& addr).await{
+                    Ok(s) => s,
+                    Err(_e) => {
+                        return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,"MSG connection unsuccessful."));
+                        }
+                };
+                let stream_mut = Arc::new(Mutex::new(listen_stream));
+                let msg_body = MsgBody{
+                    msg: message.body.clone(),
+                    id: service_id
+                };
+                let ack = send(& stream_mut, & Message{
+                    header: MessageHeader::MSG,
+                    body: serde_json::to_string(& msg_body).unwrap()
+                }).await;
+            },
+            (None, Some(r)) => {
+                // Prepare the HTTPS connector
+                let https_connector = HttpsConnectorBuilder::new()
+                    .with_tls_config(tls.unwrap())
+                    .https_or_http()
+                    .enable_http1()
+                    .build();
+                let client: Client<HttpsConnector<HttpConnector>, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(https_connector);
 
-        let msg_body = MsgBody{
-            msg: message.body.clone(),
-            id: service_id
-        };
-    
-        let msg = serialize_message( & Message{
-                header: MessageHeader::MSG,
-                body: serde_json::to_string(& msg_body).unwrap()
-        });
-        let mut read_fail = 0;
-        loop {
-            sleep(Duration::from_millis(1000)).await;
-            trace!("sent message to listener on {:?}", addr);
+                let msg_body = MsgBody{
+                    msg: message.body.clone(),
+                    id: service_id
+                };
+            
+                let msg = serialize_message( & Message{
+                        header: MessageHeader::MSG,
+                        body: serde_json::to_string(& msg_body).unwrap()
+                });
+                let mut read_fail = 0;
+                loop {
+                    sleep(Duration::from_millis(1000)).await;
+                    trace!("sent message to listener on {:?}", addr);
 
-            let req = Request::builder()
-            .method(Method::POST)
-            .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(msg.clone())))
-            .unwrap();
-
-            let start = Instant::now();
-            let result = timeout(timeout_duration, client.request(req)).await;
-        
-            match result {
-                Ok(Ok(resp)) => {
-                    trace!("Received response: {:?}", resp);
-                    let body = resp.collect().await.unwrap().aggregate();
-                    let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
-                    let json = serde_json::to_string(&data).unwrap();
-                    let m = deserialize_message(& json);
-                    match m.header {
-                        MessageHeader::MSG => info!("Request acknowledged: {:?}", m),
-                        _ => warn!("Server responds with unexpected message: {:?}", m),
-                    }
-                    response = Response::builder()
-                    .status(StatusCode::OK)
+                    let req = Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
                     .header(hyper::header::CONTENT_TYPE, "application/json")
-                    .body(Full::new(Bytes::from(serialize_message(& Message{
-                        header: MessageHeader::ACK,
-                        body: "".to_string()
-                    })))).unwrap();
-                    break;
+                    .body(Full::new(Bytes::from(msg.clone())))
+                    .unwrap();
+
+                    let start = Instant::now();
+                    let result = timeout(timeout_duration, client.request(req)).await;
+                
+                    match result {
+                        Ok(Ok(resp)) => {
+                            trace!("Received response: {:?}", resp);
+                            let body = resp.collect().await.unwrap().aggregate();
+                            let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                            let json = serde_json::to_string(&data).unwrap();
+                            let m = deserialize_message(& json);
+                            match m.header {
+                                MessageHeader::MSG => info!("Request acknowledged: {:?}", m),
+                                _ => warn!("Server responds with unexpected message: {:?}", m),
+                            }
+                            response = Response::builder()
+                            .status(StatusCode::OK)
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from(serialize_message(& Message{
+                                header: MessageHeader::ACK,
+                                body: "".to_string()
+                            })))).unwrap();
+                            break;
+                        }
+                        Ok(Err(_e)) => {
+                            read_fail += 1;
+                            if read_fail > 5 {
+                                panic!("Failed to send request to listener")
+                            }
+                        }
+                        Err(_e) => {
+                            read_fail += 1;
+                            if read_fail > 5 {
+                                panic!("Request timed out")
+                            }
+                        }
+                    };
                 }
-                Ok(Err(_e)) => {
-                    read_fail += 1;
-                    if read_fail > 5 {
-                        panic!("Failed to send request to listener")
-                    }
-                }
-                Err(_e) => {
-                    read_fail += 1;
-                    if read_fail > 5 {
-                        panic!("Request timed out")
-                    }
-                }
-            };
+                response = Response::builder()
+                .status(StatusCode::OK)
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(serialize_message(& Message{
+                    header: MessageHeader::ACK,
+                    body: message.body.clone()
+                })))).unwrap();
+            },
+            _ => panic!("Unexpected state: no stream or request.")
         }
-        response = Response::builder()
-        .status(StatusCode::OK)
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from(serialize_message(& Message{
-            header: MessageHeader::ACK,
-            body: message.body.clone()
-        })))).unwrap();
     }
     else if matches!(message.header, MessageHeader::COL) {
         // payload is empty for services, retrieve and send msg waiting in global variable
         if *payload == "".to_string(){
             // send msg back
             let msg = GLOBAL_MSGBODY.lock().await;
-            response = Response::builder()
-            .status(StatusCode::OK)
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(serialize_message(& Message{
-                header: MessageHeader::ACK,
-                body: serde_json::to_string(&* msg.msg).unwrap()
-            })))).unwrap();
+            let _ = match (&stream, &mut *request) {
+                (Some(s), None) => {
+                    let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: message.header,
+                        body: serde_json::to_string(&* msg.msg).unwrap()
+                    }));  
+                },
+                (None, Some(r)) => {
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: MessageHeader::ACK,
+                        body: serde_json::to_string(&* msg.msg).unwrap()
+                    })))).unwrap()
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
+            };
         }
         else {
             // payload not empty for clients, send payload w/ address of the paired service
-            response = Response::builder()
-            .status(StatusCode::OK)
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(serialize_message(& Message{
-                header: MessageHeader::ACK,
-                body: payload.clone()
-            })))).unwrap();
+            let _ = match (&stream, &mut *request) {
+                (Some(s), None) => {
+                    let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: message.header,
+                        body: payload.clone()
+                    }));
+                },
+                (None, Some(r)) => {
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: MessageHeader::ACK,
+                        body: payload.clone()
+                    })))).unwrap();
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
+            };
         }
         trace!("Heartbeat handler has returned request");
     }
@@ -969,25 +1056,49 @@ pub async fn heartbeat_handler(stream: Option<Arc<Mutex<TcpStream>>>,
         let msg_body: MsgBody = serde_json::from_str(& message.body.clone()).unwrap();
         // default HB/MSG response to send what was received
         if msg_body.msg.is_empty(){
-            response = Response::builder()
-            .status(StatusCode::OK)
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(serialize_message(& Message{
-                header: message.header,
-                body: payload.clone()
-            })))).unwrap();
+            let _ = match (&stream, &mut *request) {
+                (Some(s), None) => {
+                    let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: message.header,
+                        body: payload.clone(),
+                    }));
+                },
+                (None, Some(r)) => {
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: message.header,
+                        body: payload.clone()
+                    })))).unwrap();
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
+            };
         }
         else{
             // store msg received from listener into global msg variable
             let mut msg = GLOBAL_MSGBODY.lock().await;
             *msg = serde_json::from_str(& message.body).unwrap();
-            response = Response::builder()
-            .status(StatusCode::OK)
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(serialize_message(& Message{
-                header: message.header,
-                body: message.body
-            })))).unwrap();
+            let _ = match (&stream, &mut *request) {
+                (Some(s), None) => {
+                    let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: message.header,
+                        body: message.body
+                    }));
+                },
+                (None, Some(r)) => {
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: message.header,
+                        body: message.body
+                    })))).unwrap();
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
+            };
         }   
         trace!("Heartbeat handler has returned request");
     }

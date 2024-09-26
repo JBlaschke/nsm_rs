@@ -235,6 +235,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None).await
     )};
 
+    println!("found addresses");
     let payload = serialize(& Payload {
         service_addr: ipstr.clone(),
         service_port: inputs.service_port,
@@ -254,6 +255,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
 
     match com{
         ComType::TCP => {
+            println!("matching tcp");
             // connect to broker
             let stream = match connect(& Addr{
                 host: inputs.host, port: inputs.port}).await{
@@ -263,6 +265,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                         std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
                         }
             };
+            println!("connected to listener");
             let stream_mut = Arc::new(Mutex::new(stream));
             let ack = send(& stream_mut, & Message{
                 header: MessageHeader::PUB,

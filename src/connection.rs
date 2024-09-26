@@ -90,7 +90,6 @@ pub fn deserialize_message(payload: & String) -> Message {
 
 /// Connect to address using Addr struct, returns Result of connected TCPStream
 pub async fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
-
     TcpStream::connect(format!("{}:{}", addr.host, addr.port)).await
 }
 
@@ -252,7 +251,7 @@ pub async fn tcp_server(
             Ok((stream, addr)) => {
                 trace!("Passing TCP connection to handler...");
                 let shared_stream = Arc::new(Mutex::new(stream));
-                let _ = handler(shared_stream); 
+                let _ = handler(shared_stream).await; 
             },
             Err(e) => {
                 error!("Error: {}", e);
