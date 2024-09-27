@@ -263,7 +263,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                     }
                     Err(_) => {
                         // Timeout occurred, modify the state
-                        trace!("Timeout occurred, modifying state...");
+                        trace!("Timeout occurred, modifying running state...");
                         state_loc.running = true;
                         notify.notify_one();
                     }
@@ -365,6 +365,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                 else{
                     // add event back to queue 
                     let mut loc_deque = deque_clone2.lock().await;
+                    println!("{:?}", hb);
                     let _ = loc_deque.push_back(hb);
                     trace!("Deque status {:?}", loc_deque);
                 }
@@ -1013,7 +1014,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: message.header,
                         body: serde_json::to_string(&* msg.msg).unwrap()
-                    }));  
+                    })).await;  
                 },
                 (None, Some(r)) => {
                     response = Response::builder()
@@ -1035,7 +1036,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: message.header,
                         body: payload.clone()
-                    }));
+                    })).await;
                 },
                 (None, Some(r)) => {
                     response = Response::builder()
@@ -1062,7 +1063,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: message.header,
                         body: payload.clone(),
-                    }));
+                    })).await;
                 },
                 (None, Some(r)) => {
                     response = Response::builder()
@@ -1086,7 +1087,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: message.header,
                         body: message.body
-                    }));
+                    })).await;
                 },
                 (None, Some(r)) => {
                     response = Response::builder()
