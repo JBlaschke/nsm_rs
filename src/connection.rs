@@ -184,8 +184,8 @@ pub async fn api_server(
     request: Request<Incoming>, 
     mut handler: impl FnMut(Request<Incoming>)
      -> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, 
-     hyper::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+     std::io::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
+) -> Result<Response<Full<Bytes>>, std::io::Error> {
 
     // // Shared state to track the last heartbeat time
     // let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
@@ -238,9 +238,9 @@ pub async fn api_server(
 pub async fn tcp_server(
     addr: &Addr, 
     mut handler: impl FnMut(Arc<Mutex<TcpStream>>) 
-    -> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>>
+    -> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>>
      + std::marker::Send>> + std::marker::Send + 'static + Clone
-) -> Result<(), hyper::Error> {
+) -> Result<(), std::io::Error> {
     trace!("Starting server process on: {:?}", addr);
 
     let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port)).await.unwrap();

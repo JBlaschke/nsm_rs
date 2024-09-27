@@ -114,7 +114,7 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
 }
 
-pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes>>), hyper::Error> {
+pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes>>), std::io::Error> {
     trace!("Setting up listener...");
     let ips = get_local_ips().await;
 
@@ -140,7 +140,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
                 let state_clone_inner = Arc::clone(& state_clone);
                 Box::pin(async move {
                     return request_handler(& state_clone_inner, Some(stream), None).await;
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             };
 
             let addr = Addr {
@@ -166,7 +166,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
                 let state_clone = Arc::clone(& state);
                 Box::pin(async move {
                     request_handler(& state_clone, None, Some(req)).await
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             }));
 
             let server_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
@@ -288,7 +288,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             let handler =  move |stream: Arc<Mutex<TcpStream>>| {
                 Box::pin(async move {
                     return heartbeat_handler_helper(Some(stream), None, None, None, None).await;
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             };
 
             let addr = Addr {
@@ -362,7 +362,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 let tls_clone = tls.clone();
                 Box::pin(async move {
                     heartbeat_handler_helper(None, Some(req), None, None, Some(tls_clone)).await
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             }));
 
             let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
@@ -405,10 +405,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
 }
 
 pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>, std::io::Error> {
-        
-    let server_config = tls_config().await.unwrap();
-    let tls = load_ca(inputs.root_ca).await.unwrap();
-
     let ips = get_local_ips().await;
 
     let (ipstr, _all_ipstr) = if inputs.print_v4 {(
@@ -437,7 +433,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
     let host = only_or_error(& ipstr);
 
     let broker_addr = Arc::new(Mutex::new(Addr{
-        host: inputs.host,
+        host: inputs.host.clone(),
         port: inputs.port
     }));
 
@@ -447,13 +443,13 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
     };
 
     let mut read_fail = 0;
-    let service_payload = Arc::new(Mutex::new("".to_string()));
+    let mut service_payload = Arc::new(Mutex::new("".to_string()));
     let timeout_duration = Duration::from_millis(6000);
     
     match com {
         ComType::TCP => {
             let stream = match connect(& Addr{
-                host: inputs.host,
+                host: inputs.host.clone(),
                 port: inputs.port
             }).await{
                     Ok(s) => s,
@@ -485,7 +481,8 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                                 if matches!(message.header, MessageHeader::ACK){
                                     info!("Server acknowledged CLAIM.");
                                     println!("{}", message.body);
-                                    service_payload = Arc::new(Mutex::new(message.body));
+                                    let mut service_payload_loc = service_payload.lock().await;
+                                    *service_payload_loc = m.body;
                                     break;
                                 }
                                 else{
@@ -512,10 +509,16 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     ));
                 }
             }
+            let payload_clone = Arc::clone(&service_payload);
+            let broker_clone = Arc::clone(&broker_addr);
             let handler =  move |stream: Arc<Mutex<TcpStream>>| {
+                let inner_payload = Arc::clone(&payload_clone);
+                let inner_broker = Arc::clone(&broker_clone);
                 Box::pin(async move {
-                    return heartbeat_handler_helper(Some(stream), None, Some(&service_payload), Some(&broker_addr), None).await;
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+                    let payload_clone = Arc::clone(&inner_payload);
+                    let broker_clone = Arc::clone(&inner_broker);
+                    return heartbeat_handler_helper(Some(stream), None, Some(& payload_clone), Some(&broker_clone), None).await;
+                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             };
 
             let addr = Addr {
@@ -527,6 +530,9 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let _ = tcp_server(& addr, handler).await;
         },
         ComType::API => {
+            let server_config = tls_config().await.unwrap();
+            let tls = load_ca(inputs.root_ca).await.unwrap();
+                    
            // connect to broker
             // Prepare the HTTPS connector
             let https_connector = HttpsConnectorBuilder::new()
@@ -590,7 +596,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                 let tls_clone = tls.clone();
                 Box::pin(async move {
                     heartbeat_handler_helper(None, Some(req), Some(&service_payload_value), Some(&broker_addr_value), Some(tls_clone)).await
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, hyper::Error>> + std::marker::Send>>
+                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             }));
 
             let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
