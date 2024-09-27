@@ -647,54 +647,87 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
     #[cfg(feature = "aws-lc-rs")]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let tls = load_ca(inputs.root_ca).await.unwrap();
-
-    // connect to bind port of service or client
-    // Prepare the HTTPS connector
-    let https_connector = HttpsConnectorBuilder::new()
-        .with_tls_config(tls)
-        .https_or_http()
-        .enable_http1()
-        .build();
-    let client = Client::builder(TokioExecutor::new()).build(https_connector);
-    let msg = serialize_message(& Message{
+    let msg = & Message{
         header: MessageHeader::COL,
         body: "".to_string()
-    });
-    let timeout_duration = Duration::from_millis(6000);
+    };
+    match com {
+        ComType::TCP => {
+            let addr = Addr {
+                host: inputs.host,
+                port: inputs.port
+            };
 
-    let req = Request::builder()
-    .method(Method::GET)
-    .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
-    .header(hyper::header::CONTENT_TYPE, "application/json")
-    .body(Full::new(Bytes::from(msg.clone())))
-    .unwrap();
+            let stream = match connect(& addr).await{
+                Ok(s) => s,
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
+                    }
+            };        
+            trace!("Connection to {:?} successful", addr);
 
-    let start = Instant::now();
-    let result = timeout(timeout_duration, client.request(req)).await;
+            let stream_mut = Arc::new(Mutex::new(stream));
 
-    println!("sending request to {}:{}", inputs.host, inputs.port);
-
-    match result {
-        Ok(Ok(resp)) => {
-            trace!("Received response: {:?}", resp);
-            let body = resp.collect().await.unwrap().aggregate();
-            let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
-            let json = serde_json::to_string(&data).unwrap();
-            let m = deserialize_message(& json);
-            match m.header {
-                MessageHeader::ACK => {
-                    info!("Request acknowledged.");
-                    if m.body.is_empty() {
+            let received = send(& stream_mut, msg).await;
+        
+            println!("reading HB");
+            let _payload = match received {
+                Ok(message) => {
+                    if message.body.is_empty() {
                         panic!("Payload not found in heartbeat.");
                     }
-                    println!("{:?}", m.body);
-                },
-                _ => warn!("Server responds with unexpected message: {:?}", m),
+                    println!("{:?}", message.body);
+                }
+                Err(_err) => return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput, "Failed to collect message."))
+            };
+        },
+        ComType::API => {
+            let tls = load_ca(inputs.root_ca).await.unwrap();
+
+            // connect to bind port of service or client
+            // Prepare the HTTPS connector
+            let https_connector = HttpsConnectorBuilder::new()
+                .with_tls_config(tls)
+                .https_or_http()
+                .enable_http1()
+                .build();
+            let client = Client::builder(TokioExecutor::new()).build(https_connector);
+
+            let timeout_duration = Duration::from_millis(6000);
+        
+            let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(serialize_message(&msg.clone()))))
+            .unwrap();
+        
+            let start = Instant::now();
+            let result = timeout(timeout_duration, client.request(req)).await;
+        
+            println!("sending request to {}:{}", inputs.host, inputs.port);
+        
+            match result {
+                Ok(Ok(mut resp)) => {
+                    trace!("Received response: {:?}", resp);
+                    let m = collect_request(resp.body_mut()).await.unwrap();
+                    match m.header {
+                        MessageHeader::ACK => {
+                            info!("Request acknowledged.");
+                            if m.body.is_empty() {
+                                panic!("Payload not found in heartbeat.");
+                            }
+                            println!("{:?}", m.body);
+                        },
+                        _ => warn!("Server responds with unexpected message: {:?}", m),
+                    }
+                }
+                Ok(Err(_e)) => panic!("Failed to collect message."),
+                Err(_e) => panic!("Timed out reading response")
             }
         }
-        Ok(Err(_e)) => panic!("Failed to collect message."),
-        Err(_e) => panic!("Timed out reading response")
     }
 
     Ok(())
