@@ -800,7 +800,7 @@ pub async fn request_handler(
 
 pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>, 
     mut request: Option<Request<Incoming>>, payload: Option<&Arc<Mutex<String>>>, 
-    addr: Option<Arc<Mutex<Addr>>>, tls: Option<ClientConfig>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    addr: Option<&Arc<Mutex<Addr>>>, tls: Option<ClientConfig>) -> Result<Response<Full<Bytes>>, hyper::Error> {
 
     let mut response = Response::new(Full::default());
 
@@ -814,7 +814,7 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
         port: 0
     }));
     // client uses listener's address to send msg, service does not need addr
-    let addr = addr.unwrap_or(empty_addr);
+    let addr = addr.unwrap_or(&empty_addr);
     let addr_clone = addr.lock().await.clone();
 
     // send/receive heartbeats/messages to/from listener
