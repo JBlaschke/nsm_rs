@@ -774,49 +774,52 @@ pub async fn request_handler(
             state_loc.print().await; // print state of clients hashmap
         },
         MessageHeader::MSG => {
-            // info!("adding msg to queue");
-            // let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
-            // trace!("Sending Message: {:?}", msg_body);
+            info!("adding msg to queue");
+            let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
+            trace!("Sending Message: {:?}", msg_body);
 
-            // let (lock, notify) = &**state;
-            // let mut state_loc = async move {
-            //     lock.lock().await
-            // };
+            let (lock, notify) = &**state;
+            let mut state_loc = lock.lock().await;
 
-            // let mut counter = 0;
-            // while counter < 10 {
-            //     {
-            //         let mut deque = state_loc.deque.lock().await;
-            //         if let Some(hb) = deque.iter_mut().find_map(|e| {
-            //             if e.id == msg_body.id {
-            //                 println!("found id");
-            //                 Some(e)
-            //             } else {
-            //                 println!("id not found");
-            //                 None
-            //             }
-            //         }) {
-            //             hb.msg_body = msg_body.clone();
-            //             trace!("Altering hb message {:?}", hb);
-            //             let json = serialize_message( & Message {
-            //                 header: MessageHeader::MSG,
-            //                 body: message.body.clone()
-            //             });
-            //             response = Response::builder()
-            //             .status(StatusCode::OK)
-            //             .header(hyper::header::CONTENT_TYPE, "application/json")
-            //             .body(Full::new(Bytes::from(json))).unwrap();
-            //             break;
-            //         }
-            //         else{
-            //             counter += 1;
-            //         }
-            //     }
-            //     sleep(Duration::from_millis(1000)).await;
-            // }
-            // if counter == 10 {
-            //     warn!("Could not find matching service");
-            // }
+            let mut counter = 0;
+            while counter < 10 {
+                {
+                    let mut deque = state_loc.deque.lock().await;
+                    if let Some(hb) = deque.iter_mut().find_map(|e| {
+                        if e.id == msg_body.id {
+                            println!("found id");
+                            Some(e)
+                        } else {
+                            println!("id not found");
+                            None
+                        }
+                    }) {
+                        hb.msg_body = msg_body.clone();
+                        trace!("Altering hb message {:?}", hb);
+                        let json = serialize_message( & Message {
+                            header: MessageHeader::MSG,
+                            body: message.body.clone()
+                        });
+                        match (stream, request) {
+                            (None, Some(r)) => {
+                                response = Response::builder()
+                                .status(StatusCode::OK)
+                                .header(hyper::header::CONTENT_TYPE, "application/json")
+                                .body(Full::new(Bytes::from(json))).unwrap(); 
+                            },
+                            _ => {}
+                        }
+                        break;
+                    }
+                    else{
+                        counter += 1;
+                    }
+                }
+                sleep(Duration::from_millis(1000)).await;
+            }
+            if counter == 10 {
+                warn!("Could not find matching service");
+            }
 
         }
         _ => {panic!("This should not be reached!");}
@@ -831,6 +834,7 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     let mut response = Response::new(Full::default());
 
     // retrieve service's payload from client or set an empty message body
+    println!("{:?}", payload);
     let binding = Arc::new(Mutex::new("".to_string()));
     let payload = payload.unwrap_or(&binding);
     let payload_clone = payload.lock().await.clone();
@@ -891,6 +895,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
             match stream_read(loc_stream).await {
                 Ok(message) => {
+                    println!("{:?}", message);
                     deserialize_message(& message)
                 },
                 Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
@@ -916,10 +921,11 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
     };
     // set service_id to know which service to send msg to
     let mut service_id = 0;
+    println!("{:?}", payload);
     if *payload != "".to_string() {
         service_id = deserialize(payload).service_id;
     }
-
+    println!("{:?}", service_id);
     let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
 
     // allots time for reading from stream

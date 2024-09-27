@@ -443,7 +443,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
     };
 
     let mut read_fail = 0;
-    let mut service_payload = Arc::new(Mutex::new("".to_string()));
+    let service_payload = Arc::new(Mutex::new("".to_string()));
     let timeout_duration = Duration::from_millis(6000);
     
     match com {
@@ -482,7 +482,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                                     info!("Server acknowledged CLAIM.");
                                     println!("{}", message.body);
                                     let mut service_payload_loc = service_payload.lock().await;
-                                    *service_payload_loc = m.body;
+                                    *service_payload_loc = message.body;
                                     break;
                                 }
                                 else{
@@ -740,46 +740,76 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
     #[cfg(feature = "aws-lc-rs")]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let tls = load_ca(inputs.root_ca).await.unwrap();
-
-    // connect to bind port of service or client
-    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_tls_config(tls)
-        .https_or_http()
-        .enable_http1()
-        .build();
-    let client = Client::builder(TokioExecutor::new()).build(https_connector);
-    let msg = serialize_message(& Message{
+    let msg = & Message{
         header: MessageHeader::MSG,
         body: serde_json::to_string(&inputs.msg).unwrap()
-    });
-    let timeout_duration = Duration::from_millis(6000);
+    };
 
-    println!("sending request to {}:{}", inputs.host, inputs.port);
-    let req = Request::builder()
-    .method(Method::GET)
-    .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
-    .header(hyper::header::CONTENT_TYPE, "application/json")
-    .body(Full::new(Bytes::from(msg.clone())))
-    .unwrap();
+    println!("{:?}", msg);
+    match com {
+        ComType::TCP => {
+            let addr = Addr {
+                host: inputs.host,
+                port: inputs.port
+            };
+            // connect to bind port of service or client
+            let mut stream = match connect(& addr).await{
+                Ok(s) => s,
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
+                    }
+            };  
 
-    let start = Instant::now();
-    let result = timeout(timeout_duration, client.request(req)).await;
+            let stream_mut = Arc::new(Mutex::new(stream));
 
-    match result {
-        Ok(Ok(resp)) => {
-            trace!("Received response: {:?}", resp);
-            let body = resp.collect().await.unwrap().aggregate();
-            let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
-            let json = serde_json::to_string(&data).unwrap();
-            let m = deserialize_message(& json);
-            match m.header {
-                MessageHeader::ACK => info!("Request acknowledged: {:?}", m),
-                _ => warn!("Server responds with unexpected message: {:?}", m),
+            let received = send(& stream_mut, msg).await;
+        
+            println!("reading msg");
+            let _ = match received {
+                Ok(message) => {
+                    println!("received {:?}", message);
+                }
+                Err(_err) => return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput, "Failed to collect message."))
+            };
+        },
+        ComType::API => {
+            let tls = load_ca(inputs.root_ca).await.unwrap();
+
+            // connect to bind port of service or client
+            let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+                .with_tls_config(tls)
+                .https_or_http()
+                .enable_http1()
+                .build();
+            let client = Client::builder(TokioExecutor::new()).build(https_connector);
+            let timeout_duration = Duration::from_millis(6000);
+        
+            println!("sending request to {}:{}", inputs.host, inputs.port);
+            let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(serialize_message(&msg.clone()))))
+            .unwrap();
+        
+            let start = Instant::now();
+            let result = timeout(timeout_duration, client.request(req)).await;
+        
+            match result {
+                Ok(Ok(mut resp)) => {
+                    trace!("Received response: {:?}", resp);
+                    let m = collect_request(resp.body_mut()).await.unwrap();
+                    match m.header {
+                        MessageHeader::ACK => info!("Request acknowledged: {:?}", m),
+                        _ => warn!("Server responds with unexpected message: {:?}", m),
+                    }
+                }
+                Ok(Err(_e)) => panic!("Failed to collect message."),
+                Err(_e) => panic!("Timed out reading response")
             }
         }
-        Ok(Err(_e)) => panic!("Failed to collect message."),
-        Err(_e) => panic!("Timed out reading response")
     }
 
     Ok(())    
