@@ -745,7 +745,6 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
         body: serde_json::to_string(&inputs.msg).unwrap()
     };
 
-    println!("{:?}", msg);
     match com {
         ComType::TCP => {
             let addr = Addr {
@@ -758,20 +757,16 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
                 Err(_e) => {
                     return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
-                    }
+                }
             };  
 
             let stream_mut = Arc::new(Mutex::new(stream));
 
             let received = send(& stream_mut, msg).await;
         
-            println!("reading msg");
             let _ = match received {
-                Ok(message) => {
-                    println!("received {:?}", message);
-                }
-                Err(_err) => return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput, "Failed to collect message."))
+                Ok(message) => trace!("Received {:?}", message),
+                Err(_err) => error!("Failed to collect message.")
             };
         },
         ComType::API => {
@@ -806,8 +801,8 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
                         _ => warn!("Server responds with unexpected message: {:?}", m),
                     }
                 }
-                Ok(Err(_e)) => panic!("Failed to collect message."),
-                Err(_e) => panic!("Timed out reading response")
+                Ok(Err(_e)) => error!("Failed to collect message."),
+                Err(_e) => error!("Timed out reading response")
             }
         }
     }
