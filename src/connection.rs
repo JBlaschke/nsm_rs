@@ -251,10 +251,7 @@ pub async fn tcp_server(
             Ok((stream, addr)) => {
                 info!("Passing TCP connection to handler...");
                 let shared_stream = Arc::new(Mutex::new(stream));
-                let mut handler_clone = handler.clone();
-                let _ = tokio::spawn(async move {
-                    handler_clone(shared_stream).await;
-                }); 
+                let _ = handler(shared_stream).await; 
             },
             Err(e) => {
                 error!("Error: {}", e);

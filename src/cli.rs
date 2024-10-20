@@ -107,6 +107,15 @@ pub fn init() -> ArgMatches {
             .required(false)
         )
         .arg(
+            Arg::new("tls")
+            .long("tls")
+            .value_name("SET TLS")
+            .help("Use TLS to encrypt traffic")
+            .num_args(0)
+            .action(clap::ArgAction::SetTrue)
+            .required(false)
+        )        
+        .arg(
             Arg::new("root_ca")
             .long("root_ca")
             .value_name("CA")
@@ -156,6 +165,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
         print_v4 = true;
         print_v6 = true;
     }
+    let tls = * args.get_one::<bool>("tls").unwrap();
 
     let operation = args.get_one::<String>("operation").unwrap();
 
@@ -197,6 +207,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
                     bind_port: port,
+                    tls: tls,
                     root_ca: root_ca.cloned()
                 }
             )
@@ -254,6 +265,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     bind_port: bind_port,
                     service_port: service_port,
                     key: key,
+                    tls: tls,
                     root_ca: root_ca.cloned()
                 }
             )

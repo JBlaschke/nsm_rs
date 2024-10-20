@@ -145,6 +145,7 @@ pub async fn handle_publish(request: Request<Incoming>) -> Result<Response<Full<
         bind_port,
         service_port,
         key,
+        tls : query_pairs.get("tls").map_or(true, |v| v == "true"),
         root_ca: Some(query_pairs.get("root_ca").unwrap_or(&"".to_string()).clone()),
     }, ComType::API);
     Ok(response)

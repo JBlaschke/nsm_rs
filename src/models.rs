@@ -56,6 +56,8 @@ pub struct Listen {
     pub starting_octets: Option<String>,
     /// port for listening for incoming connections
     pub bind_port: i32,
+    /// activate tls
+    pub tls: bool,
     /// optional path to certificate manager
     pub root_ca: Option<String>
 }
@@ -133,6 +135,8 @@ pub struct Publish {
     pub service_port: i32,
     /// uniqueley identifies service
     pub key: u64,
+    /// activate tls
+    pub tls: bool,
     /// optional path to certificate manager
     pub root_ca: Option<String>
 }

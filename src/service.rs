@@ -256,7 +256,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
             // loop is paused while there are no events to handle
             while !state_loc.running {
                 trace!("waiting to run");
-                let notify_result = timeout(Duration::from_secs(1), notify.notified()).await;
+                let notify_result = timeout(Duration::from_millis(200), notify.notified()).await;
                 match notify_result {
                     Ok(()) => {
                         trace!("Processing next events");
@@ -447,11 +447,23 @@ impl State {
             ComType::API => {
                 // connect to broker
                 // Prepare the HTTPS connector
-                let https_connector = HttpsConnectorBuilder::new()
-                    .with_tls_config(self.tls.clone().unwrap())
-                    .https_or_http()
-                    .enable_http1()
-                    .build();
+
+                let https_connector = match self.tls.clone() {
+                    Some(t) => {
+                        HttpsConnectorBuilder::new()
+                        .with_tls_config(t)
+                        .https_or_http()
+                        .enable_http1()
+                        .build()
+                    }
+                    None => {
+                        HttpsConnectorBuilder::new()
+                        .with_native_roots().unwrap()
+                        .https_or_http()
+                        .enable_http1()
+                        .build()
+                    }
+                };
 
                 // Build the Client using the HttpsConnector
                 let client = Client::builder(TokioExecutor::new()).build(https_connector);     
@@ -476,6 +488,7 @@ impl State {
                                 Some(e)
                             } else {
                                 println!("id not found");
+                                counter+=1;
                                 None
                             }
                         }) {
@@ -490,11 +503,8 @@ impl State {
                                 return Ok(immutable_hb.clone());
                             }
                         }
-                        else{
-                            counter += 1;
-                        }
                     }
-                    sleep(Duration::from_millis(1000)).await;
+                    sleep(Duration::from_millis(5000)).await;
                 }
                 if counter == 10 {
                     warn!("Could not find matching service");
@@ -853,9 +863,40 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     
     response = match (&stream, &mut request) {
         (Some(s), None) => {
-            loop {
-                heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone.clone(), None).await;
-            }
+            // Shared state to track the last heartbeat time
+            let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
+
+            // Spawn a thread to monitor the heartbeat
+            let last_heartbeat_clone = Arc::clone(&last_heartbeat);
+            let _ = tokio::spawn(async move {
+                loop {
+                    thread::sleep(Duration::from_millis(500));
+                    let elapsed = {
+                        let timer_loc = last_heartbeat_clone.lock().await;
+                        if let Some(time) = *timer_loc {
+                            time.elapsed()
+                        } else {
+                            continue;
+                        }
+                    };
+                    if elapsed > Duration::from_secs(10) {
+                        trace!("No heartbeat received for 10 seconds, exiting...");
+                        std::process::exit(0);
+                    }
+                }
+            });
+            let _ = tokio::spawn(async move {
+                loop {
+                    match heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone.clone(), None).await {
+                        Ok(resp) => {
+                            let mut last_heartbeat = last_heartbeat.lock().await;
+                            *last_heartbeat = Some(Instant::now());
+                            trace!("Heartbeat received, time updated.");
+                        },
+                        Err(e) => error!("Heartbeat handler returned an error")
+                    }
+                }
+            });
             response
         },
         (None, Some(r)) => {
@@ -959,11 +1000,23 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             },
             (None, Some(r)) => {
                 // Prepare the HTTPS connector
-                let https_connector = HttpsConnectorBuilder::new()
-                    .with_tls_config(tls.unwrap())
-                    .https_or_http()
-                    .enable_http1()
-                    .build();
+                let https_connector = match tls.clone() {
+                    Some(t) => {
+                        HttpsConnectorBuilder::new()
+                        .with_tls_config(t)
+                        .https_or_http()
+                        .enable_http1()
+                        .build()
+                    }
+                    None => {
+                        HttpsConnectorBuilder::new()
+                        .with_native_roots().unwrap()
+                        .https_or_http()
+                        .enable_http1()
+                        .build()
+                    }
+                };
+
                 let client: Client<HttpsConnector<HttpConnector>, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(https_connector);
 
                 let msg_body = MsgBody{
@@ -980,12 +1033,24 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     sleep(Duration::from_millis(1000)).await;
                     trace!("sent message to listener on {:?}", addr);
 
-                    let req = Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
-                    .header(hyper::header::CONTENT_TYPE, "application/json")
-                    .body(Full::new(Bytes::from(msg.clone())))
-                    .unwrap();
+                    let req = match tls.clone() {
+                        Some(t) => {
+                            Request::builder()
+                            .method(Method::POST)
+                            .uri(format!("https://{}:{}/request_handler", addr.host, addr.port))
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from(msg.clone())))
+                            .unwrap()
+                        }
+                        None => {
+                            Request::builder()
+                            .method(Method::POST)
+                            .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from(msg.clone())))
+                            .unwrap()
+                        }
+                    };
 
                     let start = Instant::now();
                     let result = timeout(timeout_duration, client.request(req)).await;

@@ -48,7 +48,7 @@ use env_logger::Env;
 /// - Publish - connect to broker to publish address of a new service
 /// ### Note
 ///  see cli module for more details
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 20)]
 async fn main() -> std::io::Result<()> {
     let args = parse(& init());
 
