@@ -235,6 +235,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
                     key: key,
+                    tls: tls,
                     root_ca: root_ca.cloned()
                 }
             )
@@ -289,6 +290,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
                     key: key,
+                    tls: tls,
                     root_ca: root_ca.cloned()
                 }
             )
@@ -315,6 +317,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     starting_octets: starting_octets.cloned(),
                     msg: msg.to_string(),
                     key: key,
+                    tls: tls,
                     root_ca: root_ca.cloned()
                 }
             )

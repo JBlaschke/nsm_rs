@@ -96,6 +96,8 @@ pub struct Claim {
     pub bind_port: i32,
     /// match to an available published service
     pub key: u64,
+    /// activate tls
+    pub tls: bool,
     /// optional path to certificate manager
     pub root_ca: Option<String>
 }
@@ -165,6 +167,8 @@ pub struct Collect {
     pub starting_octets: Option<String>,
     /// uniqueley identifies service
     pub key: u64,
+    /// activate tls
+    pub tls: bool,
     /// optional path to certificate manager
     pub root_ca: Option<String>
 }
@@ -195,6 +199,8 @@ pub struct Send {
     pub msg: String,
     /// uniqueley identifies service
     pub key: u64,
+    /// activate tls
+    pub tls: bool,
     /// optional path to certificate manager
     pub root_ca: Option<String>
 }

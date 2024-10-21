@@ -611,28 +611,56 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let _ = tcp_server(& addr, handler).await;
         },
         ComType::API => {
-            let server_config = tls_config().await.unwrap();
-            let tls = load_ca(inputs.root_ca).await.unwrap();
-                    
+            let tls : Option<rustls::ClientConfig>;
+            let tls_acceptor = if inputs.tls {
+                let server_config = tls_config().await.unwrap();
+                tls = Some(load_ca(inputs.root_ca).await.unwrap());
+                Some(TlsAcceptor::from(Arc::new(server_config)))
+            }
+            else {
+                tls = None;
+                None
+            };
+
            // connect to broker
             // Prepare the HTTPS connector
-            let https_connector = HttpsConnectorBuilder::new()
-            .with_tls_config(tls.clone())
-            .https_or_http()
-            .enable_http1()
-            .build();
-            let client = Client::builder(TokioExecutor::new()).build(https_connector);
+            let client = if inputs.tls {
+                let https_connector = HttpsConnectorBuilder::new()
+                .with_tls_config(tls.clone().unwrap())
+                .https_or_http()
+                .enable_http1()
+                .build();
+                Client::builder(TokioExecutor::new()).build(https_connector)
+            }
+            else {
+                let https_connector = HttpsConnectorBuilder::new()
+                .with_native_roots().unwrap()
+                .https_or_http()
+                .enable_http1()
+                .build();
+                Client::builder(TokioExecutor::new()).build(https_connector)
+            };
 
             loop {
                 sleep(Duration::from_millis(1000)).await;
                 trace!("sending request to {}:{}", inputs.host, inputs.port);
 
-                let req = Request::builder()
-                .method(Method::POST)
-                .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
-                .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
-                .unwrap();
+                let req = if inputs.tls {
+                    Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
+                    .unwrap()
+                }
+                else {
+                    Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
+                    .unwrap()
+                };
 
                 let start = Instant::now();
                 let result = timeout(timeout_duration, client.request(req)).await;
@@ -674,18 +702,26 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let service_payload_value = Arc::clone(&service_payload);
                 let broker_addr_value = Arc::clone(&broker_addr);
-                let tls_clone = tls.clone();
-                Box::pin(async move {
-                    heartbeat_handler_helper(None, Some(req), Some(&service_payload_value), Some(&broker_addr_value), Some(tls_clone)).await
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
-            }));
+                if inputs.tls {
+                    let tls_clone = tls.clone().unwrap();
+                    Box::pin(async move {
+                        heartbeat_handler_helper(None, Some(req), Some(&service_payload_value), Some(&broker_addr_value), Some(tls_clone)).await
+                    }) as std::pin::Pin<Box<dyn Future<Output = 
+                    Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }
+                else {
+                    Box::pin(async move {
+                        heartbeat_handler_helper(None, Some(req), Some(&service_payload_value), Some(&broker_addr_value), None).await
+                    }) as std::pin::Pin<Box<dyn Future<Output = 
+                    Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }
+               }));
 
             let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
 
             info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
 
             // send/receive heartbeats to/from broker
-            let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
             let incoming = TcpListener::bind(&handler_addr).await.unwrap();
             let service = service_fn(move |req: Request<Incoming>| {
                 let handler_clone = Arc::clone(&handler);
@@ -696,22 +732,38 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             });
             loop {
                 let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
-                let tls_acceptor = tls_acceptor.clone();
+                let tls_acceptor = if inputs.tls {
+                    tls_acceptor.clone()
+                }
+                else {
+                    None
+                };
                 let service_clone = service.clone();
                 tokio::task::spawn(async move {
-                    let tls_stream = match tls_acceptor.accept(tcp_stream).await {
-                        Ok(tls_stream) => tls_stream,
-                        Err(err) => {
-                            eprintln!("failed to perform tls handshake: {err:#}");
-                            return;
+                    match tls_acceptor {
+                        Some(tls_acc) => {
+                            match tls_acc.accept(tcp_stream).await {
+                                Ok(tls_stream) => {
+                                    if let Err(err) = Builder::new(TokioExecutor::new())
+                                    .serve_connection(TokioIo::new(tls_stream), service_clone)
+                                    .await {
+                                        error!("Failed to serve connection: {:?}", err);
+                                    }
+                                },
+                                Err(err) => {
+                                    eprintln!("failed to perform tls handshake: {err:#}");
+                                    return;
+                                }
+                            }
+                        },
+                        None => {
+                            if let Err(err) = Builder::new(TokioExecutor::new())
+                            .serve_connection(TokioIo::new(tcp_stream), service_clone)
+                            .await {
+                                error!("Failed to serve connection: {:?}", err);
+                            }
                         }
                     };
-
-                    if let Err(err) = Builder::new(TokioExecutor::new())
-                    .serve_connection(TokioIo::new(tls_stream), service_clone)
-                    .await {
-                        error!("Failed to serve connection: {:?}", err);
-                    }
                 });
             } 
         }
@@ -765,25 +817,54 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             };
         },
         ComType::API => {
-            let tls = load_ca(inputs.root_ca).await.unwrap();
+            let tls : Option<rustls::ClientConfig>;
+            let tls_acceptor = if inputs.tls {
+                let server_config = tls_config().await.unwrap();
+                tls = Some(load_ca(inputs.root_ca).await.unwrap());
+                Some(TlsAcceptor::from(Arc::new(server_config)))
+            }
+            else {
+                tls = None;
+                None
+            };
 
             // connect to bind port of service or client
             // Prepare the HTTPS connector
-            let https_connector = HttpsConnectorBuilder::new()
-                .with_tls_config(tls)
+            let client = if inputs.tls {
+                let https_connector = HttpsConnectorBuilder::new()
+                .with_tls_config(tls.clone().unwrap())
                 .https_or_http()
                 .enable_http1()
                 .build();
-            let client = Client::builder(TokioExecutor::new()).build(https_connector);
+                Client::builder(TokioExecutor::new()).build(https_connector)
+            }
+            else {
+                let https_connector = HttpsConnectorBuilder::new()
+                .with_native_roots().unwrap()
+                .https_or_http()
+                .enable_http1()
+                .build();
+                Client::builder(TokioExecutor::new()).build(https_connector)
+            };
 
             let timeout_duration = Duration::from_millis(6000);
         
-            let req = Request::builder()
-            .method(Method::GET)
-            .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(serialize_message(&msg.clone()))))
-            .unwrap();
+            let req = if inputs.tls {
+                Request::builder()
+                .method(Method::POST)
+                .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
+                .unwrap()
+            }
+            else {
+                Request::builder()
+                .method(Method::POST)
+                .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
+                .unwrap()
+            };
         
             let start = Instant::now();
             let result = timeout(timeout_duration, client.request(req)).await;
@@ -851,24 +932,54 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
             };
         },
         ComType::API => {
-            let tls = load_ca(inputs.root_ca).await.unwrap();
+            let tls : Option<rustls::ClientConfig>;
+            let tls_acceptor = if inputs.tls {
+                let server_config = tls_config().await.unwrap();
+                tls = Some(load_ca(inputs.root_ca).await.unwrap());
+                Some(TlsAcceptor::from(Arc::new(server_config)))
+            }
+            else {
+                tls = None;
+                None
+            };
 
             // connect to bind port of service or client
-            let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_tls_config(tls)
+            let client = if inputs.tls {
+                let https_connector = HttpsConnectorBuilder::new()
+                .with_tls_config(tls.clone().unwrap())
                 .https_or_http()
                 .enable_http1()
                 .build();
-            let client = Client::builder(TokioExecutor::new()).build(https_connector);
+                Client::builder(TokioExecutor::new()).build(https_connector)
+            }
+            else {
+                let https_connector = HttpsConnectorBuilder::new()
+                .with_native_roots().unwrap()
+                .https_or_http()
+                .enable_http1()
+                .build();
+                Client::builder(TokioExecutor::new()).build(https_connector)
+            };
             let timeout_duration = Duration::from_millis(6000);
         
             println!("sending request to {}:{}", inputs.host, inputs.port);
-            let req = Request::builder()
-            .method(Method::GET)
-            .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(serialize_message(&msg.clone()))))
-            .unwrap();
+            println!("{:?}", msg.clone());
+            let req = if inputs.tls {
+                Request::builder()
+                .method(Method::POST)
+                .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
+                .unwrap()
+            }
+            else {
+                Request::builder()
+                .method(Method::POST)
+                .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
+                .unwrap()
+            };
         
             let start = Instant::now();
             let result = timeout(timeout_duration, client.request(req)).await;

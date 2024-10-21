@@ -374,7 +374,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                 info!("Dropping event");
             }
         });
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(1000)).await;
     }
 }
 
@@ -789,12 +789,13 @@ pub async fn request_handler(
             trace!("Sending Message: {:?}", msg_body);
 
             let (lock, notify) = &**state;
-            let mut state_loc = lock.lock().await;
 
             let mut counter = 0;
             while counter < 10 {
                 {
+                    let mut state_loc = lock.lock().await;
                     let mut deque = state_loc.deque.lock().await;
+                    println!("deque status {:?}", deque);
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
                         if e.id == msg_body.id {
                             println!("found id");
@@ -822,6 +823,7 @@ pub async fn request_handler(
                         break;
                     }
                     else{
+                        println!("incrementing count");
                         counter += 1;
                     }
                 }
@@ -1000,6 +1002,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             },
             (None, Some(r)) => {
                 // Prepare the HTTPS connector
+                println!("initiating request to listener");
                 let https_connector = match tls.clone() {
                     Some(t) => {
                         HttpsConnectorBuilder::new()
