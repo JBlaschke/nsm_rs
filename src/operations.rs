@@ -29,9 +29,31 @@ use tokio::sync::Mutex;
 use std::future::Future;
 use rustls::{ServerConfig, RootCertStore};
 use tokio_rustls::TlsAcceptor;
+use rustls::client::ClientConfig;
+use rustls::client::danger::{ServerCertVerifier, ServerCertVerified};
+use rustls::pki_types::ServerName;
+use std::time::SystemTime;
+
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
+
+#[derive(Debug)]
+struct AcceptAllCerts;
+
+impl ServerCertVerifier for AcceptAllCerts {
+    fn verify_server_cert(
+        &self,
+        _roots: &RootCertStore,
+        _certs: &[Certificate],
+        _host: &str,
+        _sni: Option<&ServerName>,
+        _now: SystemTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        // Accept any certificate
+        Ok(ServerCertVerified::assertion())
+    }
+}
 
 pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
     let ips = get_local_ips().await;
@@ -169,9 +191,12 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
             let tls_acceptor : Option<TlsAcceptor> = if inputs.tls {
                 println!("entered tls");
                 let server_config = tls_config().await.unwrap();
-                let tls = load_ca(inputs.root_ca).await.unwrap();
+                let root_store = load_ca(inputs.root_ca).await.unwrap();
+                let tls = Some(ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth());
                 // initialize State struct using tls
-                state = Arc::new((Mutex::new(State::new(Some(tls))), Notify::new()));
+                state = Arc::new((Mutex::new(State::new(tls)), Notify::new()));
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -333,7 +358,11 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                tls = Some(load_ca(inputs.root_ca).await.unwrap());
+                let root_store = load_ca(inputs.root_ca).await.unwrap();
+                tls = Some(ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth());
+                tls = Some(tls.unwrap().dangerous().set_certificate_verifier(Arc::new(AcceptAllCerts)));
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -614,7 +643,10 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                tls = Some(load_ca(inputs.root_ca).await.unwrap());
+                let root_store = load_ca(inputs.root_ca).await.unwrap();
+                tls = Some(ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth());
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -820,7 +852,10 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                tls = Some(load_ca(inputs.root_ca).await.unwrap());
+                let root_store = load_ca(inputs.root_ca).await.unwrap();
+                tls = Some(ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth());
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -935,7 +970,10 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                tls = Some(load_ca(inputs.root_ca).await.unwrap());
+                let root_store = load_ca(inputs.root_ca).await.unwrap();
+                tls = Some(ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth());
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {

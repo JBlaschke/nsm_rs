@@ -2,6 +2,7 @@ use std::{env, fs, io};
 use pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, ServerConfig, RootCertStore};
 use hyper_rustls::ConfigBuilderExt;
+use rustls::server::WebPkiClientVerifier;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -30,36 +31,27 @@ async fn load_private_key() -> Result<PrivateKeyDer<'static>, std::io::Error> {
     rustls_pemfile::private_key(&mut reader).map(|key| key.unwrap())
 }
 
-pub async fn load_ca(root_ca: Option<String>) -> Result<ClientConfig, std::io::Error>{
-    let mut ca = match root_ca {
+pub async fn load_ca(root_ca: Option<String>) -> Result<RootCertStore, std::io::Error>{
+    let root_store = match root_ca {
         Some(ref path) => {
-            let f = fs::File::open(path)
+            let file = fs::File::open(path)
                 .map_err(|e| error!("{}", format!( "failed to open {}: {}", path, e))).unwrap();
-            let rd = io::BufReader::new(f);
-            Some(rd)
+            let mut reader = io::BufReader::new(file);
+            let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+            let mut root_store = RootCertStore::empty();
+            root_store.add_parsable_certificates(certs);
+            root_store
         }
-        None => None,
+        None => {
+            let certs = load_certs().await.unwrap();
+            println!("trusted root store {:?}", certs.clone());
+            let mut root_store = RootCertStore::empty();
+            root_store.add_parsable_certificates(certs);
+            root_store
+        },
     };
 
-    // Prepare the TLS client config
-    let tls = match ca {
-        Some(ref mut rd) => {
-            // println!("using ca");
-            // Read trust roots
-            let certs = rustls_pemfile::certs(rd).collect::<Result<Vec<_>, _>>().unwrap();
-            let mut roots = RootCertStore::empty();
-            roots.add_parsable_certificates(certs);
-            // TLS client config using the custom CA store for lookups
-            rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth()
-        }
-        // Default TLS client config with native roots
-        None => rustls::ClientConfig::builder()
-                .with_native_roots().unwrap()
-                .with_no_client_auth(),
-    };
-    Ok(tls)
+    Ok(root_store)
 }
 
 pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
@@ -71,14 +63,21 @@ pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
 
         // Load public certificate.
         let certs = load_certs().await.unwrap();
-        let key = load_private_key().await.unwrap();
+        let keys = load_private_key().await.unwrap();
 
+        // Load the root certificates for verifying clients (CA_PATH)
+        let root_store = load_ca(None).await?;
+
+        // Create the WebPkiClientVerifier using the root certificates
+        let verifier = WebPkiClientVerifier::builder(root_store.into())
+            .build()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Failed to create client verifier"))?;
+            
         // Build TLS configuration.
-        let mut server_config = ServerConfig::builder()
+        let config = ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(|e| error!("{}", e.to_string())).unwrap();
-        server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+            .with_single_cert(certs, keys)
+            .expect("Failed to create ServerConfig");
 
-        Ok(server_config)
+        Ok(config)
 }
