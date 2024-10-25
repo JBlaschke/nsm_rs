@@ -31,29 +31,13 @@ use rustls::{ServerConfig, RootCertStore};
 use tokio_rustls::TlsAcceptor;
 use rustls::client::ClientConfig;
 use rustls::client::danger::{ServerCertVerifier, ServerCertVerified};
-use rustls::pki_types::ServerName;
+use rustls::pki_types::{ServerName, CertificateDer};
 use std::time::SystemTime;
 
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-#[derive(Debug)]
-struct AcceptAllCerts;
-
-impl ServerCertVerifier for AcceptAllCerts {
-    fn verify_server_cert(
-        &self,
-        _roots: &RootCertStore,
-        _certs: &[Certificate],
-        _host: &str,
-        _sni: Option<&ServerName>,
-        _now: SystemTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        // Accept any certificate
-        Ok(ServerCertVerified::assertion())
-    }
-}
 
 pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
     let ips = get_local_ips().await;
@@ -362,7 +346,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
-                tls = Some(tls.unwrap().dangerous().set_certificate_verifier(Arc::new(AcceptAllCerts)));
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {

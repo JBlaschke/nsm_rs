@@ -44,7 +44,6 @@ pub async fn load_ca(root_ca: Option<String>) -> Result<RootCertStore, std::io::
         }
         None => {
             let certs = load_certs().await.unwrap();
-            println!("trusted root store {:?}", certs.clone());
             let mut root_store = RootCertStore::empty();
             root_store.add_parsable_certificates(certs);
             root_store
@@ -63,21 +62,14 @@ pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
 
         // Load public certificate.
         let certs = load_certs().await.unwrap();
-        let keys = load_private_key().await.unwrap();
+        let key = load_private_key().await.unwrap();
 
-        // Load the root certificates for verifying clients (CA_PATH)
-        let root_store = load_ca(None).await?;
-
-        // Create the WebPkiClientVerifier using the root certificates
-        let verifier = WebPkiClientVerifier::builder(root_store.into())
-            .build()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Failed to create client verifier"))?;
-            
         // Build TLS configuration.
-        let config = ServerConfig::builder()
+        let mut server_config = ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, keys)
-            .expect("Failed to create ServerConfig");
+            .with_single_cert(certs, key)
+            .map_err(|e| error!("{}", e.to_string())).unwrap();
+        server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
 
-        Ok(config)
+        Ok(server_config)
 }
