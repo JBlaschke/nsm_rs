@@ -120,6 +120,8 @@ pub struct Heartbeat {
     pub stream: Option<Arc<Mutex<TcpStream>>>,
     /// client object for sending heartbeat requests
     pub client: Option<Client<HttpsConnector<HttpConnector>, Full<Bytes>>>,
+    /// boolean representing tls activity
+    pub tls: bool,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_counter: FailCounter,
     /// message sent from client
@@ -180,12 +182,20 @@ impl Heartbeat {
                 received
             },
             (None, Some(c)) => {
-                let req = Request::builder()
-                .method(Method::GET)
-                .uri(format!("http://{}/heartbeat_handler", self.addr))
-                .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(Full::new(Bytes::from(message)))
-                .unwrap();
+                let req = match self.tls{
+                    true => Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("https://{}/heartbeat_handler", self.addr))
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(message)))
+                    .unwrap(),
+                    false => Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("http://{}/heartbeat_handler", self.addr))
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(message)))
+                    .unwrap(),
+                };
                 
                 // allots time for reading response
                 let timeout_duration = Duration::from_secs(10);
@@ -346,6 +356,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                                 addr: hb.addr.clone(),
                                 stream: hb.stream.clone(),
                                 client: hb.client.clone(),
+                                tls: hb.tls.clone(),
                                 fail_counter: FailCounter::new(),
                                 msg_body: hb.msg_body.clone(),
                             };
@@ -471,6 +482,11 @@ impl State {
             }
         };
 
+        let tls = match self.tls.clone(){
+            Some(t) => true,
+            None => false
+        };
+
         if let Some(vec) = self.clients.get_mut(&p.key) {
             // find value in clients with matching id
             if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr
@@ -496,6 +512,7 @@ impl State {
                                 hb.addr = bind_address.clone();
                                 hb.stream = stream;
                                 hb.client = client;
+                                hb.tls = tls;
                                 trace!("Altering hb {:?}", hb);
                                 p.id = item.id;
                                 p.service_id = item.service_id;
@@ -525,6 +542,7 @@ impl State {
             addr: bind_address.clone(),
             stream,
             client,
+            tls,
             fail_counter: FailCounter::new(),
             msg_body: MsgBody::default(),
         };
