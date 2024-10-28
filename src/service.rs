@@ -26,6 +26,7 @@ use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 use std::future::Future;
 use rustls::ClientConfig;
+use crate::tls::load_ca;
 
 
 #[allow(unused_imports)]
@@ -54,6 +55,8 @@ pub struct Payload {
     pub id: u64,
     /// identifies unique service, clients assume id from connected service
     pub service_id: u64,
+    /// path to root store
+    pub root_ca: Option<String>,
 }
 
 /// Store message contents to send to connected service
@@ -404,8 +407,6 @@ pub struct State {
     pub deque: Arc<Mutex<VecDeque<Heartbeat>>>,
     /// true when event queue contains events to handle, false when event queue is empty
     pub running: bool,
-    /// tls client configuration to send heartbeat messages
-    pub tls: Option<ClientConfig>
 }
 
 
@@ -420,7 +421,6 @@ impl State {
             seq: 1,
             deque: Arc::new(Mutex::new(VecDeque::new())),
             running: false,
-            tls
         }
     }
 
@@ -459,10 +459,14 @@ impl State {
                 // connect to broker
                 // Prepare the HTTPS connector
 
-                let https_connector = match self.tls.clone() {
-                    Some(t) => {
+                let https_connector = match p.root_ca.clone() {
+                    Some(path) => {
+                        let root_store = load_ca(Some(path)).await.unwrap();
+                        let tls = ClientConfig::builder()
+                            .with_root_certificates(root_store)
+                            .with_no_client_auth();
                         HttpsConnectorBuilder::new()
-                        .with_tls_config(t)
+                        .with_tls_config(tls)
                         .https_or_http()
                         .enable_http1()
                         .build()
@@ -482,8 +486,8 @@ impl State {
             }
         };
 
-        let tls = match self.tls.clone(){
-            Some(t) => true,
+        let tls = match p.root_ca{
+            Some(ref t) => true,
             None => false
         };
 

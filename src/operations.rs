@@ -175,16 +175,9 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
             let tls_acceptor : Option<TlsAcceptor> = if inputs.tls {
                 println!("entered tls");
                 let server_config = tls_config().await.unwrap();
-                let root_store = load_ca(inputs.root_ca).await.unwrap();
-                let tls = Some(ClientConfig::builder()
-                    .with_root_certificates(root_store)
-                    .with_no_client_auth());
-                // initialize State struct using tls
-                state = Arc::new((Mutex::new(State::new(tls)), Notify::new()));
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
-                state = Arc::new((Mutex::new(State::new(None)), Notify::new()));
                 None
             };
 
@@ -284,6 +277,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         key: inputs.key,
         id: 0,
         service_id: 0,
+        root_ca: inputs.root_ca
     });
     let host = only_or_error(& ipstr);
 
@@ -342,7 +336,8 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                let root_store = load_ca(inputs.root_ca).await.unwrap();
+                let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
+                let root_store = load_ca(Some(root_path)).await.unwrap();
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
@@ -521,6 +516,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         key: inputs.key,
         id: 0,
         service_id: 0,
+        root_ca: inputs.root_ca
     });
 
     let host = only_or_error(& ipstr);
@@ -626,7 +622,8 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                let root_store = load_ca(inputs.root_ca).await.unwrap();
+                let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
+                let root_store = load_ca(Some(root_path)).await.unwrap();
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
@@ -835,8 +832,9 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                let root_store = load_ca(inputs.root_ca).await.unwrap();
-                tls = Some(ClientConfig::builder()
+                let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
+                let root_store = load_ca(Some(root_path)).await.unwrap();
+               tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
                 Some(TlsAcceptor::from(Arc::new(server_config)))
@@ -953,7 +951,8 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                let root_store = load_ca(inputs.root_ca).await.unwrap();
+                let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
+                let root_store = load_ca(Some(root_path)).await.unwrap();
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
