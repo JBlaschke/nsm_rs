@@ -140,6 +140,7 @@ async fn handle_requests(request: Request<Incoming>) -> Result<Response<Full<Byt
             handle_list_interfaces(request).await
         },
         (Method::GET, p) if p.starts_with("/list_ips") => {
+            println!("entered list_ip request");
             handle_list_ips(request).await
         },
         (Method::POST, p) if p.starts_with("/publish") => {

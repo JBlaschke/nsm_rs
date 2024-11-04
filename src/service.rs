@@ -135,6 +135,7 @@ impl Heartbeat {
     /// send a heartbeat to the service/client and check if entity sent one back,
     /// increment fail_count if heartbeat not received when expected
     async fn monitor(&mut self) -> Result<Response<Full<Bytes>>, std::io::Error>{
+        sleep(Duration::from_millis(10000));
         
         trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
         let mut response = Response::new(Full::default());
@@ -379,7 +380,6 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                 else{
                     // add event back to queue 
                     let mut loc_deque = deque_clone2.lock().await;
-                    println!("{:?}", hb);
                     let _ = loc_deque.push_back(hb);
                     trace!("Deque status {:?}", loc_deque);
                 }
@@ -427,8 +427,6 @@ impl State {
     /// adds new services/clients to State struct and creates Event object to add to event loop 
     pub async fn add(&mut self, mut p: Payload, service_id: u64, com: ComType) -> Result<Heartbeat, std::io::Error>{
 
-        println!("adding service");
-
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
 
@@ -461,6 +459,7 @@ impl State {
 
                 let https_connector = match p.root_ca.clone() {
                     Some(path) => {
+                        info!("{:?}", path);
                         let root_store = load_ca(Some(path)).await.unwrap();
                         let tls = ClientConfig::builder()
                             .with_root_certificates(root_store)
@@ -497,17 +496,16 @@ impl State {
                  && item.service_port == p.service_port) {
                 let item = &vec[pos];
                 let mut counter = 0;
-                println!("{:?}", item);
                 while counter < 10 {
                     {
                         let mut deque_loc = self.deque.lock().await;
-                        println!("searching for item {:?}", deque_loc);
+                        trace!("searching for item {:?}", deque_loc);
                         if let Some(hb) = deque_loc.iter_mut().find_map(|e| {
                             if e.id == item.id {
-                                println!("found id");
+                                trace!("found id");
                                 Some(e)
                             } else {
-                                println!("id not found");
+                                trace!("id not found");
                                 counter+=1;
                                 None
                             }
@@ -765,7 +763,7 @@ pub async fn request_handler(
                         break;
                     },
                     Err(e) => {
-                        println!("looking for key, not found: {:?}", e);
+                        trace!("looking for key, not found: {:?}", e);
                         claim_fail += 1;
                         if claim_fail <= 5{
                             sleep(Duration::from_millis(200)).await;
@@ -776,7 +774,6 @@ pub async fn request_handler(
                             body: "".to_string()
                         });
                         // notify main() of failure to claim an available service
-                        println!("bad request");
                         
                         match (stream, request) {
                             (Some(s), None) => {
@@ -817,13 +814,13 @@ pub async fn request_handler(
                 {
                     let mut state_loc = lock.lock().await;
                     let mut deque = state_loc.deque.lock().await;
-                    println!("deque status {:?}", deque);
+                    trace!("deque status {:?}", deque);
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
                         if e.id == msg_body.id {
-                            println!("found id");
+                            trace!("found id");
                             Some(e)
                         } else {
-                            println!("id not found");
+                            trace!("id not found");
                             None
                         }
                     }) {
@@ -845,11 +842,10 @@ pub async fn request_handler(
                         break;
                     }
                     else{
-                        println!("incrementing count");
                         counter += 1;
                     }
                 }
-                sleep(Duration::from_millis(1000)).await;
+                sleep(Duration::from_millis(500)).await;
             }
             if counter == 10 {
                 warn!("Could not find matching service");
@@ -868,7 +864,6 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     let mut response = Response::new(Full::default());
 
     // retrieve service's payload from client or set an empty message body
-    println!("{:?}", payload);
     let binding = Arc::new(Mutex::new("".to_string()));
     let payload = payload.unwrap_or(&binding);
     let payload_clone = payload.lock().await.clone();
@@ -960,7 +955,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
             match stream_read(loc_stream).await {
                 Ok(message) => {
-                    println!("{:?}", message);
+                    trace!("{:?}", message);
                     deserialize_message(& message)
                 },
                 Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
@@ -986,11 +981,9 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
     };
     // set service_id to know which service to send msg to
     let mut service_id = 0;
-    println!("{:?}", payload);
     if *payload != "".to_string() {
         service_id = deserialize(payload).service_id;
     }
-    println!("{:?}", service_id);
     let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
 
     // allots time for reading from stream
@@ -1024,7 +1017,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             },
             (None, Some(r)) => {
                 // Prepare the HTTPS connector
-                println!("initiating request to listener");
+                trace!("initiating request to listener");
                 let https_connector = match tls.clone() {
                     Some(t) => {
                         HttpsConnectorBuilder::new()
@@ -1175,7 +1168,6 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
         trace!("Heartbeat handler has returned request");
     }
     else if matches!(message.header, MessageHeader::HB){
-        println!("{:?}", message.clone());
         let msg_body: MsgBody = serde_json::from_str(& message.body.clone()).unwrap();
         // default HB/MSG response to send what was received
         if msg_body.msg.is_empty(){

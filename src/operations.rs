@@ -164,16 +164,14 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
             let state_clone_cl = Arc::clone(& state_clone);
             let event_loop = tokio::spawn(async move {
                 let _ = match event_monitor(state_clone_cl).await{
-                    Ok(resp) => println!("exited event monitor"),
-                    Err(_) => println!("event monitor error")
+                    Ok(resp) => trace!("exited event monitor"),
+                    Err(_) => trace!("event monitor error")
                 };
             });
             event_loop.await;
         },
         ComType::API => {
-            println!("{}", inputs.tls);
             let tls_acceptor : Option<TlsAcceptor> = if inputs.tls {
-                println!("entered tls");
                 let server_config = tls_config().await.unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
@@ -185,8 +183,8 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
 
             let event_loop = tokio::spawn(async move {
                 let _ = match event_monitor(state_clone).await{
-                    Ok(resp) => println!("exited event monitor"),
-                    Err(_) => println!("event monitor error")
+                    Ok(resp) => trace!("exited event monitor"),
+                    Err(_) => trace!("event monitor error")
                 };
             });
 
@@ -252,9 +250,9 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
 }
 
 pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Bytes>>, std::io::Error> {
+    println!("{:?}",inputs.tls.clone());
 
     let ips = get_local_ips().await;
-
     let (ipstr, all_ipstr) = if inputs.print_v4 {(
         get_matching_ipstr(
             & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
@@ -266,8 +264,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         ).await,
         get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None).await
     )};
-
-    println!("found addresses");
     let payload = serialize(& Payload {
         service_addr: ipstr.clone(),
         service_port: inputs.service_port,
@@ -332,9 +328,9 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             let _ = tcp_server(& addr, handler).await;
         },
         ComType::API => {
-
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
+                println!("entering tls config");
                 let server_config = tls_config().await.unwrap();
                 let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
                 let root_store = load_ca(Some(root_path)).await.unwrap();
@@ -372,7 +368,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             loop {
                 sleep(Duration::from_millis(1000)).await;
                 trace!("sending request to {}:{}", inputs.host, inputs.port);
-
                 let req = if inputs.tls {
                     Request::builder()
                     .method(Method::POST)
@@ -493,6 +488,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
 }
 
 pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>, std::io::Error> {
+    println!("{:?}", inputs.tls.clone());
     let ips = get_local_ips().await;
 
     let (ipstr, _all_ipstr) = if inputs.print_v4 {(
@@ -569,7 +565,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                                 // print service's address to client
                                 if matches!(message.header, MessageHeader::ACK){
                                     info!("Server acknowledged CLAIM.");
-                                    println!("{}", message.body);
+                                    println!("Received payload: {}", message.body);
                                     let mut service_payload_loc = service_payload.lock().await;
                                     *service_payload_loc = message.body;
                                     break;
@@ -685,7 +681,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                         // print service's address to client
                         if matches!(m.header, MessageHeader::ACK){
                             info!("Server acknowledged CLAIM.");
-                            println!("{}", m.body);
+                            println!("Received payload: {}", m.body);
                             let mut service_payload_loc = service_payload.lock().await;
                             *service_payload_loc = m.body;
                             break;
@@ -777,7 +773,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                         }
                     };
                 });
-            } 
+            }
         }
     }
 
@@ -816,7 +812,6 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
 
             let received = send(& stream_mut, msg).await;
         
-            println!("reading HB");
             let _payload = match received {
                 Ok(message) => {
                     if message.body.is_empty() {
@@ -885,7 +880,7 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             let start = Instant::now();
             let result = timeout(timeout_duration, client.request(req)).await;
         
-            println!("sending request to {}:{}", inputs.host, inputs.port);
+            trace!("sending request to {}:{}", inputs.host, inputs.port);
         
             match result {
                 Ok(Ok(mut resp)) => {
@@ -982,8 +977,7 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
             };
             let timeout_duration = Duration::from_millis(6000);
         
-            println!("sending request to {}:{}", inputs.host, inputs.port);
-            println!("{:?}", msg.clone());
+            trace!("sending request to {}:{}", inputs.host, inputs.port);
             let req = if inputs.tls {
                 Request::builder()
                 .method(Method::POST)
