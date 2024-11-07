@@ -1,6 +1,6 @@
 use crate::operations::{list_interfaces, list_ips, claim, publish, collect, send_msg};
 
-use crate::models::{ListInterfaces, ListIPs, Claim, Publish, Collect, Send};
+use crate::models::{ListInterfaces, ListIPs, Claim, Publish, Collect, SendMSG};
 
 use crate::connection::ComType;
 
@@ -158,6 +158,7 @@ pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<F
             key,
             tls : data.get("tls").map_or(false, |v| v == "true"),
             root_ca,
+            ping : data.get("ping").map_or(false, |v| v == "true"),
         }, ComType::API).await {
             Ok(_output) => {
                 *task_response.body_mut() = Full::from("Request to publish ended")
@@ -245,6 +246,7 @@ pub async fn handle_claim(request: Request<Incoming>) -> Result<Response<Full<By
             key,
             tls : query_pairs.get("tls").map_or(false, |v| v == "true"),
             root_ca,
+            ping : query_pairs.get("ping").map_or(false, |v| v == "true"),
         }, ComType::API).await {
             Ok(_output) => {
                 *task_response.body_mut() = Full::from("Request to claim completed")
@@ -310,28 +312,24 @@ pub async fn handle_collect(request: Request<Incoming>) -> Result<Response<Full<
         Some(s) => Some(s.trim_matches('"').to_string()),
         None => None
     };
-    tokio::spawn(async move{
-        let mut task_response: Response<Full<Bytes>> = Response::new(Full::default());
-        let _result = match collect(Collect {
-            print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-            print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-            host,
-            port,
-            name,
-            starting_octets,
-            key,
-            tls : query_pairs.get("tls").map_or(false, |v| v == "true"),
-            root_ca,
-        }, ComType::API).await {
-            Ok(_output) => {
-                *task_response.body_mut() = Full::from("Request to collect completed")
-            },
-            Err(e) => {
-                *task_response.body_mut() = Full::from(format!("Error processing request: {}", e))
-            }
-        };
-        Ok::<Response<Full<Bytes>>, hyper::Error>(task_response);
-    });
+    let _result = match collect(Collect {
+        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
+        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
+        host,
+        port,
+        name,
+        starting_octets,
+        key,
+        tls : query_pairs.get("tls").map_or(false, |v| v == "true"),
+        root_ca,
+    }, ComType::API).await {
+        Ok(_output) => {
+            *response.body_mut() = Full::from("Successful request to collect");
+        },
+        Err(e) => {
+            *response.body_mut() = Full::from(format!("Error processing request: {}", e));
+        }
+    };
     *response.body_mut() = Full::from("Successful request to collect");
     Ok(response)
 }
@@ -397,30 +395,25 @@ pub async fn handle_send(mut request: Request<Incoming>) -> Result<Response<Full
         Some(s) => Some(s.trim_matches('"').to_string()),
         None => None
     };
-    tokio::spawn(async move{
-        let mut task_response: Response<Full<Bytes>> = Response::new(Full::default());
-        let _result = match send_msg(Send {
-            print_v4: data.get("print_v4").map_or(true, |v| v == "true"),
-            print_v6: data.get("print_v6").map_or(true, |v| v == "true"),
-            host,
-            port,
-            name,
-            starting_octets,
-            msg,
-            key,
-            tls : data.get("tls").map_or(false, |v| v == "true"),
-            root_ca,
-        }, ComType::API).await {
-            Ok(_output) => {
-                *task_response.body_mut() = Full::from("Request to publish ended")
-            },
-            Err(e) => {
-                *task_response.body_mut() = Full::from(format!("Error processing request: {}", e))
-            }
-        };
-        Ok::<Response<Full<Bytes>>, hyper::Error>(task_response);
-    });
-    *response.body_mut() = Full::from("Successful request to publish");
+    let _result = match send_msg(SendMSG {
+        print_v4: data.get("print_v4").map_or(true, |v| v == "true"),
+        print_v6: data.get("print_v6").map_or(true, |v| v == "true"),
+        host,
+        port,
+        name,
+        starting_octets,
+        msg,
+        key,
+        tls : data.get("tls").map_or(false, |v| v == "true"),
+        root_ca,
+    }, ComType::API).await {
+        Ok(_output) => {
+            *response.body_mut() = Full::from("Successful request to send");
+        },
+        Err(e) => {
+            *response.body_mut() = Full::from(format!("Error processing request: {}", e));
+        }
+    };
     Ok(response)
 }
 

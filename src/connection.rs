@@ -20,6 +20,9 @@ use std::future::Future;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
+// use crate::api_builder::{handle_claim, handle_collect, handle_list_interfaces, handle_list_ips,
+//     handle_publish, handle_send};
+
 /// Store host and port for new connections
 #[derive(Debug, Clone)]
 pub struct Addr {
@@ -227,7 +230,30 @@ pub async fn api_server(
             info!("received hb request");
             handler(request).await
         },
+        // (Method::GET, p) if p.starts_with("/list_interfaces") => {
+        //     handle_list_interfaces(request).await
+        // },
+        // (Method::GET, p) if p.starts_with("/list_ips") => {
+        //     println!("entered list_ip request");
+        //     handle_list_ips(request).await
+        // },
+        // (Method::POST, p) if p.starts_with("/publish") => {
+        //     handle_publish(request).await
+        // },
+        // (Method::GET, p) if p.starts_with("/claim") => {
+        //     handle_claim(request).await
+        // },
+        // (Method::GET, p) if p.starts_with("/collect") => {
+        //     handle_collect(request).await
+        // },
+        // (Method::POST, p) if p.starts_with("/send") => {
+        //     handle_send(request).await
+        // },
+        // (Method::Get, "/task_update") => {
+        //     let _ = handle_task_update(request);
+        // },
         _ => {
+            // Return 404 not found response.
             *response.status_mut() = StatusCode::NOT_FOUND;
             Ok(response)
         }
@@ -237,7 +263,7 @@ pub async fn api_server(
 /// Binds to stream and listens for incoming connections, then handles connection using specified handler
 pub async fn tcp_server(
     addr: &Addr, 
-    mut handler: impl FnMut(Arc<Mutex<TcpStream>>) 
+    mut handler: impl FnMut(Option<Arc<Mutex<TcpStream>>>)
     -> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>>
      + std::marker::Send>> + std::marker::Send + 'static + Clone
 ) -> Result<(), std::io::Error> {
@@ -251,7 +277,7 @@ pub async fn tcp_server(
             Ok((stream, addr)) => {
                 info!("Passing TCP connection to handler...");
                 let shared_stream = Arc::new(Mutex::new(stream));
-                let _ = handler(shared_stream).await; 
+                let _ = handler(Some(shared_stream)).await; 
             },
             Err(e) => {
                 error!("Error: {}", e);

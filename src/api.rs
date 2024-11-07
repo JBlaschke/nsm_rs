@@ -101,7 +101,7 @@ async fn main() -> std::io::Result<()> {
                 let _ = collect(inputs, ComType::API).await;
             }
 
-            CLIOperation::Send(inputs) => {
+            CLIOperation::SendMSG(inputs) => {
                 let _ = send_msg(inputs, ComType::API).await;
             }
         }

@@ -22,7 +22,7 @@ mod operations;
 use operations::{list_interfaces, list_ips, listen, claim, publish, collect, send_msg};
 
 mod models;
-use models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
+use models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG};
 
 mod tls;
 
@@ -95,7 +95,7 @@ async fn main() -> std::io::Result<()> {
             let _ = collect(inputs, ComType::TCP).await;
         }
 
-        CLIOperation::Send(inputs) => {
+        CLIOperation::SendMSG(inputs) => {
             let _ = send_msg(inputs, ComType::TCP).await;
         }
     }

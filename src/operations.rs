@@ -3,11 +3,12 @@ use crate::network::{get_local_ips, get_matching_ipstr};
 use crate::connection::{ComType, Message, MessageHeader, Addr, api_server, tcp_server,
     serialize_message, deserialize_message, send, connect, collect_request, stream_read};
 
-use crate::service::{Payload, State, serialize, request_handler, heartbeat_handler_helper, event_monitor};
+use crate::service::{Payload, State, serialize, request_handler,
+     heartbeat_handler_helper, ping_heartbeat, event_monitor};
 
 use crate::utils::{only_or_error, epoch};
 
-use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
+use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG};
 
 use crate::tls::{tls_config, load_ca};
 
@@ -37,7 +38,6 @@ use std::time::SystemTime;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
-
 
 pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
     let ips = get_local_ips().await;
@@ -142,10 +142,10 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
         ComType::TCP => {
             let state_clones = Arc::clone(& state_clone);
 
-            let handler =  move |stream: Arc<Mutex<TcpStream>>| {
+            let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
                 let state_clone_inner = Arc::clone(& state_clones);
                 Box::pin(async move {
-                    return request_handler(& state_clone_inner, Some(stream), None).await;
+                    return request_handler(& state_clone_inner, stream, None).await;
                 }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             };
 
@@ -265,7 +265,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None).await
     )};
     let payload = serialize(& Payload {
-        service_addr: ipstr.clone(),
+        service_addr: "publish".to_string(),
         service_port: inputs.service_port,
         service_claim: 0,
         interface_addr: all_ipstr,
@@ -313,12 +313,18 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                     error!("Encountered error: {:?}", e);
                 }
             }
-
-            let handler =  move |stream: Arc<Mutex<TcpStream>>| {
-                Box::pin(async move {
-                    return heartbeat_handler_helper(Some(stream), None, None, None, None).await;
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
-            };
+            let handler = (move |stream: Option<Arc<Mutex<TcpStream>>>| {
+                if inputs.ping {
+                    Box::pin(async move {
+                        return ping_heartbeat(None, None, None, ComType::TCP).await
+                    }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }
+                else {
+                    Box::pin(async move {
+                        return heartbeat_handler_helper(stream, None, None, None, None).await
+                    }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }
+            });
 
             let addr = Addr {
                 host: host.to_string(),
@@ -503,8 +509,10 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None).await
     )};
 
+    let host = only_or_error(& ipstr);
+
     let payload = serialize(& Payload {
-        service_addr: ipstr.clone(),
+        service_addr: "client".to_string(),
         service_port: inputs.port,
         service_claim: epoch(),
         interface_addr: Vec::new(),
@@ -515,7 +523,6 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         root_ca: inputs.root_ca
     });
 
-    let host = only_or_error(& ipstr);
 
     let broker_addr = Arc::new(Mutex::new(Addr{
         host: inputs.host.clone(),
@@ -596,15 +603,27 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             }
             let payload_clone = Arc::clone(&service_payload);
             let broker_clone = Arc::clone(&broker_addr);
-            let handler =  move |stream: Arc<Mutex<TcpStream>>| {
-                let inner_payload = Arc::clone(&payload_clone);
-                let inner_broker = Arc::clone(&broker_clone);
-                Box::pin(async move {
-                    let payload_clone = Arc::clone(&inner_payload);
-                    let broker_clone = Arc::clone(&inner_broker);
-                    return heartbeat_handler_helper(Some(stream), None, Some(& payload_clone), Some(&broker_clone), None).await;
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
-            };
+
+            let handler = (move |stream: Option<Arc<Mutex<TcpStream>>>| {
+                if inputs.ping {
+                    let inner_payload = Arc::clone(&payload_clone);
+                    let inner_broker = Arc::clone(&broker_clone);
+                    Box::pin(async move {
+                        let payload_clone = Arc::clone(&inner_payload);
+                        let broker_clone = Arc::clone(&inner_broker);
+                        ping_heartbeat(Some(& payload_clone), Some(&broker_clone), None, ComType::TCP).await
+                    }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }
+                else {
+                    let inner_payload = Arc::clone(&payload_clone);
+                    let inner_broker = Arc::clone(&broker_clone);
+                    Box::pin(async move {
+                        let payload_clone = Arc::clone(&inner_payload);
+                        let broker_clone = Arc::clone(&inner_broker);
+                        heartbeat_handler_helper(stream, None, Some(& payload_clone), Some(&broker_clone), None).await
+                    }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }
+            });
 
             let addr = Addr {
                 host: host.to_string(),
@@ -824,18 +843,15 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             };
         },
         ComType::API => {
-            let tls : Option<rustls::ClientConfig>;
-            let tls_acceptor = if inputs.tls {
-                let server_config = tls_config().await.unwrap();
+            let tls : Option<rustls::ClientConfig> = if inputs.tls {
+                // let server_config = tls_config().await.unwrap();
                 let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
                 let root_store = load_ca(Some(root_path)).await.unwrap();
-               tls = Some(ClientConfig::builder()
+                Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
-                    .with_no_client_auth());
-                Some(TlsAcceptor::from(Arc::new(server_config)))
-            }
+                    .with_no_client_auth())
+                }
             else {
-                tls = None;
                 None
             };
 
@@ -906,7 +922,7 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
     Ok(())
 }
 
-pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> {
+pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Error> {
     // Set a process wide default crypto provider.
     #[cfg(feature = "ring")]
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -943,21 +959,21 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
             };
         },
         ComType::API => {
-            let tls : Option<rustls::ClientConfig>;
-            let tls_acceptor = if inputs.tls {
-                let server_config = tls_config().await.unwrap();
+            println!("entered api");
+            let tls : Option<rustls::ClientConfig> = if inputs.tls {
+                // let server_config = tls_config().await.unwrap();
                 let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
                 let root_store = load_ca(Some(root_path)).await.unwrap();
-                tls = Some(ClientConfig::builder()
+                Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
-                    .with_no_client_auth());
-                Some(TlsAcceptor::from(Arc::new(server_config)))
+                    .with_no_client_auth())
+                // Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
-                tls = None;
                 None
             };
 
+            println!("connecting to client");
             // connect to bind port of service or client
             let client = if inputs.tls {
                 let https_connector = HttpsConnectorBuilder::new()
@@ -976,7 +992,7 @@ pub async fn send_msg(inputs: Send, com: ComType) -> Result<(), std::io::Error> 
                 Client::builder(TokioExecutor::new()).build(https_connector)
             };
             let timeout_duration = Duration::from_millis(6000);
-        
+            println!("trying to send request");
             trace!("sending request to {}:{}", inputs.host, inputs.port);
             let req = if inputs.tls {
                 Request::builder()

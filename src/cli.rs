@@ -1,4 +1,4 @@
-use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Send};
+use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG};
 
 use clap::{Arg, Command, ArgAction, ArgMatches};
 
@@ -123,6 +123,15 @@ pub fn init() -> ArgMatches {
             .num_args(1)
             .required(false)
         )
+        .arg(
+            Arg::new("ping")
+            .long("ping")
+            .value_name("SET PING")
+            .help("Send heartbeats one way to the listener")
+            .num_args(0)
+            .action(clap::ArgAction::SetTrue)
+            .required(false)
+        )
         .get_matches();
 
         return args;
@@ -144,7 +153,7 @@ pub enum CLIOperation {
     /// collect outputs from claim and start service-client connection
     Collect(Collect),
     /// send message from client to service containing a message
-    Send(Send),
+    SendMSG(SendMSG),
 }
 
 /// Parse through command line arguments and send them to a CLIOperation
@@ -225,6 +234,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
             let root_ca = args.get_one::<String>("root_ca");
+            let ping = * args.get_one::<bool>("ping").unwrap();
             return CLIOperation::Claim(
                 Claim{
                     print_v4: print_v4,
@@ -236,7 +246,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     bind_port: bind_port,
                     key: key,
                     tls: tls,
-                    root_ca: root_ca.cloned()
+                    root_ca: root_ca.cloned(),
+                    ping: ping
                 }
             )
         }
@@ -255,6 +266,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
             let service_port    = * args.get_one::<i32>("service_port").unwrap();
             let root_ca = args.get_one::<String>("root_ca");
+            let ping = * args.get_one::<bool>("ping").unwrap();
             return CLIOperation::Publish(
                 Publish {
                     print_v4: print_v4,
@@ -267,7 +279,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     service_port: service_port,
                     key: key,
                     tls: tls,
-                    root_ca: root_ca.cloned()
+                    root_ca: root_ca.cloned(),
+                    ping: ping
                 }
             )
         }
@@ -307,8 +320,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let starting_octets =   args.get_one::<String>("ip_start");
             let msg = args.get_one::<String>("msg").unwrap();
             let root_ca = args.get_one::<String>("root_ca");
-            return CLIOperation::Send(
-                Send {
+            return CLIOperation::SendMSG(
+                SendMSG {
                     print_v4: print_v4,
                     print_v6: print_v6,
                     host: host.to_string(),

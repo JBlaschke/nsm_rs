@@ -3,6 +3,14 @@ use pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, ServerConfig, RootCertStore};
 use hyper_rustls::ConfigBuilderExt;
 use rustls::server::WebPkiClientVerifier;
+use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::server::conn::auto::Builder;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::client::legacy::Client;
+use http_body_util::{BodyExt, Full};
+use hyper::body::{Bytes, Incoming, Buf};
+
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -72,4 +80,33 @@ pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
         server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
 
         Ok(server_config)
+}
+
+// Define an async function for configuring the HTTPS client
+pub async fn setup_https_client(root_ca: Option<String>) -> Client<HttpsConnector<HttpConnector>, Full<Bytes>> {
+    // Wait for the connector to be configured
+    let https_connector = match root_ca {
+        Some(path) => {
+            info!("{:?}", path);
+            let root_store = load_ca(Some(path)).await.unwrap();
+            let tls = ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+            HttpsConnectorBuilder::new()
+            .with_tls_config(tls)
+            .https_or_http()
+            .enable_http1()
+            .build()
+        }
+        None => {
+            HttpsConnectorBuilder::new()
+            .with_native_roots().unwrap()
+            .https_or_http()
+            .enable_http1()
+            .build()
+        }
+    };
+
+    // Build the Client using the HttpsConnector
+    Client::builder(TokioExecutor::new()).build(https_connector)
 }

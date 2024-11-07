@@ -99,7 +99,9 @@ pub struct Claim {
     /// activate tls
     pub tls: bool,
     /// optional path to certificate manager
-    pub root_ca: Option<String>
+    pub root_ca: Option<String>,
+    /// active one-sided heartbeats
+    pub ping: bool
 }
 
 
@@ -140,7 +142,9 @@ pub struct Publish {
     /// activate tls
     pub tls: bool,
     /// optional path to certificate manager
-    pub root_ca: Option<String>
+    pub root_ca: Option<String>,
+    /// active one-sided heartbeats
+    pub ping: bool
 }
 
 /// Collect heartbeats/messages inside event loop
@@ -182,7 +186,7 @@ pub struct Collect {
 /// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation send       ```
 ///
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Send {
+pub struct SendMSG {
     /// connecting to version 4 address
     pub print_v4: bool,
     /// connection to version 6 address
