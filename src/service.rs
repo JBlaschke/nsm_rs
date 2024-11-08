@@ -137,7 +137,7 @@ impl Heartbeat {
     /// send a heartbeat to the service/client and check if entity sent one back,
     /// increment fail_count if heartbeat not received when expected
     async fn monitor(&mut self) -> Result<Response<Full<Bytes>>, std::io::Error>{
-        sleep(Duration::from_millis(1000)).await;
+        sleep(Duration::from_millis(100)).await;
         
         trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
         let mut response = Response::new(Full::default());
@@ -826,7 +826,7 @@ pub async fn request_handler(
                         counter += 1;
                     }
                 }
-                sleep(Duration::from_millis(1500)).await;
+                sleep(Duration::from_millis(500)).await;
             }
             if counter == 10 {
                 warn!("Could not find matching service");

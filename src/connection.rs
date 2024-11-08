@@ -4,8 +4,7 @@ use std::fmt;
 use serde::{Serialize, Deserialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant, Duration};
 use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
@@ -20,8 +19,7 @@ use std::future::Future;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-// use crate::api_builder::{handle_claim, handle_collect, handle_list_interfaces, handle_list_ips,
-//     handle_publish, handle_send};
+use crate::operations::GLOBAL_LAST_HEARTBEAT;
 
 /// Store host and port for new connections
 #[derive(Debug, Clone)]
@@ -190,28 +188,6 @@ pub async fn api_server(
      std::io::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
 ) -> Result<Response<Full<Bytes>>, std::io::Error> {
 
-    // // Shared state to track the last heartbeat time
-    // let last_heartbeat: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
-
-    // // Spawn a thread to monitor the heartbeat
-    // let last_heartbeat_clone = Arc::clone(&last_heartbeat);
-    // thread::spawn(move || {
-    //     loop {
-    //         thread::sleep(Duration::from_millis(500));
-    //         let elapsed = {
-    //             let timer_loc = last_heartbeat_clone.lock().unwrap();
-    //             if let Some(time) = *timer_loc {
-    //                 time.elapsed()
-    //             } else {
-    //                 continue;
-    //             }
-    //         };
-    //         if elapsed > Duration::from_secs(10) {
-    //             trace!("No heartbeat received for 10 seconds, exiting...");
-    //             std::process::exit(0);
-    //         }
-    //     }
-    // });
     let method = request.method().clone();
     let path = request.uri().path().to_string();
     let mut response = Response::new(Full::default());
@@ -222,36 +198,14 @@ pub async fn api_server(
             handler(request).await
         },
         (Method::GET, p) if p.starts_with("/heartbeat_handler") => {
-            // {
-            //     let mut last_heartbeat = last_heartbeat.lock().unwrap();
-            //     *last_heartbeat = Some(Instant::now());
-            //     println!("Heartbeat received, time updated.");
-            // }
+            {
+                let mut last_heartbeat = GLOBAL_LAST_HEARTBEAT.lock().await;
+                *last_heartbeat = Some(Instant::now());
+                println!("Heartbeat received, time updated.");
+            }
             info!("received hb request");
             handler(request).await
         },
-        // (Method::GET, p) if p.starts_with("/list_interfaces") => {
-        //     handle_list_interfaces(request).await
-        // },
-        // (Method::GET, p) if p.starts_with("/list_ips") => {
-        //     println!("entered list_ip request");
-        //     handle_list_ips(request).await
-        // },
-        // (Method::POST, p) if p.starts_with("/publish") => {
-        //     handle_publish(request).await
-        // },
-        // (Method::GET, p) if p.starts_with("/claim") => {
-        //     handle_claim(request).await
-        // },
-        // (Method::GET, p) if p.starts_with("/collect") => {
-        //     handle_collect(request).await
-        // },
-        // (Method::POST, p) if p.starts_with("/send") => {
-        //     handle_send(request).await
-        // },
-        // (Method::Get, "/task_update") => {
-        //     let _ = handle_task_update(request);
-        // },
         _ => {
             // Return 404 not found response.
             *response.status_mut() = StatusCode::NOT_FOUND;

@@ -34,10 +34,15 @@ use rustls::client::ClientConfig;
 use rustls::client::danger::{ServerCertVerifier, ServerCertVerified};
 use rustls::pki_types::{ServerName, CertificateDer};
 use std::time::SystemTime;
+use lazy_static::lazy_static;
 
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
+
+lazy_static! {
+    pub static ref GLOBAL_LAST_HEARTBEAT: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
+}
 
 pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
     let ips = get_local_ips().await;
@@ -439,6 +444,27 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 }
             }));
 
+            // Spawn a thread to monitor the heartbeat
+            let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(&GLOBAL_LAST_HEARTBEAT);
+            tokio::spawn(async move {
+                sleep(Duration::from_millis(5000)).await;
+                loop {
+                    sleep(Duration::from_millis(500)).await;
+                    let elapsed = {
+                        let timer_loc = last_heartbeat_clone.lock().await;
+                        if let Some(time) = *timer_loc {
+                            time.elapsed()
+                        } else {
+                            continue;
+                        }
+                    };
+                    if elapsed > Duration::from_secs(10) {
+                        trace!("No heartbeat received for 10 seconds, exiting...");
+                        std::process::exit(0);
+                    }
+                }
+            });
+
             let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
             info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
             // send/receive heartbeats to/from broker
@@ -617,6 +643,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                 else {
                     let inner_payload = Arc::clone(&payload_clone);
                     let inner_broker = Arc::clone(&broker_clone);
+                    // Shared state to track the last heartbeat time
                     Box::pin(async move {
                         let payload_clone = Arc::clone(&inner_payload);
                         let broker_clone = Arc::clone(&inner_broker);
@@ -747,6 +774,27 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
 
             info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
+
+            // Spawn a thread to monitor the heartbeat
+            let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(&GLOBAL_LAST_HEARTBEAT);
+            tokio::spawn(async move {
+                sleep(Duration::from_millis(5000)).await;
+                loop {
+                    sleep(Duration::from_millis(500)).await;
+                    let elapsed = {
+                        let timer_loc = last_heartbeat_clone.lock().await;
+                        if let Some(time) = *timer_loc {
+                            time.elapsed()
+                        } else {
+                            continue;
+                        }
+                    };
+                    if elapsed > Duration::from_secs(10) {
+                        trace!("No heartbeat received for 10 seconds, exiting...");
+                        std::process::exit(0);
+                    }
+                }
+            });
 
             // send/receive heartbeats to/from broker
             let incoming = TcpListener::bind(&handler_addr).await.unwrap();
