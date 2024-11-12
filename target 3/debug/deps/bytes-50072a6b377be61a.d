@@ -1,0 +1,24 @@
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/libbytes-50072a6b377be61a.rmeta: /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/buf_impl.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/buf_mut.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/chain.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/iter.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/limit.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/reader.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/take.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/uninit_slice.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/vec_deque.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/writer.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/bytes.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/bytes_mut.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/debug.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/hex.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/loom.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/libbytes-50072a6b377be61a.rlib: /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/buf_impl.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/buf_mut.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/chain.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/iter.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/limit.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/reader.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/take.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/uninit_slice.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/vec_deque.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/writer.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/bytes.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/bytes_mut.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/debug.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/hex.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/loom.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/bytes-50072a6b377be61a.d: /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/buf_impl.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/buf_mut.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/chain.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/iter.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/limit.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/reader.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/take.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/uninit_slice.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/vec_deque.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/writer.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/bytes.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/bytes_mut.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/debug.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/hex.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/loom.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/lib.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/mod.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/buf_impl.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/buf_mut.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/chain.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/iter.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/limit.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/reader.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/take.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/uninit_slice.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/vec_deque.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/buf/writer.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/bytes.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/bytes_mut.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/mod.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/debug.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/fmt/hex.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/bytes/src/loom.rs:

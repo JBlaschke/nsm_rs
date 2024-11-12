@@ -1,0 +1,24 @@
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/libserde-fa088ed95840ef80.rmeta: /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/macros.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/integer128.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/value.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/format.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/ignored_any.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/impls.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/size_hint.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/fmt.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/impls.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/impossible.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/de.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/ser.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/doc.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/seed.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/libserde-fa088ed95840ef80.rlib: /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/macros.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/integer128.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/value.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/format.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/ignored_any.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/impls.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/size_hint.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/fmt.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/impls.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/impossible.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/de.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/ser.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/doc.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/seed.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/serde-fa088ed95840ef80.d: /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/macros.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/integer128.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/value.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/format.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/ignored_any.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/impls.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/size_hint.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/fmt.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/impls.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/impossible.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/de.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/ser.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/doc.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/seed.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/lib.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/macros.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/integer128.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/mod.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/value.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/format.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/ignored_any.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/impls.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/size_hint.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/mod.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/fmt.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/impls.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/ser/impossible.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/mod.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/de.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/ser.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/private/doc.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/serde/src/de/seed.rs:

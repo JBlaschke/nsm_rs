@@ -5,33 +5,20 @@
 //! for compute nodes to connect to and run a job.
 
 mod service;
-
+mod models;
+mod tls;
 mod network;
-use network::{get_local_ips, get_matching_ipstr};
 
 mod connection;
 use connection::ComType;
 
 mod utils;
-use utils::{only_or_error, epoch};
 
 mod cli;
 use cli::{init, parse, CLIOperation};
 
 mod operations;
 use operations::{list_interfaces, list_ips, listen, claim, publish, collect, send_msg};
-
-mod models;
-use models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG};
-
-mod tls;
-
-use std::thread;
-use std::net::TcpStream;
-use std::sync::{Arc, Mutex, Condvar};
-use std::time::Duration;
-use std::thread::sleep;
-use lazy_static::lazy_static;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};

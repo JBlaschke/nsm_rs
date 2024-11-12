@@ -12,13 +12,13 @@ use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Se
 
 use crate::tls::{tls_config, load_ca};
 
-use std::{env, thread};
+use std::env;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use std::net::SocketAddr;
-use hyper::http::{Method, Request, Response, StatusCode};
-use http_body_util::{BodyExt, Full, Empty};
-use hyper::body::{Buf, Bytes, Incoming};
+use hyper::http::{Method, Request, Response};
+use http_body_util::Full;
+use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
@@ -28,12 +28,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio::sync::Mutex;
 use std::future::Future;
-use rustls::{ServerConfig, RootCertStore};
 use tokio_rustls::TlsAcceptor;
 use rustls::client::ClientConfig;
-use rustls::client::danger::{ServerCertVerifier, ServerCertVerified};
-use rustls::pki_types::{ServerName, CertificateDer};
-use std::time::SystemTime;
 use lazy_static::lazy_static;
 
 
@@ -125,7 +121,7 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
 }
 
-pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes>>), std::io::Error> {
+pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>>, std::io::Error> {
     trace!("Setting up listener...");
     let ips = get_local_ips().await;
 
@@ -140,7 +136,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
         ).await
     };
     let host = only_or_error(& ipstr);
-    let mut state = Arc::new((Mutex::new(State::new(None)), Notify::new()));
+    let state = Arc::new((Mutex::new(State::new(None)), Notify::new()));
     let state_clone = Arc::clone(& state);
    
     match com{
@@ -169,11 +165,11 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
             let state_clone_cl = Arc::clone(& state_clone);
             let event_loop = tokio::spawn(async move {
                 let _ = match event_monitor(state_clone_cl).await{
-                    Ok(resp) => trace!("exited event monitor"),
+                    Ok(_resp) => trace!("exited event monitor"),
                     Err(_) => trace!("event monitor error")
                 };
             });
-            event_loop.await;
+            let _ = event_loop.await;
         },
         ComType::API => {
             let tls_acceptor : Option<TlsAcceptor> = if inputs.tls {
@@ -188,7 +184,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
 
             let event_loop = tokio::spawn(async move {
                 let _ = match event_monitor(state_clone).await{
-                    Ok(resp) => trace!("exited event monitor"),
+                    Ok(_resp) => trace!("exited event monitor"),
                     Err(_) => trace!("event monitor error")
                 };
             });
@@ -247,7 +243,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<(Response<Full<Bytes
                     };
                 });
             }
-            event_loop.await;
+            let _ = event_loop.await;
         }
     };
     
@@ -394,7 +390,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                     .unwrap()
                 };
 
-                let start = Instant::now();
                 let result = timeout(timeout_duration, client.request(req)).await;
 
                 match result {
@@ -411,7 +406,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                             }
                         }
                     }
-                    Ok(Err(e)) => {
+                    Ok(Err(_e)) => {
                         read_fail += 1;
                         if read_fail > 5 {
                             panic!("Failed to send request to listener")
@@ -600,7 +595,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                             let loc_stream = &mut stream_mut.lock().await;
                             // loop handles connection race case
                             loop {
-                                sleep(Duration::from_millis(1000));
+                                let _ = sleep(Duration::from_millis(1000));
                                 let message = match stream_read(loc_stream).await {
                                     Ok(m) => deserialize_message(& m),
                                     Err(err) => {return Err(err);}
@@ -716,7 +711,6 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     .unwrap()
                 };
 
-                let start = Instant::now();
                 let result = timeout(timeout_duration, client.request(req)).await;
 
                 // check for successful connection to a published service
@@ -738,7 +732,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                             }
                         }
                     }
-                    Ok(Err(e)) => {
+                    Ok(Err(_e)) => {
                         read_fail += 1;
                         if read_fail > 5 {
                             panic!("Failed to send request to listener")
@@ -955,7 +949,6 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
                 .unwrap()
             };
         
-            let start = Instant::now();
             let result = timeout(timeout_duration, client.request(req)).await;
         
             trace!("sending request to {}:{}", inputs.host, inputs.port);
@@ -1003,7 +996,7 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
                 port: inputs.port
             };
             // connect to bind port of service or client
-            let mut stream = match connect(& addr).await{
+            let stream = match connect(& addr).await{
                 Ok(s) => s,
                 Err(_e) => {
                     return Err(std::io::Error::new(
@@ -1073,7 +1066,6 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
                 .unwrap()
             };
         
-            let start = Instant::now();
             let result = timeout(timeout_duration, client.request(req)).await;
         
             match result {

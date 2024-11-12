@@ -1,0 +1,26 @@
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/libhttp-ca254f70c5286d12.rmeta: /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/convert.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/map.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/name.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/value.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/method.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/request.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/response.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/status.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/authority.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/builder.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/path.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/port.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/scheme.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/version.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/byte_str.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/error.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/extensions.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/libhttp-ca254f70c5286d12.rlib: /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/convert.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/map.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/name.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/value.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/method.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/request.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/response.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/status.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/authority.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/builder.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/path.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/port.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/scheme.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/version.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/byte_str.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/error.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/extensions.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/target/debug/deps/http-ca254f70c5286d12.d: /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/lib.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/convert.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/map.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/name.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/value.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/method.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/request.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/response.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/status.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/mod.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/authority.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/builder.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/path.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/port.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/scheme.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/version.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/byte_str.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/error.rs /Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/extensions.rs
+
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/lib.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/convert.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/mod.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/map.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/name.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/header/value.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/method.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/request.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/response.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/status.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/mod.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/authority.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/builder.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/path.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/port.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/uri/scheme.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/version.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/byte_str.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/error.rs:
+/Users/sofiamorris/Desktop/nsm_rs/vendor/http/src/extensions.rs:

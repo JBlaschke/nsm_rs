@@ -5,15 +5,11 @@ use serde::{Serialize, Deserialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
 use tokio::time::{timeout, Instant, Duration};
-use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming, Buf};
-use hyper::service::service_fn;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto::Builder;
 use tokio::net::{TcpStream, TcpListener};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 use std::future::Future;
 
 #[allow(unused_imports)]
@@ -174,7 +170,7 @@ pub async fn receive(stream: & Arc<Mutex<TcpStream>>) -> Result<Message, std::io
 
 pub async fn collect_request(request: &mut Incoming) -> Result<Message, std::io::Error>{
     let whole_body = request.collect().await.unwrap().aggregate();
-    let mut data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
+    let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
     let json = serde_json::to_string(&data).unwrap();
     let message = deserialize_message(& json);
     Ok(message)
@@ -228,7 +224,7 @@ pub async fn tcp_server(
 
     loop {
         match listener.accept().await {
-            Ok((stream, addr)) => {
+            Ok((stream, _addr)) => {
                 info!("Passing TCP connection to handler...");
                 let shared_stream = Arc::new(Mutex::new(stream));
                 let _ = handler(Some(shared_stream)).await; 

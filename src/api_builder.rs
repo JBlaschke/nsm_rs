@@ -4,14 +4,9 @@ use crate::models::{ListInterfaces, ListIPs, Claim, Publish, Collect, SendMSG};
 
 use crate::connection::ComType;
 
-use hyper::http::{Method, Request, Response, StatusCode, Uri};
-use serde::{Serialize, Deserialize};
+use hyper::http::{Request, Response};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming, Buf};
-use hyper::service::service_fn;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto::Builder;
-use tokio::net::TcpListener;
 use std::collections::HashMap;
 use url::Url;
 
@@ -79,7 +74,7 @@ pub async fn handle_list_ips(request: Request<Incoming>) -> Result<Response<Full
 pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {    
     let mut response = Response::new(Full::default());
     let whole_body = request.body_mut().collect().await.unwrap().aggregate();
-    let mut data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
+    let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
 
     let name = match data.get("name")
         .and_then(|v| v.as_str()) {
@@ -167,7 +162,7 @@ pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<F
                 *task_response.body_mut() = Full::from(format!("Error processing request: {}", e))
             }
         };
-        Ok::<Response<Full<Bytes>>, hyper::Error>(task_response);
+        let _ = Ok::<Response<Full<Bytes>>, hyper::Error>(task_response);
     });
     *response.body_mut() = Full::from("Successful request to publish");
     Ok(response)
@@ -255,7 +250,7 @@ pub async fn handle_claim(request: Request<Incoming>) -> Result<Response<Full<By
                 *task_response.body_mut() = Full::from(format!("Error processing request: {}", e))
             }
         };
-        Ok::<Response<Full<Bytes>>, hyper::Error>(task_response);
+        let _ = Ok::<Response<Full<Bytes>>, hyper::Error>(task_response);
     });
     *response.body_mut() = Full::from("Successful request to claim");
     Ok(response)
@@ -338,7 +333,7 @@ pub async fn handle_send(mut request: Request<Incoming>) -> Result<Response<Full
     let mut response = Response::new(Full::default());
     println!("entered handler");
     let whole_body = request.body_mut().collect().await.unwrap().aggregate();
-    let mut data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
+    let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
 
     println!("Received body: {}", data);
     let name = match data.get("name")

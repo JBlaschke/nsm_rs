@@ -1,15 +1,12 @@
 use std::{env, fs, io};
 use pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, ServerConfig, RootCertStore};
-use hyper_rustls::ConfigBuilderExt;
-use rustls::server::WebPkiClientVerifier;
 use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
 use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::server::conn::auto::Builder;
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::TokioExecutor;
 use hyper_util::client::legacy::Client;
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Bytes, Incoming, Buf};
+use http_body_util::Full;
+use hyper::body::Bytes;
 
 
 #[allow(unused_imports)]

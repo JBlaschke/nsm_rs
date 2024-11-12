@@ -28,9 +28,8 @@ use log::{debug, error, info, trace, warn};
 use env_logger::Env;
 
 use std::net::SocketAddr;
-use clap::ArgMatches;
 use hyper::http::{Method, Request, Response, StatusCode};
-use http_body_util::{BodyExt, Full};
+use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};

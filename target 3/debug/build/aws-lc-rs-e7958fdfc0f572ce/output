@@ -1,0 +1,3 @@
+cargo:include=/Users/sofiamorris/Desktop/nsm_rs/target/debug/build/aws-lc-sys-93f9486c7dd1745f/out/include
+cargo:libcrypto=aws_lc_0_20_1_crypto
+cargo:root=/Users/sofiamorris/Desktop/nsm_rs/target/debug/build/aws-lc-sys-93f9486c7dd1745f/out

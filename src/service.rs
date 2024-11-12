@@ -2,31 +2,22 @@
 
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use std::sync::{Arc, Condvar};
+use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::time::{sleep, Instant, timeout, Duration};
-use std::thread;
-use threadpool::ThreadPool;
 use std::collections::VecDeque;
-use std::io::{self, Error as IoError};
-use std::any::Any;
-use std::fmt;
+use std::io::Error as IoError;
 use lazy_static::lazy_static;
 use hyper::body::{Buf, Bytes, Incoming};
-use std::net::SocketAddr;
 use hyper::http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
-use hyper::service::service_fn;
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::TokioExecutor;
 use hyper_util::client::legacy::Client;
 use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
 use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::server::conn::auto::Builder;
 use tokio::sync::Mutex;
-use tokio::net::{TcpListener, TcpStream};
-use std::future::Future;
+use tokio::net::TcpStream;
 use rustls::ClientConfig;
-use crate::tls::load_ca;
 
 
 #[allow(unused_imports)]
@@ -207,14 +198,13 @@ impl Heartbeat {
                     
                     // allots time for reading response
                     let timeout_duration = Duration::from_secs(10);
-                    let start = Instant::now();
                     let received = match timeout(timeout_duration, c.request(req)).await {
                         Ok(Ok(mut resp)) => {
                             trace!("Received response: {:?}", resp);
                             let msg = collect_request(resp.body_mut()).await.unwrap();
                             serialize_message(&msg)
                         }
-                        Ok(Err(e)) => {
+                        Ok(Err(_e)) => {
                             if self.fail_counter.fail_count == 0 {
                                 self.fail_counter.first_increment = Instant::now();
                             }
@@ -273,7 +263,6 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
 
     let data = Arc::new(Mutex::new((0, 0, 0, 0))); // (fail_count, key, id, service_id)
     let mut service_id: i64 = -1;
-    let mut failed_client = 0;
 
     // loop runs while events are in the queue
     loop {
@@ -410,9 +399,6 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
 pub struct State {
     /// hashmap - key: key, value: clients/services payloads
     pub clients: HashMap<u64, Vec<Payload>>,
-    pub claims: HashMap<u64, Vec<Payload>>,
-    /// pool of threads to handle events in event queue
-    pub pool: ThreadPool,
     pub timeout: u64, 
     /// increments for each new connection to broker, used for id in payload
     pub seq: u64,
@@ -428,8 +414,6 @@ impl State {
     pub fn new(tls: Option<ClientConfig>) -> State {
         State{
             clients: HashMap::new(),
-            claims: HashMap::new(),
-            pool: ThreadPool::new(30),
             timeout: 60,
             seq: 1,
             deque: Arc::new(Mutex::new(VecDeque::new())),
@@ -459,7 +443,7 @@ impl State {
                                     std::io::ErrorKind::InvalidInput, "Service failed to connect to bind port"));
                             }
                             trace!("{}",format!("Retrying connection: {}", err));
-                            sleep(Duration::from_millis(1000));
+                            let _ = sleep(Duration::from_millis(1000));
                             continue;
                         }
                     }
@@ -476,7 +460,7 @@ impl State {
         };
 
         let tls = match p.root_ca{
-            Some(ref t) => true,
+            Some(ref _t) => true,
             None => false
         };
 
@@ -683,7 +667,7 @@ pub async fn request_handler(
             let mut state_loc = lock.lock().await;
 
             match (stream, request) {
-                (Some(s), None) => {
+                (Some(_s), None) => {
                     let _ = state_loc.add(payload, 0, ComType::TCP).await; // add service to clients hashmap and event loop 
                     state_loc.running = true; // set running to true for event loop
                     notify.notify_one(); // notify event loop of new Event
@@ -691,7 +675,7 @@ pub async fn request_handler(
                     println!("Now state:");
                     state_loc.print().await; // print state of clients hashmap
                 },
-                (None, Some(r)) => {
+                (None, Some(_r)) => {
                     // send acknowledgment of successful request
                     let json = serialize_message( & Message {
                         header: MessageHeader::ACK,
@@ -717,7 +701,7 @@ pub async fn request_handler(
         MessageHeader::CLAIM => {
             trace!("Claiming Service: {:?}", payload);
 
-            let (lock, notify) = &**state;
+            let (lock, _notify) = &**state;
             let mut state_loc = lock.lock().await;
 
             let mut service_id = 0;
@@ -737,13 +721,13 @@ pub async fn request_handler(
                         });
                         match (stream, request) {
                             (Some(s), None) => {
-                                let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                                let loc_stream: &mut TcpStream = &mut *s.lock().await;
                                 service_id = (*p).service_id; // capture claimed service's service_id for add()
                                 // send acknowledgment of successful service claim with service's payload containing its address
                                 let _ = stream_write(loc_stream, & json).await;
                                 let _ = state_loc.add(payload, service_id, ComType::TCP).await;
                             },
-                            (None, Some(r)) => {
+                            (None, Some(_r)) => {
                                 response = Response::builder()
                                     .status(StatusCode::OK)
                                     .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -778,7 +762,7 @@ pub async fn request_handler(
                                     std::io::ErrorKind::InvalidInput, "Failed to claim key"
                                 ).into());
                             },
-                            (None, Some(r)) => {
+                            (None, Some(_r)) => {
                                 response = Response::builder()
                                 .status(StatusCode::BAD_REQUEST)
                                 .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -799,12 +783,12 @@ pub async fn request_handler(
             let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
             trace!("Sending Message: {:?}", msg_body);
 
-            let (lock, notify) = &**state;
+            let (lock, _notify) = &**state;
 
             let mut counter = 0;
             while counter < 10 {
                 {
-                    let mut state_loc = lock.lock().await;
+                    let state_loc = lock.lock().await;
                     let mut deque = state_loc.deque.lock().await;
                     trace!("deque status {:?}", deque);
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
@@ -823,7 +807,7 @@ pub async fn request_handler(
                             body: message.body.clone()
                         });
                         match (stream, request) {
-                            (None, Some(r)) => {
+                            (None, Some(_r)) => {
                                 response = Response::builder()
                                 .status(StatusCode::OK)
                                 .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -848,12 +832,12 @@ pub async fn request_handler(
             let hb_body: MsgBody = serde_json::from_str(& message.body).unwrap();
             trace!("Processing ping heartbeat: {:?}", hb_body);
 
-            let (lock, notify) = &**state;
+            let (lock, _notify) = &**state;
 
             let mut counter = 0;
             while counter < 10 {
                 {
-                    let mut state_loc = lock.lock().await;
+                    let state_loc = lock.lock().await;
                     let mut deque = state_loc.deque.lock().await;
                     trace!("deque status {:?}", deque);
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
@@ -874,7 +858,7 @@ pub async fn request_handler(
                             body: message.body.clone()
                         });
                         match (stream, request) {
-                            (None, Some(r)) => {
+                            (None, Some(_r)) => {
                                 response = Response::builder()
                                 .status(StatusCode::OK)
                                 .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -923,25 +907,25 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     // one handler call for each http request
     
     response = match (&stream, &mut request) {
-        (Some(s), None) => {
+        (Some(_s), None) => {
             let _ = tokio::spawn(async move {
                 loop {
                     match heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone.clone(), None).await {
-                        Ok(resp) => {
+                        Ok(_resp) => {
                             trace!("Heartbeat received, time updated.");
                         },
-                        Err(e) => error!("Heartbeat handler returned an error")
+                        Err(_e) => error!("Heartbeat handler returned an error")
                     }
                 }
             });
             response
         },
-        (None, Some(r)) => {
+        (None, Some(_r)) => {
             response = match heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone, tls).await {
                 Ok(resp) => {
                     resp
                 },
-                Err(e) => {
+                Err(_e) => {
                     Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body(Full::new(Bytes::from("Heartbeat handler error".to_string())))
@@ -986,9 +970,6 @@ pub async fn ping_heartbeat(pay: Option<&Arc<Mutex<String>>>,
     }
     let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
 
-    // allots time for reading from stream
-    let start_time = Instant::now();
-
     trace!("initiating request to listener");
     let https_connector = match tls.clone() {
         Some(t) => {
@@ -1024,7 +1005,7 @@ pub async fn ping_heartbeat(pay: Option<&Arc<Mutex<String>>>,
             trace!("sent message to listener on {:?}", addr_loc);
     
             let req = match tls.clone() {
-                Some(t) => {
+                Some(_t) => {
                     Request::builder()
                     .method(Method::POST)
                     .uri(format!("https://{}:{}/request_handler", addr_loc.host, addr_loc.port))
@@ -1041,14 +1022,14 @@ pub async fn ping_heartbeat(pay: Option<&Arc<Mutex<String>>>,
                     .unwrap()
                 }
             };
-            let start = Instant::now();
+
             let result = timeout(timeout_duration, client.request(req)).await;
             
             match result {
                 Ok(Ok(resp)) => {
                     trace!("Received response: {:?}", resp);
                     let body = resp.collect().await.unwrap().aggregate();
-                    let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                    let data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
                     let json = serde_json::to_string(&data).unwrap();
                     let m = deserialize_message(& json);
                     match m.header {
@@ -1078,7 +1059,7 @@ pub async fn ping_heartbeat(pay: Option<&Arc<Mutex<String>>>,
                 }
             }
         }
-        sleep(Duration::from_millis(10000));
+        let _ = sleep(Duration::from_millis(10000));
     }
     Ok(response)
 }
@@ -1086,14 +1067,14 @@ pub async fn ping_heartbeat(pay: Option<&Arc<Mutex<String>>>,
 /// Receive a heartbeat from broker and send one back to show life of connection.
 /// If a client, HB message contains payload of connected service to use in Collect()
 pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>, 
-    mut request: &mut Option<Request<Incoming>>, payload: &String,
+    request: &mut Option<Request<Incoming>>, payload: &String,
      addr: Addr, tls: Option<ClientConfig>)
     -> Result<Response<Full<Bytes>>, std::io::Error> {
     trace!("Starting heartbeat handler");
 
     let message = match (stream, &mut *request) {
         (Some(s), None) => {
-            let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+            let loc_stream: &mut TcpStream = &mut *s.lock().await;
             match stream_read(loc_stream).await {
                 Ok(message) => {
                     trace!("{:?}", message);
@@ -1111,7 +1092,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     trace!("TimeOut error");
                     std::process::exit(0);
                 }
-                Err(err) => {
+                Err(_err) => {
                     trace!("Unknown error reading from stream");
                     std::process::exit(0);
                 }
@@ -1127,9 +1108,6 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
     }
     let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
 
-    // allots time for reading from stream
-    let start_time = Instant::now();
-
     // receive heartbeat/message
     let mut response = Response::new(Full::default());
 
@@ -1138,7 +1116,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
 
     if matches!(message.header, MessageHeader::MSG){
         match (stream, &mut *request) {
-            (Some(s), None) => {
+            (Some(_s), None) => {
                 let listen_stream = match connect(& addr).await{
                     Ok(s) => s,
                     Err(_e) => {
@@ -1151,12 +1129,12 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     msg: message.body.clone(),
                     id: service_id
                 };
-                let ack = send(& stream_mut, & Message{
+                let _ack = send(& stream_mut, & Message{
                     header: MessageHeader::MSG,
                     body: serde_json::to_string(& msg_body).unwrap()
                 }).await;
             },
-            (None, Some(r)) => {
+            (None, Some(_r)) => {
                 // Prepare the HTTPS connector
                 trace!("initiating request to listener");
                 let https_connector = match tls.clone() {
@@ -1193,7 +1171,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     trace!("sent message to listener on {:?}", addr);
 
                     let req = match tls.clone() {
-                        Some(t) => {
+                        Some(_t) => {
                             Request::builder()
                             .method(Method::POST)
                             .uri(format!("https://{}:{}/request_handler", addr.host, addr.port))
@@ -1211,14 +1189,13 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                         }
                     };
 
-                    let start = Instant::now();
                     let result = timeout(timeout_duration, client.request(req)).await;
                 
                     match result {
                         Ok(Ok(resp)) => {
                             trace!("Received response: {:?}", resp);
                             let body = resp.collect().await.unwrap().aggregate();
-                            let mut data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                            let data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
                             let json = serde_json::to_string(&data).unwrap();
                             let m = deserialize_message(& json);
                             match m.header {
@@ -1272,7 +1249,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                         body: serde_json::to_string(&* msg.msg).unwrap()
                     })).await;  
                 },
-                (None, Some(r)) => {
+                (None, Some(_r)) => {
                     response = Response::builder()
                     .status(StatusCode::OK)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -1294,7 +1271,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                         body: payload.clone()
                     })).await;
                 },
-                (None, Some(r)) => {
+                (None, Some(_r)) => {
                     response = Response::builder()
                     .status(StatusCode::OK)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -1320,7 +1297,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                         body: payload.clone(),
                     })).await;
                 },
-                (None, Some(r)) => {
+                (None, Some(_r)) => {
                     response = Response::builder()
                     .status(StatusCode::OK)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -1344,7 +1321,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                         body: message.body
                     })).await;
                 },
-                (None, Some(r)) => {
+                (None, Some(_r)) => {
                     response = Response::builder()
                     .status(StatusCode::OK)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
