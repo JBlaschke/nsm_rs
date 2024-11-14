@@ -85,7 +85,7 @@ impl FailCounter{
             fail_count: 0,
             first_increment: Instant::now(),
             last_increment: Instant::now(),
-            interval: Duration::from_secs(10),
+            interval: Duration::from_secs(2),
         }
     }
 
@@ -423,7 +423,6 @@ impl State {
 
     /// adds new services/clients to State struct and creates Event object to add to event loop 
     pub async fn add(&mut self, mut p: Payload, service_id: u64, com: ComType) -> Result<Heartbeat, std::io::Error>{
-        sleep(Duration::from_millis(5000)).await;
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
         println!("{:?}", bind_address.clone());

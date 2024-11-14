@@ -545,7 +545,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
 
     let payload = serialize(& Payload {
         service_addr: ipstr.clone(),
-        service_port: inputs.port,
+        service_port: inputs.bind_port,
         service_claim: epoch(),
         interface_addr: Vec::new(),
         bind_port: inputs.bind_port,
