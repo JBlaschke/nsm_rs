@@ -131,6 +131,7 @@ impl Heartbeat {
         // sleep(Duration::from_millis(100)).await;
 
         let mut response = Response::new(Full::default());
+        *response.status_mut() = StatusCode::OK;
 
         if !self.ping {
             trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
@@ -156,17 +157,20 @@ impl Heartbeat {
                         Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
                             self.fail_counter.increment();
                             trace!("ConnectionReset error");
-                            return Err(std::io::Error::new(err.kind(), err.to_string()));
+                            *response.status_mut() = StatusCode::BAD_REQUEST;
+                            return Ok(response); 
                         }
                         Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
                             self.fail_counter.increment();
                             trace!("ConnectionAborted error");
-                            return Err(std::io::Error::new(err.kind(), err.to_string()));
+                            *response.status_mut() = StatusCode::BAD_REQUEST;
+                            return Ok(response); 
                         }
                         Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
                             self.fail_counter.increment();
                             trace!("TimeOut error");
-                            return Err(std::io::Error::new(err.kind(), err.to_string()));
+                            *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
+                            return Ok(response); 
                         }
                         Err(err) => {
                             // open connection, read timed out
@@ -175,7 +179,8 @@ impl Heartbeat {
                             }
                             self.fail_counter.increment();
                             trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
-                            return Err(err);
+                            *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
+                            return Ok(response); 
                         }
                     };
                     received
@@ -261,7 +266,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
         Arc::clone(& state_loc.deque)
     };
 
-    let data = Arc::new(Mutex::new((0, 0, 0, 0))); // (fail_count, key, id, service_id)
+    let data = Arc::new(Mutex::new((0, 0, 0, 0, 0))); // (fail_count, key, id, service_id, fail_id)
     let mut service_id: i64 = -1;
 
     // loop runs while events are in the queue
@@ -270,15 +275,15 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
             let mut state_loc = lock.lock().await;
             // loop is paused while there are no events to handle
             while !state_loc.running {
-                trace!("waiting to run");
+                // trace!("waiting to run");
                 let notify_result = timeout(Duration::from_millis(200), notify.notified()).await;
                 match notify_result {
                     Ok(()) => {
-                        trace!("Processing next events");
+                        // trace!("Processing next events");
                     }
                     Err(_) => {
                         // Timeout occurred, modify the state
-                        trace!("Timeout occurred, modifying running state...");
+                        // trace!("Timeout occurred, modifying running state...");
                         state_loc.running = true;
                         notify.notify_one();
                     }
@@ -310,6 +315,19 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
             }
             shared_data.0 = 0;
         }
+        {            
+            let mut state_loc = lock.lock().await;
+            if let Some(vec) = state_loc.clients.get_mut(&shared_data.1) {
+                if let Some(pos) = vec.iter().position(|item| item.service_id == shared_data.4 as u64
+                && item.service_id == item.id) {
+                    if let Some(publish) = vec.get_mut(pos) {
+                        info!("changing service_claim");
+                        publish.service_claim = 0;
+                        info!("changed state: {:?}", state_loc.clients);
+                    }
+                }
+            }
+        }
 
         // pop event from queue 
         let event = {
@@ -337,22 +355,43 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
 
         // use a worker from threadpool to handle events with multithreading
         tokio::spawn(async move {
-            // sleep(Duration::from_millis(1000)).await;
 
             trace!("Passing event to event monitor...");
-            let _ = hb.monitor().await;
-
+            let response = hb.monitor().await;
+            // move outside of spawn to change real state
+            let fail_id: i64 = if hb.id != hb.service_id {
+                match response {
+                    Ok(mut resp) => {
+                        let status = resp.status();
+                        if status != StatusCode::OK {
+                            trace!("monitor status not ok");
+                            hb.service_id as i64
+                        }
+                        else {
+                            trace!("monitor status is ok");
+                            -1
+                        }
+                    }
+                    Err(e) => {
+                        trace!("Error occurred in monitor: {}", e);
+                        hb.service_id as i64
+                    }
+                }
+            }
+            else{
+                -1
+            };
             // check heartbeat metadata to see if entity should be added back to event queue 
-            // or if client should be claim a new service
+            // or if client should claim a new service
             let mut data = data_clone.lock().await;
-            *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id);
+            *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id, fail_id as i64);
             if data.0 < 10 {
                 trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
                 if hb.service_id == (service_id as u64){
                     trace!("Connecting to new service");
                     match state_clone.claim(hb.key).await{
                         Ok(p) => {
-                            trace!("Claimed new service w/ payload: {:?}", p);
+                            trace!("Claimed new published service w/ payload: {:?}", p);
                             // create new Heartbeat object with new service_id
                             hb = Heartbeat {
                                 key: hb.key,
@@ -496,7 +535,6 @@ impl State {
                             }
                         }
                     }
-                    sleep(Duration::from_millis(5000)).await;
                 }
                 if counter == 10 {
                     warn!("Could not find matching service");
@@ -701,13 +739,13 @@ pub async fn request_handler(
             trace!("Claiming Service: {:?}", payload);
 
             let (lock, _notify) = &**state;
-            let mut state_loc = lock.lock().await;
 
             let mut service_id = 0;
             let mut claim_fail = 0; // initiate counter for connection failure
 
             // loop solves race case when client starts faster than service can be published
             loop {
+                let mut state_loc = lock.lock().await;
                 println!("{:?}", state_loc.clients.clone());
                 match state_loc.claim(payload.key).await{
                     Ok(p) => {
@@ -741,7 +779,7 @@ pub async fn request_handler(
                         trace!("looking for key, not found: {:?}", e);
                         claim_fail += 1;
                         if claim_fail <= 5{
-                            sleep(Duration::from_millis(200)).await;
+                            sleep(Duration::from_millis(300)).await;
                             continue;
                         }
                         let json = serialize_message( & Message {
@@ -775,6 +813,7 @@ pub async fn request_handler(
             }
             
             println!("Now state:");
+            let mut state_loc = lock.lock().await;
             state_loc.print().await; // print state of clients hashmap
         },
         MessageHeader::MSG => {
