@@ -27,6 +27,7 @@ tokio-rustls = { version = "0.26", default-features = false }
 url = "2.5.2"
 rustls-pemfile = "2"
 
+
 [[bin]]
 name = "tcp"
 path = "src/tcp.rs"
