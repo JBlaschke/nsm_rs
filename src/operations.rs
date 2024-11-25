@@ -424,30 +424,16 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 let broker_addr_value = Arc::clone(&broker_addr);
                 if inputs.tls {
                     let tls_clone = tls.clone().unwrap();
-                    if inputs.ping {
-                        Box::pin(async move {
-                            ping_heartbeat(None, Some(& broker_addr_value), Some(tls_clone)).await
-                        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
-                    }
-                    else {
-                        Box::pin(async move {
-                            heartbeat_handler_helper(None, Some(req), None, None, Some(tls_clone)).await
-                        }) as std::pin::Pin<Box<dyn Future<Output = 
-                        Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
-                    }
+                    Box::pin(async move {
+                        heartbeat_handler_helper(None, Some(req), None, None, Some(tls_clone)).await
+                    }) as std::pin::Pin<Box<dyn Future<Output = 
+                    Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                 }
                 else {
-                    if inputs.ping {
-                        Box::pin(async move {
-                            ping_heartbeat(None, Some(& broker_addr_value), None).await
-                        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
-                    }
-                    else {
-                        Box::pin(async move {
-                            heartbeat_handler_helper(None, Some(req), None, None, None).await
-                        }) as std::pin::Pin<Box<dyn Future<Output = 
-                        Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
-                    }
+                    Box::pin(async move {
+                        heartbeat_handler_helper(None, Some(req), None, None, None).await
+                    }) as std::pin::Pin<Box<dyn Future<Output = 
+                    Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                 }
             }));
 
@@ -554,7 +540,6 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         service_id: 0,
         root_ca: inputs.root_ca
     });
-
 
     let broker_addr = Arc::new(Mutex::new(Addr{
         host: inputs.host.clone(),
@@ -754,7 +739,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     let tls_clone = tls.clone().unwrap();
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(Some(&service_payload_value), Some(&broker_addr_value), Some(tls_clone)).await
+                            ping_heartbeat(&service_payload_value, Some(&broker_addr_value), Some(tls_clone)).await
                         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                     }
                     else {
@@ -767,7 +752,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                 else {
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(Some(&service_payload_value), Some(&broker_addr_value), None).await
+                            ping_heartbeat(&service_payload_value, Some(&broker_addr_value), None).await
                         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                     }
                     else {
@@ -783,27 +768,28 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
 
             info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
 
-            // Spawn a thread to monitor the heartbeat
-            let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(&GLOBAL_LAST_HEARTBEAT);
-            tokio::spawn(async move {
-                sleep(Duration::from_millis(5000)).await;
-                loop {
-                    sleep(Duration::from_millis(500)).await;
-                    let elapsed = {
-                        let timer_loc = last_heartbeat_clone.lock().await;
-                        if let Some(time) = *timer_loc {
-                            time.elapsed()
-                        } else {
-                            continue;
+            if !inputs.ping {
+                // Spawn a thread to monitor the heartbeat
+                let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(&GLOBAL_LAST_HEARTBEAT);
+                tokio::spawn(async move {
+                    sleep(Duration::from_millis(5000)).await;
+                    loop {
+                        sleep(Duration::from_millis(500)).await;
+                        let elapsed = {
+                            let timer_loc = last_heartbeat_clone.lock().await;
+                            if let Some(time) = *timer_loc {
+                                time.elapsed()
+                            } else {
+                                continue;
+                            }
+                        };
+                        if elapsed > Duration::from_secs(10) {
+                            trace!("No heartbeat received for 10 seconds, exiting...");
+                            std::process::exit(0);
                         }
-                    };
-                    if elapsed > Duration::from_secs(10) {
-                        trace!("No heartbeat received for 10 seconds, exiting...");
-                        std::process::exit(0);
                     }
-                }
-            });
-
+                });
+            }
             // send/receive heartbeats to/from broker
             let incoming = TcpListener::bind(&handler_addr).await.unwrap();
             let service = service_fn(move |req: Request<Incoming>| {

@@ -85,7 +85,7 @@ impl FailCounter{
             fail_count: 0,
             first_increment: Instant::now(),
             last_increment: Instant::now(),
-            interval: Duration::from_secs(2),
+            interval: Duration::from_secs(5),
         }
     }
 
@@ -133,8 +133,9 @@ impl Heartbeat {
         let mut response = Response::new(Full::default());
         *response.status_mut() = StatusCode::OK;
 
-        if !self.ping {
-            trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
+        info!("ping {:?}", self.ping.clone());
+        if self.ping == false{
+            // trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
     
             let message = serialize_message(& Message{
                 header: MessageHeader::HB,
@@ -145,7 +146,6 @@ impl Heartbeat {
                 (Some(s), None) => {
                     let mut loc_stream = s.lock().await;
                     
-                    trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: MessageHeader::HB,
                         body: serde_json::to_string(& self.msg_body.clone()).unwrap()
@@ -202,7 +202,7 @@ impl Heartbeat {
                     };
                     
                     // allots time for reading response
-                    let timeout_duration = Duration::from_secs(10);
+                    let timeout_duration = Duration::from_secs(3);
                     let received = match timeout(timeout_duration, c.request(req)).await {
                         Ok(Ok(mut resp)) => {
                             trace!("Received response: {:?}", resp);
@@ -214,7 +214,7 @@ impl Heartbeat {
                                 self.fail_counter.first_increment = Instant::now();
                             }
                             self.fail_counter.increment();
-                            trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
+                            warn!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
                             *response.status_mut() = StatusCode::BAD_REQUEST;
                             return Ok(response);            
                         }
@@ -248,7 +248,7 @@ impl Heartbeat {
                 *response.status_mut() = StatusCode::GONE
             }
             else {
-                *response.status_mut() = StatusCode::OK
+                *response.status_mut() = StatusCode::ACCEPTED
             }
         }
         Ok(response)
@@ -321,9 +321,9 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                 if let Some(pos) = vec.iter().position(|item| item.service_id == shared_data.4 as u64
                 && item.service_id == item.id) {
                     if let Some(publish) = vec.get_mut(pos) {
-                        info!("changing service_claim");
+                        trace!("Client disconnected. Changing service_claim");
                         publish.service_claim = 0;
-                        info!("changed state: {:?}", state_loc.clients);
+                        // info!("changed state: {:?}", state_loc.clients);
                     }
                 }
             }
@@ -356,14 +356,18 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
         // use a worker from threadpool to handle events with multithreading
         tokio::spawn(async move {
 
-            trace!("Passing event to event monitor...");
+            // trace!("Passing event to event monitor...");
             let response = hb.monitor().await;
             // move outside of spawn to change real state
             let fail_id: i64 = if hb.id != hb.service_id {
                 match response {
                     Ok(mut resp) => {
                         let status = resp.status();
-                        if status != StatusCode::OK {
+                        if status == StatusCode::ACCEPTED {
+                            trace!("received a ping heartbeat");
+                            -1
+                        }
+                        else if status != StatusCode::OK {
                             trace!("monitor status not ok");
                             hb.service_id as i64
                         }
@@ -429,7 +433,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                 info!("Dropping event");
             }
         });
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -824,7 +828,7 @@ pub async fn request_handler(
             let (lock, _notify) = &**state;
 
             let mut counter = 0;
-            while counter < 10 {
+            while counter < 50 {
                 {
                     let state_loc = lock.lock().await;
                     let mut deque = state_loc.deque.lock().await;
@@ -859,7 +863,7 @@ pub async fn request_handler(
                         counter += 1;
                     }
                 }
-                sleep(Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(300)).await;
             }
             if counter == 10 {
                 warn!("Could not find matching service");
@@ -873,13 +877,14 @@ pub async fn request_handler(
             let (lock, _notify) = &**state;
 
             let mut counter = 0;
-            while counter < 10 {
+            while counter < 50 {
                 {
+
                     let state_loc = lock.lock().await;
                     let mut deque = state_loc.deque.lock().await;
-                    trace!("deque status {:?}", deque);
+                    trace!("searching deque {:?}", deque);
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
-                        if e.id == hb_body.id {
+                        if e.service_id == hb_body.id && e.id != hb_body.id {
                             trace!("found id");
                             Some(e)
                         } else {
@@ -888,7 +893,7 @@ pub async fn request_handler(
                         }
                     }) {
                         // change hearbeat timer 
-                        info!("altering last heartbeat");
+                        info!("altering last heartbeat: {:?}", hb);
                         hb.ping = true;
                         hb.fail_counter.last_increment = Instant::now();
                         let json = serialize_message( & Message {
@@ -910,7 +915,7 @@ pub async fn request_handler(
                         counter += 1;
                     }
                 }
-                sleep(Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(702)).await;
             }
             if counter == 10 {
                 warn!("Could not find matching service");
@@ -982,15 +987,15 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     return Ok(response);
 }
 
-pub async fn ping_heartbeat(pay: Option<&Arc<Mutex<String>>>, 
+pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>, 
     address: Option<&Arc<Mutex<Addr>>>, tls: Option<ClientConfig>)
     -> Result<Response<Full<Bytes>>, std::io::Error> {
     println!("entering ping heartbeat");
+    sleep(Duration::from_millis(2000)).await;
     let mut response = Response::new(Full::default());
 
     // retrieve service's payload from client or set an empty message body
     let binding = Arc::new(Mutex::new("".to_string()));
-    let payload = pay.unwrap_or(&binding);
     let payload_loc = payload.lock().await.clone();
 
     let empty_addr = Arc::new(Mutex::new(Addr{
@@ -1085,13 +1090,13 @@ pub async fn ping_heartbeat(pay: Option<&Arc<Mutex<String>>>,
                 }
                 Ok(Err(_e)) => {
                     read_fail += 1;
-                    if read_fail > 5 {
+                    if read_fail > 100 {
                         panic!("Failed to send request to listener")
                     }
                 }
                 Err(_e) => {
                     read_fail += 1;
-                    if read_fail > 5 {
+                    if read_fail > 100 {
                         panic!("Request timed out")
                     }
                 }
