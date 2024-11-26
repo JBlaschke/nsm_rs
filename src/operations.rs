@@ -833,7 +833,6 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                         match result {
                             Ok(Ok(mut resp)) => {
                                 trace!("Received ping response: {:?}", resp);
-                                // print service's address to client
                                 break;
                             }
                             Ok(Err(_e)) => {

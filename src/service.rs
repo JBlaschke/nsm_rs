@@ -1044,69 +1044,66 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
             header: MessageHeader::HB,
             body: serde_json::to_string(& msg_body).unwrap()
     });
-    loop {
-        let mut read_fail = 0;
+    tokio::spawn( async move {
         loop {
-            sleep(Duration::from_millis(1000)).await;
-            trace!("sent message to listener on {:?}", addr_loc);
-    
-            let req = match tls.clone() {
-                Some(_t) => {
-                    Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("https://{}:{}/request_handler", addr_loc.host, addr_loc.port))
-                    .header(hyper::header::CONTENT_TYPE, "application/json")
-                    .body(Full::new(Bytes::from(msg.clone())))
-                    .unwrap()
-                }
-                None => {
-                    Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("http://{}:{}/request_handler", addr_loc.host, addr_loc.port))
-                    .header(hyper::header::CONTENT_TYPE, "application/json")
-                    .body(Full::new(Bytes::from(msg.clone())))
-                    .unwrap()
-                }
-            };
+            let mut read_fail = 0;
+            loop {
+                sleep(Duration::from_millis(1000)).await;
+                trace!("sent message to listener on {:?}", addr_loc);
+        
+                let req = match tls.clone() {
+                    Some(_t) => {
+                        Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("https://{}:{}/request_handler", addr_loc.host, addr_loc.port))
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from(msg.clone())))
+                        .unwrap()
+                    }
+                    None => {
+                        Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("http://{}:{}/request_handler", addr_loc.host, addr_loc.port))
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from(msg.clone())))
+                        .unwrap()
+                    }
+                };
 
-            let result = timeout(timeout_duration, client.request(req)).await;
-            
-            match result {
-                Ok(Ok(resp)) => {
-                    trace!("Received response: {:?}", resp);
-                    let body = resp.collect().await.unwrap().aggregate();
-                    let data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
-                    let json = serde_json::to_string(&data).unwrap();
-                    let m = deserialize_message(& json);
-                    match m.header {
-                        MessageHeader::HB => info!("Request acknowledged: {:?}", m),
-                        _ => warn!("Server responds with unexpected message: {:?}", m),
+                let result = timeout(timeout_duration, client.request(req)).await;
+                
+                match result {
+                    Ok(Ok(resp)) => {
+                        trace!("Received response: {:?}", resp);
+                        let body = resp.collect().await.unwrap().aggregate();
+                        let data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                        let json = serde_json::to_string(&data).unwrap();
+                        let m = deserialize_message(& json);
+                        match m.header {
+                            MessageHeader::HB => info!("Request acknowledged: {:?}", m),
+                            _ => warn!("Server responds with unexpected message: {:?}", m),
+                        }
+                        break;
                     }
-                    response = Response::builder()
-                    .status(StatusCode::OK)
-                    .header(hyper::header::CONTENT_TYPE, "application/json")
-                    .body(Full::new(Bytes::from(serialize_message(& Message{
-                        header: MessageHeader::ACK,
-                        body: "".to_string()
-                    })))).unwrap();
-                    break;
-                }
-                Ok(Err(_e)) => {
-                    read_fail += 1;
-                    if read_fail > 100 {
-                        panic!("Failed to send request to listener")
+                    Ok(Err(_e)) => {
+                        read_fail += 1;
+                        if read_fail > 50 {
+                            warn!("Failed to send request to listener");
+                            std::process::exit(0);
+                        }
                     }
-                }
-                Err(_e) => {
-                    read_fail += 1;
-                    if read_fail > 100 {
-                        panic!("Request timed out")
+                    Err(_e) => {
+                        read_fail += 1;
+                        if read_fail > 50 {
+                            warn!("Request timed out");
+                            std::process::exit(0);
+                        }
                     }
                 }
             }
+            let _ = sleep(Duration::from_millis(10000));
         }
-        let _ = sleep(Duration::from_millis(10000));
-    }
+    });
     response = Response::builder()
     .status(StatusCode::OK)
     .header(hyper::header::CONTENT_TYPE, "application/json")
