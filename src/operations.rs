@@ -10,7 +10,7 @@ use crate::utils::{only_or_error, epoch};
 
 use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG};
 
-use crate::tls::{tls_config, load_ca};
+use crate::tls::{tls_config, load_ca, setup_https_client};
 
 use std::env;
 use std::sync::Arc;
@@ -274,6 +274,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         id: 0,
         service_id: 0,
         root_ca: inputs.root_ca,
+        ping: inputs.ping
 
     });
     let host = only_or_error(& ipstr);
@@ -538,7 +539,8 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         key: inputs.key,
         id: 0,
         service_id: 0,
-        root_ca: inputs.root_ca
+        root_ca: inputs.root_ca.clone(),
+        ping: inputs.ping
     });
 
     let broker_addr = Arc::new(Mutex::new(Addr{
@@ -799,6 +801,58 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     api_server(req, loc_handler).await
                 }
             });
+            
+            if inputs.ping {
+                tokio::spawn(async move {
+                    let client = setup_https_client(inputs.root_ca.clone()).await;
+                    read_fail = 0;
+                    loop {
+                        sleep(Duration::from_millis(1000)).await;
+                        trace!("sending request to {}:{}", inputs.host, inputs.bind_port);
+        
+                        let req = if inputs.tls {
+                            Request::builder()
+                            .method(Method::GET)
+                            .uri(format!("https://{}:{}/heartbeat_handler", inputs.host, inputs.bind_port))
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from("".to_string())))
+                            .unwrap()
+                        }
+                        else {
+                            Request::builder()
+                            .method(Method::GET)
+                            .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.bind_port))
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from("".to_string())))
+                            .unwrap()
+                        };
+        
+                        let result = timeout(timeout_duration, client.request(req)).await;
+        
+                        // check for successful connection to a published service
+                        match result {
+                            Ok(Ok(mut resp)) => {
+                                trace!("Received ping response: {:?}", resp);
+                                // print service's address to client
+                                break;
+                            }
+                            Ok(Err(_e)) => {
+                                read_fail += 1;
+                                if read_fail > 5 {
+                                    panic!("Failed to send request to listener")
+                                }
+                            },
+                            Err(_) => {
+                                read_fail += 1;
+                                if read_fail > 5 {
+                                    panic!("Requests to listener timed out")
+                                }
+                            },
+                        }
+                    }
+                });
+            }
+            println!("waiting for requests");
             loop {
                 let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
                 let tls_acceptor = if inputs.tls {

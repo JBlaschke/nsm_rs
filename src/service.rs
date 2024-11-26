@@ -48,6 +48,8 @@ pub struct Payload {
     pub service_id: u64,
     /// path to root store
     pub root_ca: Option<String>,
+    /// one or two sided heartbeat
+    pub ping: bool,
 }
 
 /// Store message contents to send to connected service
@@ -244,9 +246,9 @@ impl Heartbeat {
             }
         }
         else {
-            if self.fail_counter.last_increment - Instant::now() > Duration::from_secs(60) {
-                *response.status_mut() = StatusCode::GONE
-            }
+            if Instant::now() - self.fail_counter.last_increment > Duration::from_secs(60) {
+                *response.status_mut() = StatusCode::GONE;
+            }            
             else {
                 *response.status_mut() = StatusCode::ACCEPTED
             }
@@ -293,7 +295,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
 
         let mut shared_data = data.lock().await;
         // if connection is dead, remove it
-        if shared_data.0 == 10{
+        if shared_data.0 == 10 || shared_data.4 != 0{
             let mut state_loc = lock.lock().await;
             match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3).await{
                 Ok(m) => {
@@ -308,12 +310,11 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                     }
                 },
                 Err(_e) => {
-                    let mut response = Response::new(Full::default());
-                    *response.status_mut() = StatusCode::BAD_REQUEST;
-                    return Ok(response)
+                    warn!("Failed to remove item from vec");
                 }
             }
             shared_data.0 = 0;
+            shared_data.4 = 0;
         }
         {            
             let mut state_loc = lock.lock().await;
@@ -364,8 +365,8 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                     Ok(mut resp) => {
                         let status = resp.status();
                         if status == StatusCode::ACCEPTED {
-                            trace!("received a ping heartbeat");
-                            -1
+                            trace!("ping is alive");
+                            0
                         }
                         else if status != StatusCode::OK {
                             trace!("monitor status not ok");
@@ -373,7 +374,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                         }
                         else {
                             trace!("monitor status is ok");
-                            -1
+                            0
                         }
                     }
                     Err(e) => {
@@ -383,13 +384,15 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                 }
             }
             else{
-                -1
+                0
             };
+            println!("fail id {:?}", fail_id);
             // check heartbeat metadata to see if entity should be added back to event queue 
             // or if client should claim a new service
             let mut data = data_clone.lock().await;
             *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id, fail_id as i64);
-            if data.0 < 10 {
+            println!("data.4 {:?}", data.4);
+            if data.0 < 10 && data.4 == 0 {
                 trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
                 if hb.service_id == (service_id as u64){
                     trace!("Connecting to new service");
@@ -531,6 +534,7 @@ impl State {
                                 hb.stream = stream;
                                 hb.client = client;
                                 hb.tls = tls;
+                                hb.ping = item.ping;
                                 trace!("Altering hb {:?}", hb);
                                 p.id = item.id;
                                 p.service_id = item.service_id;
@@ -562,7 +566,7 @@ impl State {
             tls,
             fail_counter: FailCounter::new(),
             msg_body: MsgBody::default(),
-            ping: false
+            ping: p.ping
         };
         trace!("Adding new connection to queue");
         {
@@ -894,7 +898,6 @@ pub async fn request_handler(
                     }) {
                         // change hearbeat timer 
                         info!("altering last heartbeat: {:?}", hb);
-                        hb.ping = true;
                         hb.fail_counter.last_increment = Instant::now();
                         let json = serialize_message( & Message {
                             header: MessageHeader::HB,
@@ -990,7 +993,7 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
 pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>, 
     address: Option<&Arc<Mutex<Addr>>>, tls: Option<ClientConfig>)
     -> Result<Response<Full<Bytes>>, std::io::Error> {
-    println!("entering ping heartbeat");
+    trace!("entering ping heartbeat");
     sleep(Duration::from_millis(2000)).await;
     let mut response = Response::new(Full::default());
 
@@ -1104,6 +1107,13 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
         }
         let _ = sleep(Duration::from_millis(10000));
     }
+    response = Response::builder()
+    .status(StatusCode::OK)
+    .header(hyper::header::CONTENT_TYPE, "application/json")
+    .body(Full::new(Bytes::from(serialize_message(& Message{
+        header: MessageHeader::ACK,
+        body: "".to_string()
+    })))).unwrap();
     Ok(response)
 }
 
