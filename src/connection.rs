@@ -168,6 +168,7 @@ pub async fn receive(stream: & Arc<Mutex<TcpStream>>) -> Result<Message, std::io
     Ok(response)
 }
 
+/// Reformat a request body into a string
 pub async fn collect_request(request: &mut Incoming) -> Result<Message, std::io::Error>{
     let whole_body = request.collect().await.unwrap().aggregate();
     let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
@@ -190,16 +191,13 @@ pub async fn api_server(
 
     match (method, path.as_str()) {
         (Method::POST, p) if p.starts_with("/request_handler") => {
-            info!("received request");
             handler(request).await
         },
         (Method::GET, p) if p.starts_with("/heartbeat_handler") => {
             {
                 let mut last_heartbeat = GLOBAL_LAST_HEARTBEAT.lock().await;
                 *last_heartbeat = Some(Instant::now());
-                println!("Heartbeat received, time updated.");
             }
-            info!("received hb request");
             handler(request).await
         },
         _ => {

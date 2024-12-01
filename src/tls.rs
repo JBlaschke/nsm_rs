@@ -12,7 +12,7 @@ use hyper::body::Bytes;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-// Load public certificate from file.
+/// Load public certificate from file.
 async fn load_certs() -> Result<Vec<CertificateDer<'static>>, std::io::Error> {
     let filename = env::var("CERT_PATH").expect("CERT_PATH not set");
     // Open certificate file.
@@ -36,6 +36,7 @@ async fn load_private_key() -> Result<PrivateKeyDer<'static>, std::io::Error> {
     rustls_pemfile::private_key(&mut reader).map(|key| key.unwrap())
 }
 
+/// add certificate to root store
 pub async fn load_ca(root_ca: Option<String>) -> Result<RootCertStore, std::io::Error>{
     let root_store = match root_ca {
         Some(ref path) => {
@@ -58,6 +59,7 @@ pub async fn load_ca(root_ca: Option<String>) -> Result<RootCertStore, std::io::
     Ok(root_store)
 }
 
+/// configure tls on the server side
 pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
         // Set a process wide default crypto provider.
         #[cfg(feature = "ring")]
@@ -79,7 +81,7 @@ pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
         Ok(server_config)
 }
 
-// Define an async function for configuring the HTTPS client
+/// Define an async function for configuring the HTTPS client
 pub async fn setup_https_client(root_ca: Option<String>) -> Client<HttpsConnector<HttpConnector>, Full<Bytes>> {
     // Wait for the connector to be configured
     let https_connector = match root_ca {

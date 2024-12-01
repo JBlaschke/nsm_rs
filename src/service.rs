@@ -36,7 +36,6 @@ pub struct Payload {
     pub service_port: i32,
     /// epoch time of when service was claimed
     pub service_claim: u64,
-    /// 
     pub interface_addr: Vec<String>,
     /// used for sending/receiving heartbeats
     pub bind_port: i32,
@@ -120,9 +119,9 @@ pub struct Heartbeat {
     pub tls: bool,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_counter: FailCounter,
-    /// message sent from client
+    /// message sent from client, can access using collect()
     pub msg_body: MsgBody,
-    // / one or two way heartbeat
+    /// one- or two-sided heartbeat
     pub ping: bool,
 }
 
@@ -130,12 +129,11 @@ impl Heartbeat {
     /// send a heartbeat to the service/client and check if entity sent one back,
     /// increment fail_count if heartbeat not received when expected
     async fn monitor(&mut self) -> Result<Response<Full<Bytes>>, std::io::Error>{
-        // sleep(Duration::from_millis(100)).await;
 
         let mut response = Response::new(Full::default());
         *response.status_mut() = StatusCode::OK;
 
-        info!("ping {:?}", self.ping.clone());
+        // check ping status
         if self.ping == false{
             // trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
     
@@ -144,10 +142,12 @@ impl Heartbeat {
                 body: serde_json::to_string(& self.msg_body.clone()).unwrap()
             });
 
+            // enter tcp or api mode
             let received = match (&self.stream, &self.client){
                 (Some(s), None) => {
                     let mut loc_stream = s.lock().await;
                     
+                    // send heartbeat
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: MessageHeader::HB,
                         body: serde_json::to_string(& self.msg_body.clone()).unwrap()
@@ -188,6 +188,7 @@ impl Heartbeat {
                     received
                 },
                 (None, Some(c)) => {
+                    // send heartbeat request with/without tls
                     let req = match self.tls{
                         true => Request::builder()
                         .method(Method::GET)
@@ -230,15 +231,17 @@ impl Heartbeat {
                 _ => panic!("Unexpected state: no stream or client.")
             };
         
+            // check for valid response
             if received == "" {
-                // broken connection
+                // broken connection, increment fail count
                 if self.fail_counter.fail_count == 0 {
                     self.fail_counter.first_increment = Instant::now();
                 }
                 self.fail_counter.increment();
                 trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
                 *response.status_mut() = StatusCode::BAD_REQUEST
-            } else {    
+            } else { 
+                // connection is alive, reset fail count   
                 trace!("Received: {:?}", received);
                 self.fail_counter.fail_count = 0;
                 trace!("Resetting failcount. {}", self.fail_counter.fail_count);
@@ -246,6 +249,7 @@ impl Heartbeat {
             }
         }
         else {
+            // check timing of last heartbeat ping
             if Instant::now() - self.fail_counter.last_increment > Duration::from_secs(60) {
                 *response.status_mut() = StatusCode::GONE;
             }            
@@ -295,6 +299,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
 
         let mut shared_data = data.lock().await;
         // if connection is dead, remove it
+        // check if the fail_count has reached 10 or if a ping has failed
         if shared_data.0 == 10 || shared_data.4 != 0{
             let mut state_loc = lock.lock().await;
             match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3).await{
@@ -313,10 +318,12 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                     warn!("Failed to remove item from vec");
                 }
             }
+            // reset fail_count and fail_id trackers
             shared_data.0 = 0;
             shared_data.4 = 0;
         }
-        {            
+        {
+            // reset a published service's service_claim once its client has been removed
             let mut state_loc = lock.lock().await;
             if let Some(vec) = state_loc.clients.get_mut(&shared_data.1) {
                 if let Some(pos) = vec.iter().position(|item| item.service_id == shared_data.4 as u64
@@ -324,7 +331,6 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
                     if let Some(publish) = vec.get_mut(pos) {
                         trace!("Client disconnected. Changing service_claim");
                         publish.service_claim = 0;
-                        // info!("changed state: {:?}", state_loc.clients);
                     }
                 }
             }
@@ -357,9 +363,9 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
         // use a worker from threadpool to handle events with multithreading
         tokio::spawn(async move {
 
-            // trace!("Passing event to event monitor...");
+            // send/receive heartbeat for popped item
             let response = hb.monitor().await;
-            // move outside of spawn to change real state
+            // check status of heartbeat
             let fail_id: i64 = if hb.id != hb.service_id {
                 match response {
                     Ok(mut resp) => {
@@ -386,12 +392,10 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
             else{
                 0
             };
-            println!("fail id {:?}", fail_id);
             // check heartbeat metadata to see if entity should be added back to event queue 
             // or if client should claim a new service
             let mut data = data_clone.lock().await;
             *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id, fail_id as i64);
-            println!("data.4 {:?}", data.4);
             if data.0 < 10 && data.4 == 0 {
                 trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
                 if hb.service_id == (service_id as u64){
@@ -509,6 +513,7 @@ impl State {
             None => false
         };
 
+        // check if item already exists in the queue when trying to reconnect from poor connection
         if let Some(vec) = self.clients.get_mut(&p.key) {
             // find value in clients with matching id
             if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr
@@ -529,6 +534,7 @@ impl State {
                                 None
                             }
                         }) {
+                            // alter heartbeat with new metadata
                             if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
                                 hb.addr = bind_address.clone();
                                 hb.stream = stream;
@@ -556,6 +562,7 @@ impl State {
         if service_id != 0{
             temp_id = service_id;
         }
+        // create new heartbeat with metadata from payload
         let heartbeat = Heartbeat {
             key: p.key,
             id: self.seq,
@@ -825,13 +832,14 @@ pub async fn request_handler(
             state_loc.print().await; // print state of clients hashmap
         },
         MessageHeader::MSG => {
-            info!("adding msg to queue");
             let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
             trace!("Sending Message: {:?}", msg_body);
 
             let (lock, _notify) = &**state;
 
             let mut counter = 0;
+            // retry and check queue for heartbeat with a matching id
+            // alter message in heartbeat with new message
             while counter < 50 {
                 {
                     let state_loc = lock.lock().await;
@@ -881,12 +889,15 @@ pub async fn request_handler(
             let (lock, _notify) = &**state;
 
             let mut counter = 0;
+            // retry and check queue for heartbeat with a matching id
+            // reset last heartbeat timer for ping heartbeats
             while counter < 50 {
                 {
 
                     let state_loc = lock.lock().await;
                     let mut deque = state_loc.deque.lock().await;
                     trace!("searching deque {:?}", deque);
+                    // only alter a client's heartbeat
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
                         if e.service_id == hb_body.id && e.id != hb_body.id {
                             trace!("found id");
@@ -896,7 +907,7 @@ pub async fn request_handler(
                             None
                         }
                     }) {
-                        // change hearbeat timer 
+                        // reset hearbeat timer 
                         info!("altering last heartbeat: {:?}", hb);
                         hb.fail_counter.last_increment = Instant::now();
                         let json = serialize_message( & Message {
@@ -952,9 +963,11 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     // loop for tcp constantly checks for heartbeats in stream
     // one handler call for each http request
     
+    // enter tcp or api server
     response = match (&stream, &mut request) {
         (Some(_s), None) => {
             let _ = tokio::spawn(async move {
+                // infinite heartbeat loop for tcp connection
                 loop {
                     match heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone.clone(), None).await {
                         Ok(_resp) => {
@@ -967,6 +980,7 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
             response
         },
         (None, Some(_r)) => {
+            // enter heartbeat handler once for every api request
             response = match heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone, tls).await {
                 Ok(resp) => {
                     resp
@@ -990,6 +1004,7 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     return Ok(response);
 }
 
+/// heartbeat handler for one-sided heartbeats
 pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>, 
     address: Option<&Arc<Mutex<Addr>>>, tls: Option<ClientConfig>)
     -> Result<Response<Full<Bytes>>, std::io::Error> {
@@ -1009,14 +1024,14 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
     let addr = address.unwrap_or(&empty_addr);
     let addr_loc = addr.lock().await.clone();
 
-    // set service_id to know which service to send msg to
+    // use service id to identify client
     let mut service_id = 0;
     if *payload_loc != "".to_string() {
         service_id = deserialize(&payload_loc).service_id;
     }
     let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
 
-    trace!("initiating request to listener");
+    // setup http connection with/without tls
     let https_connector = match tls.clone() {
         Some(t) => {
             HttpsConnectorBuilder::new()
@@ -1045,6 +1060,7 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
             body: serde_json::to_string(& msg_body).unwrap()
     });
     tokio::spawn( async move {
+        // send heartbeats to broker as long as it is alive
         loop {
             let mut read_fail = 0;
             loop {
@@ -1072,6 +1088,7 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
 
                 let result = timeout(timeout_duration, client.request(req)).await;
                 
+                // check for valid response, quit process if broker is dead
                 match result {
                     Ok(Ok(resp)) => {
                         trace!("Received response: {:?}", resp);
@@ -1087,14 +1104,16 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
                     }
                     Ok(Err(_e)) => {
                         read_fail += 1;
-                        if read_fail > 50 {
-                            warn!("Failed to send request to listener");
+                        warn!("Failed to send request to listener");
+                        if read_fail > 10 {
+                            warn!("Shutting down pings");
                             std::process::exit(0);
                         }
                     }
                     Err(_e) => {
                         read_fail += 1;
-                        if read_fail > 50 {
+                        warn!("Failed to send request to listener");
+                        if read_fail > 10 {
                             warn!("Request timed out");
                             std::process::exit(0);
                         }
@@ -1122,6 +1141,8 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
     -> Result<Response<Full<Bytes>>, std::io::Error> {
     trace!("Starting heartbeat handler");
 
+    // enter tcp or api mode
+    // receive message from broker
     let message = match (stream, &mut *request) {
         (Some(s), None) => {
             let loc_stream: &mut TcpStream = &mut *s.lock().await;
@@ -1164,9 +1185,12 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
     // if a MSG: connect to listener to alter the msg value in the service's heartbeat
     trace!("Heartbeat handler received {:?}", message);
 
+    // match message header
     if matches!(message.header, MessageHeader::MSG){
+        // enter tcp or api mode
         match (stream, &mut *request) {
             (Some(_s), None) => {
+                // create new connection to broker
                 let listen_stream = match connect(& addr).await{
                     Ok(s) => s,
                     Err(_e) => {
@@ -1179,6 +1203,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     msg: message.body.clone(),
                     id: service_id
                 };
+                // relay message from send_msg() to broker
                 let _ack = send(& stream_mut, & Message{
                     header: MessageHeader::MSG,
                     body: serde_json::to_string(& msg_body).unwrap()
@@ -1220,6 +1245,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     sleep(Duration::from_millis(1000)).await;
                     trace!("sent message to listener on {:?}", addr);
 
+                    // relay message from send_msg() to broker with new request
                     let req = match tls.clone() {
                         Some(_t) => {
                             Request::builder()
@@ -1241,6 +1267,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
 
                     let result = timeout(timeout_duration, client.request(req)).await;
                 
+                    // check for valid response
                     match result {
                         Ok(Ok(resp)) => {
                             trace!("Received response: {:?}", resp);
@@ -1291,8 +1318,10 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
         if *payload == "".to_string(){
             // send msg back
             let msg = GLOBAL_MSGBODY.lock().await;
+            // enter tcp or api mode
             let _ = match (&stream, &mut *request) {
                 (Some(s), None) => {
+                    // return message to collect()
                     let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: message.header,
@@ -1300,6 +1329,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     })).await;  
                 },
                 (None, Some(_r)) => {
+                    // return message to collect()
                     response = Response::builder()
                     .status(StatusCode::OK)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -1315,6 +1345,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             // payload not empty for clients, send payload w/ address of the paired service
             let _ = match (&stream, &mut *request) {
                 (Some(s), None) => {
+                    // return published service payload to client
                     let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: message.header,
@@ -1322,6 +1353,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     })).await;
                 },
                 (None, Some(_r)) => {
+                    // return published service payload to client
                     response = Response::builder()
                     .status(StatusCode::OK)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -1340,7 +1372,8 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
         // default HB/MSG response to send what was received
         if msg_body.msg.is_empty(){
             let _ = match (&stream, &mut *request) {
-                (Some(s), None) => {
+                    // return acknowledgment heartbeat
+                    (Some(s), None) => {
                     let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
                     let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
                         header: message.header,
@@ -1348,6 +1381,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                     })).await;
                 },
                 (None, Some(_r)) => {
+                    // return acknowledgment heartbeat
                     response = Response::builder()
                     .status(StatusCode::OK)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -1363,6 +1397,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             // store msg received from listener into global msg variable
             let mut msg = GLOBAL_MSGBODY.lock().await;
             *msg = serde_json::from_str(& message.body).unwrap();
+            // send new message to broker
             let _ = match (&stream, &mut *request) {
                 (Some(s), None) => {
                     let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
