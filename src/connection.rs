@@ -1,16 +1,21 @@
 /// Handles incoming connections and sending/receiving messages
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::fmt;
 use serde::{Serialize, Deserialize};
-use std::sync::{Arc, Mutex};
-use rand::Rng;
-use std::thread;
-use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::sync::Arc;
+use tokio::time::{timeout, Instant, Duration};
+use hyper::http::{Method, Request, Response, StatusCode};
+use http_body_util::{BodyExt, Full};
+use hyper::body::{Bytes, Incoming, Buf};
+use tokio::net::{TcpStream, TcpListener};
+use tokio::sync::Mutex;
+use std::future::Future;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
+
+use crate::operations::GLOBAL_LAST_HEARTBEAT;
 
 /// Store host and port for new connections
 #[derive(Debug, Clone)]
@@ -19,6 +24,12 @@ pub struct Addr {
     pub host: String,
     /// Port number
     pub port: i32
+}
+
+/// Specify tcp or api communication
+pub enum ComType {
+    TCP,
+    API
 }
 
 /// Identify type of Message to handle it properly
@@ -56,7 +67,7 @@ impl fmt::Display for MessageHeader {
 }
 
 /// Send messages in body that are identified by MessageHeader
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Message {
     /// Specify type of Message
     pub header: MessageHeader,
@@ -75,58 +86,28 @@ pub fn deserialize_message(payload: & String) -> Message {
 }
 
 /// Connect to address using Addr struct, returns Result of connected TCPStream
-pub fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
-
-    TcpStream::connect(format!("{}:{}", addr.host, addr.port))
+pub async fn connect(addr: &Addr) -> std::io::Result<TcpStream> {
+    TcpStream::connect(format!("{}:{}", addr.host, addr.port)).await
 }
 
-// pub fn connect_with_retry(addr: String) -> std::io::Result<TcpStream> {
-//     let mut retry_delay = Duration::from_secs(1);
-//     let max_delay = Duration::from_secs(5);
-//     let mut rng = rand::thread_rng();
-//     let mut failcount = 0;
-
-//     while failcount < 3 {
-//         match TcpStream::connect(addr.clone()) {
-//             Ok(stream) => {
-//                 trace!("Reset stream connection");
-//                 return Ok(stream);
-//             }
-//             Err(e) => {
-//                 warn!("Failed to connect: {:?}", e);
-                
-//                 failcount += 1;
-//                 // Exponential backoff with jitter
-//                 let jitter: u64 = rng.gen_range(0..1000); // Random jitter in milliseconds
-//                 let total_delay = retry_delay + Duration::from_millis(jitter);
-                
-//                 thread::sleep(total_delay);
-//                 retry_delay = std::cmp::min(retry_delay * 2, max_delay);
-//             }
-//         }
-//     }
-//     // If the loop exits without establishing a connection, return an error
-//     Err(std::io::Error::new(
-//         std::io::ErrorKind::InvalidInput, "Failed to connect after multiple attempts"))
-// }
-
-
 /// Write a message through a TCPStream, returns Result of # of bytes written or err
-pub fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result<usize> {
-    match stream.write(msg.as_bytes()) {
+pub async fn stream_write(stream: &mut TcpStream, msg: & str) -> std::io::Result<usize> {
+    match stream.write(msg.as_bytes()).await {
         Ok(n) => Ok(n),
         Err(err) => Err(err)
     }
 }
 
 /// Read a message from TCPStream, returns Result of # of bytes read or err
-pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
+pub async fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
     let mut buf = [0; 1024];
     let mut message = String::new();
+    let failure_duration = Duration::from_secs(6);
     loop {
-        let bytes_read = match stream.read(&mut buf) {
-            Ok(n) => n,
-            Err(err) => { return Err(err); }
+        let bytes_read = match timeout(failure_duration, stream.read(&mut buf)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(err)) => return Err(err),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Read timed out"))
         };
         let s = std::str::from_utf8(&buf[..bytes_read]).unwrap();
         message.push_str(s);
@@ -141,10 +122,10 @@ pub fn stream_read(stream: &mut TcpStream) -> std::io::Result<String>{
 
 /// Sends a message in a TCPStream using stream_write(), checks for response
 /// if message not an ACK, returns Result of Message received
-pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<Message> {
+pub async fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> Result<Message, std::io::Error> {
 
-    let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
-    let _ = stream_write(loc_stream, & serialize_message(msg));
+    let loc_stream: &mut TcpStream = &mut *stream.lock().await;
+    let _ = stream_write(loc_stream, & serialize_message(msg)).await;
 
     if matches!(msg.header, MessageHeader::ACK){
         return Ok(Message {
@@ -153,7 +134,7 @@ pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<
         })
     }
 
-    let response = match stream_read(loc_stream) {
+    let response = match stream_read(loc_stream).await {
         Ok(message) => deserialize_message(& message),
         Err(err) => {return Err(err);}
     };
@@ -163,11 +144,11 @@ pub fn send(stream: & Arc<Mutex<TcpStream>>, msg: & Message) -> std::io::Result<
 
 /// Receives a message through a TCPStream using stream_read(), writes an ACK
 /// if received message not a HB or ACK
-pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
+pub async fn receive(stream: & Arc<Mutex<TcpStream>>) -> Result<Message, std::io::Error> {
 
-    let loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+    let loc_stream: &mut TcpStream = &mut *stream.lock().await;
 
-    let response = match stream_read(loc_stream) {
+    let response = match stream_read(loc_stream).await {
         Ok(message) => deserialize_message(& message),
         Err(err) => {return Err(err);}
     };
@@ -182,33 +163,75 @@ pub fn receive(stream: & Arc<Mutex<TcpStream>>) -> std::io::Result<Message> {
             header: MessageHeader::ACK,
             body: "".to_string()
         }
-    ));
+    )).await;
 
     Ok(response)
 }
 
+/// Reformat a request body into a string
+pub async fn collect_request(request: &mut Incoming) -> Result<Message, std::io::Error>{
+    let whole_body = request.collect().await.unwrap().aggregate();
+    let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
+    let json = serde_json::to_string(&data).unwrap();
+    let message = deserialize_message(& json);
+    Ok(message)
+}
+
 /// Binds to stream and listens for incoming connections, then handles connection using specified handler
-pub fn server(
-    addr: &Addr, 
-    mut handler: impl FnMut(& Arc<Mutex<TcpStream>>) -> std::io::Result<()> + std::marker::Send + 'static + Clone
-) -> std::io::Result<()> {
-    trace!("Starting server process on: {:?}", addr);
+pub async fn api_server(
+    request: Request<Incoming>, 
+    mut handler: impl FnMut(Request<Incoming>)
+     -> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, 
+     std::io::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
+) -> Result<Response<Full<Bytes>>, std::io::Error> {
 
-    let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port))?;
-    trace!("Bind to {:?} successful", addr);
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let mut response = Response::new(Full::default());
 
-    for stream in listener.incoming() {
-        info!("Request received on {:?}, processing...", stream);
-        match stream {
-            Ok(stream) => {
-                trace!("Passing TCP connection to handler...");
-                let shared_stream = Arc::new(Mutex::new(stream));
-                let _ = handler(& shared_stream); 
+    match (method, path.as_str()) {
+        (Method::POST, p) if p.starts_with("/request_handler") => {
+            handler(request).await
+        },
+        (Method::GET, p) if p.starts_with("/heartbeat_handler") => {
+            {
+                let mut last_heartbeat = GLOBAL_LAST_HEARTBEAT.lock().await;
+                *last_heartbeat = Some(Instant::now());
             }
-            Err(e) => {
-                println!("Error: {}", e);
-            }
+            handler(request).await
+        },
+        _ => {
+            // Return 404 not found response.
+            *response.status_mut() = StatusCode::NOT_FOUND;
+            Ok(response)
         }
     }
+}
+
+/// Binds to stream and listens for incoming connections, then handles connection using specified handler
+pub async fn tcp_server(
+    addr: &Addr, 
+    mut handler: impl FnMut(Option<Arc<Mutex<TcpStream>>>)
+    -> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>>
+     + std::marker::Send>> + std::marker::Send + 'static + Clone
+) -> Result<(), std::io::Error> {
+    trace!("Starting server process on: {:?}", addr);
+
+    let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port)).await.unwrap();
+    trace!("Bind to {:?} successful", addr);
+
+    loop {
+        match listener.accept().await {
+            Ok((stream, _addr)) => {
+                info!("Passing TCP connection to handler...");
+                let shared_stream = Arc::new(Mutex::new(stream));
+                let _ = handler(Some(shared_stream)).await; 
+            },
+            Err(e) => {
+                error!("Error: {}", e);
+            }        
+        }
+    }
+
     Ok(())
 }

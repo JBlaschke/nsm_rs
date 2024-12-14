@@ -1,3 +1,5 @@
+use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG};
+
 use clap::{Arg, Command, ArgAction, ArgMatches};
 
 /// Parse through command line entry to define variables and initiate functions
@@ -13,7 +15,7 @@ pub fn init() -> ArgMatches {
             .value_name("OPERATION")
             .help("Operation to be performed")
             .num_args(1)
-            .required(true)
+            .required(false)
             .value_parser(["list_interfaces", "list_ips", "listen", "claim", "publish", "collect", "send"])
         )
         .arg(
@@ -104,194 +106,35 @@ pub fn init() -> ArgMatches {
             .num_args(1)
             .required(false)
         )
+        .arg(
+            Arg::new("tls")
+            .long("tls")
+            .value_name("SET TLS")
+            .help("Use TLS to encrypt traffic")
+            .num_args(0)
+            .action(clap::ArgAction::SetTrue)
+            .required(false)
+        )        
+        .arg(
+            Arg::new("root_ca")
+            .long("root_ca")
+            .value_name("CA")
+            .help("Root certificate manager store path")
+            .num_args(1)
+            .required(false)
+        )
+        .arg(
+            Arg::new("ping")
+            .long("ping")
+            .value_name("SET PING")
+            .help("Send heartbeats one way to the listener")
+            .num_args(0)
+            .action(clap::ArgAction::SetTrue)
+            .required(false)
+        )
         .get_matches();
 
         return args;
-}
-
-/// Lists available interfaces on device
-/// Match command line entries with variables in struct
-///
-/// Run from command line:
-/// $ ./target/debug/nsm -o list_interfaces
-#[derive(Debug)]
-pub struct ListInterfaces {
-    /// output helpful messages for debugging
-    pub verbose: bool,
-    /// list version 4 interfaces
-    pub print_v4: bool,
-    /// list version 6 interfaces
-    pub print_v6: bool
-}
-
-/// Lists available IP addresses on interface
-/// Match command line entries with variables in struct
-///
-/// ## Example 
-/// Run from command line:
-/// ``` $ ./target/debug/nsm -n en0 -o list_ips --ip-version 4 ```
-#[derive(Debug)]
-pub struct ListIPs {
-    /// output helpful messages for debugging
-    pub verbose: bool,
-    /// list version 4 IP addresses
-    pub print_v4: bool,
-    /// list version 6 IP addresses
-    pub print_v6: bool,
-    /// name of interface
-    pub name: String,
-    /// filter IP addresses to 1 output when more than 1 available
-    pub starting_octets: Option<String>
-}
-
-/// Inititate broker
-/// Match command line entries with variables in struct
-///
-/// ## Example 
-/// Run from command line:
-/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation listen --bind-port 8000 ```
-///
-/// Port # info:
-/// - 8000 : listens for incoming connections from services and clients
-#[derive(Debug)]
-pub struct Listen {
-    /// connecting to version 4 address
-    pub print_v4: bool,
-    /// connection to version 6 address
-    pub print_v6: bool,
-    /// name of interface
-    pub name: String,
-    /// filter IP addresses to 1 output when more than 1 available
-    pub starting_octets: Option<String>,
-    /// port for listening for incoming connections
-    pub bind_port: i32
-}
-
-/// Connect to broker and discover available address for data connection.
-/// Match command line entries with variables in struct
-///
-/// ## Example 
-/// Run from command line:
-/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation claim --host 127.0.0.1 --port 8000 --bind-port 8015 --key 1234 ```
-///
-/// Address info:
-/// - use broker's fixed address
-///
-/// Port # info:
-/// - 8000: same port as Listen's #1
-/// - 8015: port for sending heartbeats to broker
-/// 
-/// Key info:
-/// - use same key as a published service
-#[derive(Debug)]
-pub struct Claim {
-    /// connecting to version 4 address
-    pub print_v4: bool,
-    /// connection to version 6 address
-    pub print_v6: bool,
-    /// broker's local IP address
-    pub host: String,
-    /// same as Listen's bind_port, notify of new connection
-    pub port: i32,
-    /// name of interface
-    pub name: String,
-    /// filter IP addresses to 1 output when more than 1 available
-    pub starting_octets: Option<String>,
-    /// port for sending heartbeats to broker
-    pub bind_port: i32,
-    /// match to an available published service
-    pub key: u64
-}
-
-
-/// Connect to broker and publish address for data connection.
-/// Match command line entries with variables in struct
-///
-/// ## Example 
-/// Run from command line:
-/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation publish --host 127.0.0.1 --port 8000 --bind-port 8010 --service-port 8020 --key 1234 ```
-///
-/// Address info:
-/// - use broker's fixed address
-///
-/// Port # info:
-/// - 8000: same port as Listen's #1
-/// - 8010: port for sending heartbeats to broker
-/// - 8020: port for client connection
-#[derive(Debug)]
-pub struct Publish {
-    /// connecting to version 4 address
-    pub print_v4: bool,
-    /// connection to version 6 address
-    pub print_v6: bool,
-    /// broker's local IP address
-    pub host: String,
-    /// same as Listen's bind_port, notify of new connection
-    pub port: i32,
-    /// name of interface
-    pub name: String,
-    /// filter IP addresses to 1 output when more than 1 available
-    pub starting_octets: Option<String>,
-    /// port for sending heartbeats to broker
-    pub bind_port: i32,
-    /// port for service/client connection
-    pub service_port: i32,
-    /// uniqueley identifies service
-    pub key: u64
-}
-
-/// Collect heartbeats/messages inside event loop
-///
-/// Match command line entries with variables in struct
-///
-/// ## Example 
-/// Run from command line:
-/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation collect       ```
-///
-#[derive(Debug)]
-pub struct Collect {
-    /// connecting to version 4 address
-    pub print_v4: bool,
-    /// connection to version 6 address
-    pub print_v6: bool,
-    /// claim's local ip address
-    pub host: String,
-    /// same as Listen's bind_port, notify of new connection
-    pub port: i32,
-    /// name of interface
-    pub name: String,
-    /// filter IP addresses to 1 output when more than 1 available
-    pub starting_octets: Option<String>,
-    /// uniqueley identifies service
-    pub key: u64
-}
-
-/// Send a message from the client to the service through broker
-///
-/// Match command line entries with variables in struct
-///
-/// ## Example 
-/// Run from command line:
-/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation send       ```
-///
-#[derive(Debug)]
-pub struct Send {
-    /// connecting to version 4 address
-    pub print_v4: bool,
-    /// connection to version 6 address
-    pub print_v6: bool,
-    /// broker's local IP address
-    pub host: String,
-    /// same as Listen's bind_port, notify of new connection
-    pub port: i32,
-    /// name of interface
-    pub name: String,
-    /// filter IP addresses to 1 output when more than 1 available
-    pub starting_octets: Option<String>,
-    /// contains user-defined message
-    pub msg: String,
-    /// uniqueley identifies service
-    pub key: u64
 }
 
 /// Define possible operations to run in main() based on command line entry
@@ -310,7 +153,7 @@ pub enum CLIOperation {
     /// collect outputs from claim and start service-client connection
     Collect(Collect),
     /// send message from client to service containing a message
-    Send(Send),
+    SendMSG(SendMSG),
 }
 
 /// Parse through command line arguments and send them to a CLIOperation
@@ -331,6 +174,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
         print_v4 = true;
         print_v6 = true;
     }
+    let tls = * args.get_one::<bool>("tls").unwrap();
 
     let operation = args.get_one::<String>("operation").unwrap();
 
@@ -364,13 +208,16 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let port = * args.get_one::<i32>("bind_port").unwrap();
             let name =   args.get_one::<String>("interface_name").unwrap();
             let starting_octets = args.get_one::<String>("ip_start");
+            let root_ca = args.get_one::<String>("root_ca");
             return CLIOperation::Listen(
                 Listen{
                     print_v4: print_v4,
                     print_v6:print_v6,
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
-                    bind_port: port
+                    bind_port: port,
+                    tls: tls,
+                    root_ca: root_ca.cloned()
                 }
             )
         }
@@ -386,6 +233,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let name = args.get_one::<String>("interface_name").unwrap();
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
+            let root_ca = args.get_one::<String>("root_ca");
+            let ping = * args.get_one::<bool>("ping").unwrap();
             return CLIOperation::Claim(
                 Claim{
                     print_v4: print_v4,
@@ -395,7 +244,10 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
-                    key: key
+                    key: key,
+                    tls: tls,
+                    root_ca: root_ca.cloned(),
+                    ping: ping
                 }
             )
         }
@@ -413,6 +265,8 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
             let service_port    = * args.get_one::<i32>("service_port").unwrap();
+            let root_ca = args.get_one::<String>("root_ca");
+            let ping = * args.get_one::<bool>("ping").unwrap();
             return CLIOperation::Publish(
                 Publish {
                     print_v4: print_v4,
@@ -423,7 +277,10 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
                     service_port: service_port,
-                    key: key
+                    key: key,
+                    tls: tls,
+                    root_ca: root_ca.cloned(),
+                    ping: ping
                 }
             )
         }
@@ -436,6 +293,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let name = args.get_one::<String>("interface_name").unwrap();
             let starting_octets =   args.get_one::<String>("ip_start");
             let key  = * args.get_one::<u64>("key").unwrap();
+            let root_ca = args.get_one::<String>("root_ca");
             return CLIOperation::Collect(
                 Collect{
                     print_v4: print_v4,
@@ -444,7 +302,9 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     port: port,
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
-                    key: key
+                    key: key,
+                    tls: tls,
+                    root_ca: root_ca.cloned()
                 }
             )
         }
@@ -459,8 +319,9 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             let name = args.get_one::<String>("interface_name").unwrap();
             let starting_octets =   args.get_one::<String>("ip_start");
             let msg = args.get_one::<String>("msg").unwrap();
-            return CLIOperation::Send(
-                Send {
+            let root_ca = args.get_one::<String>("root_ca");
+            return CLIOperation::SendMSG(
+                SendMSG {
                     print_v4: print_v4,
                     print_v6: print_v6,
                     host: host.to_string(),
@@ -468,7 +329,9 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     name: name.to_string(),
                     starting_octets: starting_octets.cloned(),
                     msg: msg.to_string(),
-                    key: key
+                    key: key,
+                    tls: tls,
+                    root_ca: root_ca.cloned()
                 }
             )
         }

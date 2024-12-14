@@ -23,7 +23,7 @@ pub struct LocalIpAddresses {
 
 /// Search interface for an available IP Address - both versions 4 and 6 
 ///  - Returns LocalIpAddresses struct
-pub fn get_local_ips() -> LocalIpAddresses {
+pub async fn get_local_ips() -> LocalIpAddresses {
     trace!("Searching for network interfaces and IP addresses");
 
     let mut ipv4_addrs = Vec::new();
@@ -64,7 +64,7 @@ pub fn get_local_ips() -> LocalIpAddresses {
 }
 
 /// Used with ip-start in Listen, if several IP addresses of same version available 
-pub fn ipstr_starts_with(
+pub async fn ipstr_starts_with(
     ip: & IpAddr, starting_octets: & Option<String>
 ) -> bool {
     match starting_octets {
@@ -75,7 +75,7 @@ pub fn ipstr_starts_with(
 
 /// Returns IP addresses on an interface
 ///  - Listen - uses starting_octets to return a unique address
-pub fn get_matching_ipstr(
+pub async fn get_matching_ipstr(
     ips: & Vec<LocalInterface>,
     interface_name: & str, starting_octets: & Option<String>
 ) -> Vec<String> {
@@ -95,7 +95,7 @@ pub fn get_matching_ipstr(
 
     for ip in ips {
         if ip.name == target_name || ip.name == None {
-            if ! ipstr_starts_with(& ip.ip, starting_octets){continue;}
+            if ! ipstr_starts_with(& ip.ip, starting_octets).await{continue;}
             trace!("Address {:?} is a positive match", ip.ip);
             ipstr.push(ip.ip.to_string())
         }

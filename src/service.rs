@@ -1,28 +1,32 @@
 /// Track clients and services and handle events (heartbeats)
 
-use std::net::{TcpStream, TcpListener};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use std::sync::{Arc, Mutex, Condvar};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
-use std::thread;
-use threadpool::ThreadPool;
+use std::sync::Arc;
+use tokio::sync::Notify;
+use tokio::time::{sleep, Instant, timeout, Duration};
 use std::collections::VecDeque;
-use std::io::{self};
-use std::any::Any;
-use std::fmt;
+use std::io::Error as IoError;
 use lazy_static::lazy_static;
+use hyper::body::{Buf, Bytes, Incoming};
+use hyper::http::{Method, Request, Response, StatusCode};
+use http_body_util::{BodyExt, Full};
+use hyper_util::rt::TokioExecutor;
+use hyper_util::client::legacy::Client;
+use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
+use hyper_util::client::legacy::connect::HttpConnector;
+use tokio::sync::Mutex;
+use tokio::net::TcpStream;
+use rustls::ClientConfig;
+
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
 use crate::utils::{only_or_error, epoch};
-use crate::connection::{
-    MessageHeader, Message, Addr, connect, send, receive, stream_read, stream_write, 
-    serialize_message, deserialize_message,
-};
-
+use crate::connection::{MessageHeader, Message, Addr, ComType, connect, send, receive,
+     serialize_message, deserialize_message, collect_request, stream_write, stream_read};
+use crate::tls::{setup_https_client};
 /// Store client or service metadata
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Payload {
@@ -32,7 +36,6 @@ pub struct Payload {
     pub service_port: i32,
     /// epoch time of when service was claimed
     pub service_claim: u64,
-    /// 
     pub interface_addr: Vec<String>,
     /// used for sending/receiving heartbeats
     pub bind_port: i32,
@@ -42,6 +45,10 @@ pub struct Payload {
     pub id: u64,
     /// identifies unique service, clients assume id from connected service
     pub service_id: u64,
+    /// path to root store
+    pub root_ca: Option<String>,
+    /// one or two sided heartbeat
+    pub ping: bool,
 }
 
 /// Store message contents to send to connected service
@@ -79,7 +86,7 @@ impl FailCounter{
             fail_count: 0,
             first_increment: Instant::now(),
             last_increment: Instant::now(),
-            interval: Duration::from_secs(10),
+            interval: Duration::from_secs(5),
         }
     }
 
@@ -90,24 +97,6 @@ impl FailCounter{
             self.fail_count += 1;
             self.last_increment = now;
         }
-    }
-}
-
-/// Parent trait of objects added to event queue/loop
-/// Intended to encapsulated different types of Events
-pub trait Event: Any + Send + Sync{
-    /// call from event_monitor for specific Event type
-    fn monitor(&mut self) -> std::io::Result<()>;
-    /// allows Event object to be downcasted
-    fn as_any(&mut self) -> &mut dyn Any;
-    /// print event info to debug
-    fn describe(&self) -> String;
-}
-
-/// Allows for printing out event queue of event objects 
-impl fmt::Debug for dyn Event {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Event: {}", self.describe())
     }
 }
 
@@ -123,139 +112,197 @@ pub struct Heartbeat {
     /// address of service/client
     pub addr: String,
     /// stream used to send heartbeats to client
-    pub stream: Arc<Mutex<TcpStream>>,
+    pub stream: Option<Arc<Mutex<TcpStream>>>,
+    /// client object for sending heartbeat requests
+    pub client: Option<Client<HttpsConnector<HttpConnector>, Full<Bytes>>>,
+    /// boolean representing tls activity
+    pub tls: bool,
     /// incremented when heartbeat is not received when expected, connection is dead at 10
     pub fail_counter: FailCounter,
-    /// message sent from client
+    /// message sent from client, can access using collect()
     pub msg_body: MsgBody,
+    /// one- or two-sided heartbeat
+    pub ping: bool,
 }
 
-/// Heartbeats are treated as an Event to handle other types of events in the same queue
-impl Event for Heartbeat {
-
-    /// downcast an Event as a Heartbeat
-    fn as_any(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    /// print ID and fail_count to debug
-    fn describe(&self) -> String {
-        format!("Heartbeat id: {}, failcount: {}, msg: {}", self.id, self.fail_counter.fail_count, self.msg_body.msg)
-    }
-
+impl Heartbeat {
     /// send a heartbeat to the service/client and check if entity sent one back,
     /// increment fail_count if heartbeat not received when expected
-    fn monitor(&mut self) -> std::io::Result<()>{
-        let mut loc_stream = match self.stream.lock() {
-            Ok(guard) => guard,
-            Err(_err) => {
-                self.fail_counter.increment();
-                return Err(io::Error::new(io::ErrorKind::Other, "Mutex lock poisoned"));
-            }
-        };
+    async fn monitor(&mut self) -> Result<Response<Full<Bytes>>, std::io::Error>{
+
+        let mut response = Response::new(Full::default());
+        *response.status_mut() = StatusCode::OK;
+
+        // check ping status
+        if self.ping == false{
+            // trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
+    
+            let message = serialize_message(& Message{
+                header: MessageHeader::HB,
+                body: serde_json::to_string(& self.msg_body.clone()).unwrap()
+            });
+
+            // enter tcp or api mode
+            let received = match (&self.stream, &self.client){
+                (Some(s), None) => {
+                    let mut loc_stream = s.lock().await;
+                    
+                    // send heartbeat
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: MessageHeader::HB,
+                        body: serde_json::to_string(& self.msg_body.clone()).unwrap()
+                    })).await;
+                
+                    // allots time for reading from stream
+                    let received = match stream_read(&mut loc_stream).await {
+                        Ok(message) => message,
+                        Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
+                            self.fail_counter.increment();
+                            trace!("ConnectionReset error");
+                            *response.status_mut() = StatusCode::BAD_REQUEST;
+                            return Ok(response); 
+                        }
+                        Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
+                            self.fail_counter.increment();
+                            trace!("ConnectionAborted error");
+                            *response.status_mut() = StatusCode::BAD_REQUEST;
+                            return Ok(response); 
+                        }
+                        Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                            self.fail_counter.increment();
+                            trace!("TimeOut error");
+                            *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
+                            return Ok(response); 
+                        }
+                        Err(err) => {
+                            // open connection, read timed out
+                            if self.fail_counter.fail_count == 0 {
+                                self.fail_counter.first_increment = Instant::now();
+                            }
+                            self.fail_counter.increment();
+                            trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
+                            *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
+                            return Ok(response); 
+                        }
+                    };
+                    received
+                },
+                (None, Some(c)) => {
+                    // send heartbeat request with/without tls
+                    let req = match self.tls{
+                        true => Request::builder()
+                        .method(Method::GET)
+                        .uri(format!("https://{}/heartbeat_handler", self.addr))
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from(message)))
+                        .unwrap(),
+                        false => Request::builder()
+                        .method(Method::GET)
+                        .uri(format!("http://{}/heartbeat_handler", self.addr))
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from(message)))
+                        .unwrap(),
+                    };
+                    
+                    // allots time for reading response
+                    let timeout_duration = Duration::from_secs(3);
+                    let received = match timeout(timeout_duration, c.request(req)).await {
+                        Ok(Ok(mut resp)) => {
+                            trace!("Received response: {:?}", resp);
+                            let msg = collect_request(resp.body_mut()).await.unwrap();
+                            serialize_message(&msg)
+                        }
+                        Ok(Err(_e)) => {
+                            if self.fail_counter.fail_count == 0 {
+                                self.fail_counter.first_increment = Instant::now();
+                            }
+                            self.fail_counter.increment();
+                            warn!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
+                            *response.status_mut() = StatusCode::BAD_REQUEST;
+                            return Ok(response);            
+                        }
+                        Err(_) => {
+                            *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
+                            return Ok(response); 
+                        }
+                    };
+                    received
+                },
+                _ => panic!("Unexpected state: no stream or client.")
+            };
         
-        trace!("Sending heartbeat containing msg: {}", self.msg_body.msg);
-        let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-            header: MessageHeader::HB,
-            body: serde_json::to_string(& self.msg_body.clone()).unwrap()
-        }));
-    
-        let failure_duration = Duration::from_secs(6); //change to any failure limit
-        // allots time for reading from stream
-        match loc_stream.set_read_timeout(Some(failure_duration)) {
-            Ok(_x) => trace!("set_read_timeout OK"),
-            Err(e) => match e.kind() {
-                io::ErrorKind::InvalidInput => warn!("Invalid input for read timeout: {}", e),
-                io::ErrorKind::NotConnected => warn!("Stream is not connected: {}", e),
-                io::ErrorKind::AddrNotAvailable => warn!("Address not available: {}", e),
-                io::ErrorKind::WouldBlock => warn!("Operation would block: {}", e),
-                io::ErrorKind::PermissionDenied => warn!("Permission denied: {}", e),
-                _ => warn!("An unexpected error occurred: {}", e),
-            }
-        }
-    
-        let received = match stream_read(&mut loc_stream) {
-            Ok(message) => message,
-            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
-                self.fail_counter.increment();
-                trace!("ConnectionReset error");
-                return Err(std::io::Error::new(err.kind(), err.to_string()));
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
-                self.fail_counter.increment();
-                trace!("ConnectionAborted error");
-                return Err(std::io::Error::new(err.kind(), err.to_string()));
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
-                self.fail_counter.increment();
-                trace!("TimeOut error");
-                return Err(std::io::Error::new(err.kind(), err.to_string()));
-            }
-            Err(err) => {
-                // open connection, read timed out
+            // check for valid response
+            if received == "" {
+                // broken connection, increment fail count
                 if self.fail_counter.fail_count == 0 {
                     self.fail_counter.first_increment = Instant::now();
                 }
                 self.fail_counter.increment();
-                trace!("Timed out reading from stream. {:?}", self.fail_counter.fail_count);
-                return Err(err);
+                trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
+                *response.status_mut() = StatusCode::BAD_REQUEST
+            } else { 
+                // connection is alive, reset fail count   
+                trace!("Received: {:?}", received);
+                self.fail_counter.fail_count = 0;
+                trace!("Resetting failcount. {}", self.fail_counter.fail_count);
+                *response.status_mut() = StatusCode::OK
             }
-        };
-    
-        if received == "" {
-            // broken connection
-            if self.fail_counter.fail_count == 0 {
-                self.fail_counter.first_increment = Instant::now();
-            }
-            self.fail_counter.increment();
-            trace!("Failed to receive HB. {:?}", self.fail_counter.fail_count);
-        } else {    
-            trace!("Received: {:?}", received);
-            self.fail_counter.fail_count = 0;
-            trace!("Resetting failcount. {}", self.fail_counter.fail_count);
         }
-
-        Ok(())
+        else {
+            // check timing of last heartbeat ping
+            if Instant::now() - self.fail_counter.last_increment > Duration::from_secs(60) {
+                *response.status_mut() = StatusCode::GONE;
+            }            
+            else {
+                *response.status_mut() = StatusCode::ACCEPTED
+            }
+        }
+        Ok(response)
     }
 }
 
 /// Function loops through State's deque (event queue) to handle events using multithreading 
-pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>{
+pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Response<Full<Bytes>>, std::io::Error>{
 
     trace!("Starting event monitor");
-    let (lock, cvar) = &*state;
+    let (lock, notify) = &*state;
 
     let deque_clone = {
-        let state_loc = lock.lock().unwrap();
+        let state_loc = lock.lock().await;
         Arc::clone(& state_loc.deque)
     };
 
-    let data = Arc::new(Mutex::new((0, 0, 0, 0))); // (fail_count, key, id, service_id)
+    let data = Arc::new(Mutex::new((0, 0, 0, 0, 0))); // (fail_count, key, id, service_id, fail_id)
     let mut service_id: i64 = -1;
-    let mut failed_client = 0;
 
     // loop runs while events are in the queue
     loop {
         {
-            let mut state_loc = lock.lock().unwrap();
+            let mut state_loc = lock.lock().await;
             // loop is paused while there are no events to handle
             while !state_loc.running {
-                trace!("waiting to run");
-                let (new_state_loc, result) = cvar.wait_timeout(state_loc, Duration::from_secs(1)).unwrap();
-                state_loc = new_state_loc;
-                if result.timed_out() {
-                    // Set running to true and notify
-                    state_loc.running = true;
-                    cvar.notify_one();
+                // trace!("waiting to run");
+                let notify_result = timeout(Duration::from_millis(200), notify.notified()).await;
+                match notify_result {
+                    Ok(()) => {
+                        // trace!("Processing next events");
+                    }
+                    Err(_) => {
+                        // Timeout occurred, modify the state
+                        // trace!("Timeout occurred, modifying running state...");
+                        state_loc.running = true;
+                        notify.notify_one();
+                    }
                 }
             }
         }
 
-        let mut shared_data = data.lock().unwrap();
+        let mut shared_data = data.lock().await;
         // if connection is dead, remove it
-        if shared_data.0 == 10{
-            let mut state_loc = lock.lock().unwrap();
-            match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3){
+        // check if the fail_count has reached 10 or if a ping has failed
+        if shared_data.0 == 10 || shared_data.4 != 0{
+            let mut state_loc = lock.lock().await;
+            match state_loc.rmv(shared_data.1, shared_data.2, shared_data.3).await{
                 Ok(m) => {
                     match m.header {
                         MessageHeader::PUB => {
@@ -268,90 +315,132 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
                     }
                 },
                 Err(_e) => {
-                    return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,"Unable to remove item from Vec"));
+                    warn!("Failed to remove item from vec");
                 }
             }
+            // reset fail_count and fail_id trackers
             shared_data.0 = 0;
+            shared_data.4 = 0;
+        }
+        {
+            // reset a published service's service_claim once its client has been removed
+            let mut state_loc = lock.lock().await;
+            if let Some(vec) = state_loc.clients.get_mut(&shared_data.1) {
+                if let Some(pos) = vec.iter().position(|item| item.service_id == shared_data.4 as u64
+                && item.service_id == item.id) {
+                    if let Some(publish) = vec.get_mut(pos) {
+                        trace!("Client disconnected. Changing service_claim");
+                        publish.service_claim = 0;
+                    }
+                }
+            }
         }
 
         // pop event from queue 
         let event = {
-            let mut loc_deque = deque_clone.lock().unwrap();
+            let mut loc_deque = deque_clone.lock().await;
             loc_deque.pop_front()
         };
 
-        let mut event = match event {
+        let mut hb = match event {
             Some(tracker) => tracker,
             None => {
                 // pause loop to wait for new events
-                let mut state_loc = lock.lock().unwrap();
+                let mut state_loc = lock.lock().await;
                 state_loc.running = false;
-                cvar.notify_one();
+                notify.notify_one();
                 continue;
             }
         };
 
         let deque_clone2 = Arc::clone(& deque_clone);
         let data_clone = Arc::clone(&data);
-        let mut state_loc = lock.lock().unwrap();
+        let mut state_loc = lock.lock().await;
         let mut state_clone = state_loc.clone();
         state_loc.running = true;
-        cvar.notify_one();
+        notify.notify_one();
 
         // use a worker from threadpool to handle events with multithreading
-        state_loc.pool.execute(move || {
+        tokio::spawn(async move {
 
-            trace!("Passing event to event monitor...");
-            let _ = event.monitor();
-
-            // check heartbeat metadata to see if entity should be added back to event queue 
-            // or if client should be claim a new service
-            if let Some(hb) = event.as_any().downcast_mut::<Heartbeat>() {
-                let mut data = data_clone.lock().unwrap();
-                *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id);
-                if data.0 < 10 {
-                    trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
-                    if hb.service_id == (service_id as u64){
-                        trace!("Connecting to new service");
-                        match state_clone.claim(hb.key){
-                            Ok(p) => {
-                                trace!("Claimed new service w/ payload: {:?}", p);
-                                // create new Heartbeat object with new service_id
-                                event = Box::new(Heartbeat {
-                                    key: hb.key,
-                                    id: hb.id,
-                                    service_id: hb.service_id,
-                                    addr: hb.addr.clone(),
-                                    stream: Arc::clone(&hb.stream),
-                                    fail_counter: FailCounter::new(),
-                                    msg_body: hb.msg_body.clone(),
-                                });
-                                {
-                                    // add updated client back to queue 
-                                    let mut loc_deque = deque_clone2.lock().unwrap();
-                                    let _ = loc_deque.push_back(event);
-                                }
-                            }
-                            Err(_err) => {
-                                // no more available services to claim
-                                trace!("Could not connect to new service");
-                                data.0 = 10;
-                            }
+            // send/receive heartbeat for popped item
+            let response = hb.monitor().await;
+            // check status of heartbeat
+            let fail_id: i64 = if hb.id != hb.service_id {
+                match response {
+                    Ok(mut resp) => {
+                        let status = resp.status();
+                        if status == StatusCode::ACCEPTED {
+                            trace!("ping is alive");
+                            0
+                        }
+                        else if status != StatusCode::OK {
+                            trace!("monitor status not ok");
+                            hb.service_id as i64
+                        }
+                        else {
+                            trace!("monitor status is ok");
+                            0
                         }
                     }
-                    else{
-                        // add event back to queue 
-                        let mut loc_deque = deque_clone2.lock().unwrap();
-                        let _ = loc_deque.push_back(event);
-                        trace!("{:?}", loc_deque);
+                    Err(e) => {
+                        trace!("Error occurred in monitor: {}", e);
+                        hb.service_id as i64
                     }
-                } else {
-                    // service or client no longer connected to broker
-                    info!("Dropping event");
                 }
             }
+            else{
+                0
+            };
+            // check heartbeat metadata to see if entity should be added back to event queue 
+            // or if client should claim a new service
+            let mut data = data_clone.lock().await;
+            *data = (hb.fail_counter.fail_count, hb.key, hb.id, hb.service_id, fail_id as i64);
+            if data.0 < 10 && data.4 == 0 {
+                trace!("Adding back to VecDeque: id: {:?}, fail_count: {:?}", data.2, data.0);
+                if hb.service_id == (service_id as u64){
+                    trace!("Connecting to new service");
+                    match state_clone.claim(hb.key).await{
+                        Ok(p) => {
+                            trace!("Claimed new published service w/ payload: {:?}", p);
+                            // create new Heartbeat object with new service_id
+                            hb = Heartbeat {
+                                key: hb.key,
+                                id: hb.id,
+                                service_id: hb.service_id,
+                                addr: hb.addr.clone(),
+                                stream: hb.stream.clone(),
+                                client: hb.client.clone(),
+                                tls: hb.tls.clone(),
+                                fail_counter: FailCounter::new(),
+                                msg_body: hb.msg_body.clone(),
+                                ping: hb.ping.clone(),
+                            };
+                            {
+                                // add updated client back to queue 
+                                let mut loc_deque = deque_clone2.lock().await;
+                                let _ = loc_deque.push_back(hb);
+                            }
+                        }
+                        Err(_err) => {
+                            // no more available services to claim
+                            trace!("Could not connect to new service");
+                            data.0 = 10;
+                        }
+                    }
+                }
+                else{
+                    // add event back to queue 
+                    let mut loc_deque = deque_clone2.lock().await;
+                    let _ = loc_deque.push_back(hb);
+                    trace!("Deque status {:?}", loc_deque);
+                }
+            } else {
+                // service or client no longer connected to broker
+                info!("Dropping event");
+            }
         });
+        sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -360,26 +449,21 @@ pub fn event_monitor(state: Arc<(Mutex<State>, Condvar)>) -> std::io::Result<()>
 pub struct State {
     /// hashmap - key: key, value: clients/services payloads
     pub clients: HashMap<u64, Vec<Payload>>,
-    pub claims: HashMap<u64, Vec<Payload>>,
-    /// pool of threads to handle events in event queue
-    pub pool: ThreadPool,
     pub timeout: u64, 
     /// increments for each new connection to broker, used for id in payload
     pub seq: u64,
     /// event queue
-    pub deque: Arc<Mutex<VecDeque<Box<dyn Event>>>>,
+    pub deque: Arc<Mutex<VecDeque<Heartbeat>>>,
     /// true when event queue contains events to handle, false when event queue is empty
-    running: bool,
+    pub running: bool,
 }
 
 
 impl State {
-    /// inititates State struct with empty and default variables
-    pub fn new() -> State {
+    /// inititate State struct with empty and default variables
+    pub fn new(tls: Option<ClientConfig>) -> State {
         State{
             clients: HashMap::new(),
-            claims: HashMap::new(),
-            pool: ThreadPool::new(30),
             timeout: 60,
             seq: 1,
             deque: Arc::new(Mutex::new(VecDeque::new())),
@@ -388,61 +472,82 @@ impl State {
     }
 
     /// adds new services/clients to State struct and creates Event object to add to event loop 
-    pub fn add(&mut self, mut p: Payload, service_id: u64) -> std::io::Result<Heartbeat>{
-
+    pub async fn add(&mut self, mut p: Payload, service_id: u64, com: ComType) -> Result<Heartbeat, std::io::Error>{
         let ipstr = only_or_error(& p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
 
-        trace!("Listener connecting to: {}", bind_address);
-        let mut bind_fail = 0;
-        // broker connects to service/client bind_port for heartbeats
-        // loop solves connection race case 
-        let hb_stream = loop {
-            match TcpStream::connect(bind_address.clone()) {
-                Ok(stream) => break stream,
-                Err(err) => {
-                    bind_fail += 1;
-                    if bind_fail > 5{
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput, "Service failed to connect to bind port"));
+        let (stream, client) = match com {
+            ComType::TCP => {
+                let mut bind_fail = 0;
+                // broker connects to service/client bind_port for heartbeats
+                // loop solves connection race case 
+                let hb_stream = loop {
+                    match TcpStream::connect(bind_address.clone()).await {
+                        Ok(stream) => break stream,
+                        Err(err) => {
+                            bind_fail += 1;
+                            if bind_fail > 5{
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput, "Service failed to connect to bind port"));
+                            }
+                            trace!("{}",format!("Retrying connection: {}", err));
+                            let _ = sleep(Duration::from_millis(1000));
+                            continue;
+                        }
                     }
-                    trace!("{}",format!("Retrying connection: {}", err));
-                    sleep(Duration::from_millis(1000));
-                    continue;
-                }
+                };
+                let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
+                (Some(shared_hb_stream), None)
+            },
+            ComType::API => {
+                // connect to broker
+                // Prepare the HTTPS connector
+                let client = setup_https_client(p.root_ca.clone()).await;
+                (None, Some(client))
             }
         };
-        let shared_hb_stream = Arc::new(Mutex::new(hb_stream));
-        
+
+        let tls = match p.root_ca{
+            Some(ref _t) => true,
+            None => false
+        };
+
+        // check if item already exists in the queue when trying to reconnect from poor connection
         if let Some(vec) = self.clients.get_mut(&p.key) {
             // find value in clients with matching id
-            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr 
-                && item.service_port == p.service_port) {
+            if let Some(pos) = vec.iter().position(|item| item.service_addr == p.service_addr
+                 && item.service_port == p.service_port) {
                 let item = &vec[pos];
                 let mut counter = 0;
                 while counter < 10 {
                     {
-                        let mut deque = self.deque.lock().unwrap();
-                        if let Some(hb) = deque.iter_mut().find_map(|e| {
-                            e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.id == item.id) }) {
-                                if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
-                                    hb.addr = bind_address.clone();
-                                    hb.stream = shared_hb_stream.clone();
-                                    trace!("Altering hb {:?}", hb);
-                                    p.id = item.id;
-                                    p.service_id = item.service_id;
-                                    let immutable_hb: &Heartbeat = hb;
-                                    return Ok(immutable_hb.clone());
-                                }
-                                else {
-                                    continue;
-                                }
-                        }
-                        else{
-                            counter += 1;
+                        let mut deque_loc = self.deque.lock().await;
+                        trace!("searching for item {:?}", deque_loc);
+                        if let Some(hb) = deque_loc.iter_mut().find_map(|e| {
+                            if e.id == item.id {
+                                trace!("found id");
+                                Some(e)
+                            } else {
+                                trace!("id not found");
+                                counter+=1;
+                                None
+                            }
+                        }) {
+                            // alter heartbeat with new metadata
+                            if Instant::now().duration_since(hb.fail_counter.first_increment) < Duration::from_secs(60){
+                                hb.addr = bind_address.clone();
+                                hb.stream = stream;
+                                hb.client = client;
+                                hb.tls = tls;
+                                hb.ping = item.ping;
+                                trace!("Altering hb {:?}", hb);
+                                p.id = item.id;
+                                p.service_id = item.service_id;
+                                let immutable_hb: &Heartbeat = hb;
+                                return Ok(immutable_hb.clone());
+                            }
                         }
                     }
-                    sleep(Duration::from_millis(1000));
                 }
                 if counter == 10 {
                     warn!("Could not find matching service");
@@ -456,20 +561,24 @@ impl State {
         if service_id != 0{
             temp_id = service_id;
         }
+        // create new heartbeat with metadata from payload
         let heartbeat = Heartbeat {
             key: p.key,
             id: self.seq,
             service_id: temp_id,
             addr: bind_address.clone(),
-            stream: shared_hb_stream,
+            stream,
+            client,
+            tls,
             fail_counter: FailCounter::new(),
             msg_body: MsgBody::default(),
+            ping: p.ping
         };
         trace!("Adding new connection to queue");
         {
             // push Heartbeat event to event queue
-            let mut loc_deque = self.deque.lock().unwrap();
-            let _ = loc_deque.push_back(Box::new(heartbeat.clone()));
+            let mut loc_deque = self.deque.lock().await;
+            let _ = loc_deque.push_back(heartbeat.clone());
         }
 
         // check key with clients hashmap in State
@@ -483,7 +592,7 @@ impl State {
     }
 
     /// remove service/client from clients hashmap in State when Heartbeat fails
-    pub fn rmv(&mut self, k: u64, id: u64, service_id: u64) -> std::io::Result<Message>{
+    pub async fn rmv(&mut self, k: u64, id: u64, service_id: u64) -> Result<Message, IoError>{
         trace!("Current state: {:?}", self.clients);
 
         let mut removed_item = None;
@@ -523,6 +632,7 @@ impl State {
                 body: "".to_string()
             }); 
         }
+        // Convert the IoError to a HyperError
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Failed to remove item from state"));
     }
@@ -530,7 +640,7 @@ impl State {
     /// search clients hashmap for an available service with matching key,
     /// set service's service_claim equal to ecpoch time to match the new client
     #[allow(dead_code)]
-    pub fn claim(&mut self, k:u64) -> Result<&mut Payload, u64> {
+    pub async fn claim(&mut self, k:u64) -> Result<&mut Payload, u64> {
         match self.clients.get_mut(& k) {
 
             Some(value) => {
@@ -549,7 +659,7 @@ impl State {
     }
 
     /// print all entries in clients hashmap
-    pub fn print(&mut self) {
+    pub async fn print(&mut self) {
         for (key, values) in & self.clients {
             for v in values {
                 println!("{}: {:?}", key, v);
@@ -571,979 +681,749 @@ pub fn deserialize(payload: & String) -> Payload {
 
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
-pub fn request_handler(
-    state: &Arc<(Mutex<State>, Condvar)>, stream: & Arc<Mutex<TcpStream>>
-) -> std::io::Result<()> {
-    trace!("Starting request handler");
+pub async fn request_handler(
+    state: &Arc<(Mutex<State>, Notify)>, stream: Option<Arc<Mutex<TcpStream>>>, 
+    mut request: Option<Request<Incoming>>
+) -> Result<Response<Full<Bytes>>, std::io::Error> {
+    info!("Starting request handler");
 
     // receive Payload from incoming connection
-    let message = receive(stream)?;
+    let message = match (&stream, &mut request) {
+        (Some(s), None) => receive(&s).await.unwrap(),
+        (None, Some(r)) => collect_request(r.body_mut()).await.unwrap(), 
+        _ => panic!("Unexpected state: no stream or request.")
+    };
 
-    // check type of Message, only want to handle PUB or CLAIM Message
+
+    // // check type of Message, only want to handle PUB or CLAIM Message
     let payload = match message.header {
-        MessageHeader::HB => panic!("Unexpected HB message encountered!"),
+        MessageHeader::HB => Payload::default(),
         MessageHeader::ACK => panic!("Unexpected ACK message encountered!"),
         MessageHeader::PUB => deserialize(& message.body),
         MessageHeader::CLAIM => deserialize(& message.body),
         MessageHeader::COL => panic!("Unexpected COL message encountered!"),
         MessageHeader::MSG => Payload::default(),
-        MessageHeader::NULL => Payload::default(),
+        MessageHeader::NULL => panic!("Unexpected NULL message encountered!"),
     };
 
     trace!("Request handler received: {:?}", payload);
+    let mut response = Response::new(Full::default());
+
     // handle services (PUB), clients (CLAIM), messages (MSG) appropriately
     match message.header {
         MessageHeader::PUB => {
             trace!("Publishing Service: {:?}", payload);
-            let (lock, cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
 
-            let _ = state_loc.add(payload, 0); // add service to clients hashmap and event loop 
-            state_loc.running = true; // set running to true for event loop
-            cvar.notify_one(); // notify event loop of new Event
+            let (lock, notify) = &**state;
+            let mut state_loc = lock.lock().await;
 
-            println!("Now state:");
-            state_loc.print(); // print state of clients hashmap
+            match (stream, request) {
+                (Some(_s), None) => {
+                    let _ = state_loc.add(payload, 0, ComType::TCP).await; // add service to clients hashmap and event loop 
+                    state_loc.running = true; // set running to true for event loop
+                    notify.notify_one(); // notify event loop of new Event
+        
+                    println!("Now state:");
+                    state_loc.print().await; // print state of clients hashmap
+                },
+                (None, Some(_r)) => {
+                    // send acknowledgment of successful request
+                    let json = serialize_message( & Message {
+                        header: MessageHeader::ACK,
+                        body: "".to_string()
+                    });
+                    response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from(json))).unwrap();
+                    
+                    // add service to clients hashmap and event loop
+                    let _ = state_loc.add(payload, 0, ComType::API).await;
+                    state_loc.running = true; // set running to true for event loop
+                    notify.notify_one(); // notify event loop of new Event
+
+                    // print state of clients hashmap
+                    println!("Now state:");
+                    state_loc.print().await;
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
+            };
         },
         MessageHeader::CLAIM => {
             trace!("Claiming Service: {:?}", payload);
 
-            let (lock, _cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
-            let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+            let (lock, _notify) = &**state;
+
             let mut service_id = 0;
             let mut claim_fail = 0; // initiate counter for connection failure
+
             // loop solves race case when client starts faster than service can be published
             loop {
-                // 
-                match state_loc.claim(payload.key){
+                let mut state_loc = lock.lock().await;
+                match state_loc.claim(payload.key).await{
                     Ok(p) => {
+                        trace!("found key");
                         service_id = (*p).service_id; // capture claimed service's service_id for add()
                         // send acknowledgment of successful service claim with service's payload containing its address
-                        let _ = stream_write(loc_stream, & serialize_message(
-                            & Message {
-                                header: MessageHeader::ACK,
-                                body: serialize(p) // address extracted in main to print to client
-                            }
-                        ));
+                        let json = serialize_message( & Message {
+                            header: MessageHeader::ACK,
+                            body: serialize(p) // address extracted in main to print to client
+                        });
+                        match (stream, request) {
+                            (Some(s), None) => {
+                                let loc_stream: &mut TcpStream = &mut *s.lock().await;
+                                service_id = (*p).service_id; // capture claimed service's service_id for add()
+                                // send acknowledgment of successful service claim with service's payload containing its address
+                                let _ = stream_write(loc_stream, & json).await;
+                                let _ = state_loc.add(payload, service_id, ComType::TCP).await;
+                            },
+                            (None, Some(_r)) => {
+                                response = Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                                    .body(Full::new(Bytes::from(json))).unwrap();
+                                let _ = state_loc.add(payload, service_id, ComType::API).await;
+                            },
+                            _ => panic!("Unexpected state: no stream or request.")
+                        }
                         break;
                     },
-                    _ => {
+                    Err(e) => {
+                        trace!("looking for key, not found: {:?}", e);
                         claim_fail += 1;
                         if claim_fail <= 5{
-                            sleep(Duration::from_millis(1000));
+                            sleep(Duration::from_millis(300)).await;
                             continue;
                         }
-                        // notify main() of failure to claim an available service
-                        let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        let json = serialize_message( & Message {
                             header: MessageHeader::NULL,
                             body: "".to_string()
-                        }));
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput, "Failed to claim key"));
+                        });
+                        // notify main() of failure to claim an available service
+                        
+                        match (stream, request) {
+                            (Some(s), None) => {
+                                let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                                    header: MessageHeader::NULL,
+                                    body: "".to_string()
+                                }));
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput, "Failed to claim key"
+                                ).into());
+                            },
+                            (None, Some(_r)) => {
+                                response = Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .header(hyper::header::CONTENT_TYPE, "application/json")
+                                .body(Full::new(Bytes::from(json))).unwrap();
+                            },
+                            _ => panic!("Unexpected state: no stream or request.")
+                        }
+                        return Ok(response);
                     },
                 }
             }
-            let _ = state_loc.add(payload, service_id); // add client to clients hashmap and event loop
-
+            
             println!("Now state:");
-            state_loc.print(); // print state of clients hashmap
+            let mut state_loc = lock.lock().await;
+            state_loc.print().await; // print state of clients hashmap
         },
         MessageHeader::MSG => {
             let msg_body: MsgBody = serde_json::from_str(& message.body).unwrap();
             trace!("Sending Message: {:?}", msg_body);
 
-            let (lock, _cvar) = &**state;
-            let mut state_loc = lock.lock().unwrap();
+            let (lock, _notify) = &**state;
 
             let mut counter = 0;
-            while counter < 10 {
+            // retry and check queue for heartbeat with a matching id
+            // alter message in heartbeat with new message
+            while counter < 50 {
                 {
-                    let mut deque = state_loc.deque.lock().unwrap();
+                    let state_loc = lock.lock().await;
+                    let mut deque = state_loc.deque.lock().await;
+                    trace!("deque status {:?}", deque);
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
-                        e.as_any().downcast_mut::<Heartbeat>().filter(|hb| hb.service_id == msg_body.id) }) {
-                            hb.msg_body = msg_body.clone();
-                            trace!("Altering hb message {:?}", hb);
-                            break;
+                        if e.id == msg_body.id {
+                            trace!("found id");
+                            Some(e)
+                        } else {
+                            trace!("id not found");
+                            None
+                        }
+                    }) {
+                        hb.msg_body = msg_body.clone();
+                        trace!("Altering hb message {:?}", hb);
+                        let json = serialize_message( & Message {
+                            header: MessageHeader::MSG,
+                            body: message.body.clone()
+                        });
+                        match (stream, request) {
+                            (None, Some(_r)) => {
+                                response = Response::builder()
+                                .status(StatusCode::OK)
+                                .header(hyper::header::CONTENT_TYPE, "application/json")
+                                .body(Full::new(Bytes::from(json))).unwrap(); 
+                            },
+                            _ => {}
+                        }
+                        break;
                     }
                     else{
                         counter += 1;
                     }
                 }
-                sleep(Duration::from_millis(1000));
+                sleep(Duration::from_millis(300)).await;
             }
             if counter == 10 {
                 warn!("Could not find matching service");
             }
 
         }
-        MessageHeader::NULL => {
-            trace!("Doing nothing. Monitor attempting to replace stream");
+        MessageHeader::HB => {
+            let hb_body: MsgBody = serde_json::from_str(& message.body).unwrap();
+            trace!("Processing ping heartbeat: {:?}", hb_body);
+
+            let (lock, _notify) = &**state;
+
+            let mut counter = 0;
+            // retry and check queue for heartbeat with a matching id
+            // reset last heartbeat timer for ping heartbeats
+            while counter < 50 {
+                {
+
+                    let state_loc = lock.lock().await;
+                    let mut deque = state_loc.deque.lock().await;
+                    trace!("searching deque {:?}", deque);
+                    // only alter a client's heartbeat
+                    if let Some(hb) = deque.iter_mut().find_map(|e| {
+                        if e.service_id == hb_body.id && e.id != hb_body.id {
+                            trace!("found id");
+                            Some(e)
+                        } else {
+                            trace!("id not found");
+                            None
+                        }
+                    }) {
+                        // reset hearbeat timer 
+                        info!("altering last heartbeat: {:?}", hb);
+                        hb.fail_counter.last_increment = Instant::now();
+                        let json = serialize_message( & Message {
+                            header: MessageHeader::HB,
+                            body: message.body.clone()
+                        });
+                        match (stream, request) {
+                            (None, Some(_r)) => {
+                                response = Response::builder()
+                                .status(StatusCode::OK)
+                                .header(hyper::header::CONTENT_TYPE, "application/json")
+                                .body(Full::new(Bytes::from(json))).unwrap(); 
+                            },
+                            _ => {}
+                        }
+                        break;
+                    }
+                    else{
+                        counter += 1;
+                    }
+                }
+                sleep(Duration::from_millis(702)).await;
+            }
+            if counter == 10 {
+                warn!("Could not find matching service");
+            }
         }
         _ => {panic!("This should not be reached!");}
     }
-    Ok(())
+    Ok(response)
 }
 
-pub fn heartbeat_handler_helper(stream: & Arc<Mutex<TcpStream>>, payload: Option<&String>, 
-    addr: Option<&Addr>) -> std::io::Result<()> {
-    let stream_clone = Arc::clone(&stream);
+pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>, 
+    mut request: Option<Request<Incoming>>, payload: Option<&Arc<Mutex<String>>>, 
+    addr: Option<&Arc<Mutex<Addr>>>, tls: Option<ClientConfig>) -> Result<Response<Full<Bytes>>, std::io::Error> {
+    let mut response = Response::new(Full::default());
 
     // retrieve service's payload from client or set an empty message body
-    let binding = "".to_string();
+    let binding = Arc::new(Mutex::new("".to_string()));
     let payload = payload.unwrap_or(&binding);
-    let payload_clone = payload.clone();
+    let payload_clone = payload.lock().await.clone();
 
-    let empty_addr = Addr{
+    let empty_addr = Arc::new(Mutex::new(Addr{
         host: "".to_string(),
         port: 0
-    };
+    }));
     // client uses listener's address to send msg, service does not need addr
     let addr = addr.unwrap_or(&empty_addr);
-    let addr_clone = addr.clone();
+    let addr_clone = addr.lock().await.clone();
 
-    // start new thread to send/receive heartbeats/messages to/from listener
-    let _ = thread::spawn(move || {
-        let _ = heartbeat_handler(&stream_clone, &payload_clone, &addr_clone);
+    // send/receive heartbeats/messages to/from listener
+    // loop for tcp constantly checks for heartbeats in stream
+    // one handler call for each http request
+    
+    // enter tcp or api server
+    response = match (&stream, &mut request) {
+        (Some(_s), None) => {
+            let _ = tokio::spawn(async move {
+                // infinite heartbeat loop for tcp connection
+                loop {
+                    match heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone.clone(), None).await {
+                        Ok(_resp) => {
+                            trace!("Heartbeat received, time updated.");
+                        },
+                        Err(_e) => error!("Heartbeat handler returned an error")
+                    }
+                }
+            });
+            response
+        },
+        (None, Some(_r)) => {
+            // enter heartbeat handler once for every api request
+            response = match heartbeat_handler(&stream, &mut request, &payload_clone, addr_clone, tls).await {
+                Ok(resp) => {
+                    resp
+                },
+                Err(_e) => {
+                    Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Full::new(Bytes::from("Heartbeat handler error".to_string())))
+                        .unwrap()
+                }
+            };
+            response
+        }, 
+        _ => Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from("Heartbeat handler error".to_string())))
+                .unwrap()
+    };
+    // });
+    // response = hb_handler.await.unwrap();
+    return Ok(response);
+}
+
+/// heartbeat handler for one-sided heartbeats
+pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>, 
+    address: Option<&Arc<Mutex<Addr>>>, tls: Option<ClientConfig>)
+    -> Result<Response<Full<Bytes>>, std::io::Error> {
+    trace!("entering ping heartbeat");
+    sleep(Duration::from_millis(2000)).await;
+    let mut response = Response::new(Full::default());
+
+    // retrieve service's payload from client or set an empty message body
+    let binding = Arc::new(Mutex::new("".to_string()));
+    let payload_loc = payload.lock().await.clone();
+
+    let empty_addr = Arc::new(Mutex::new(Addr{
+        host: "".to_string(),
+        port: 0
+    }));
+    // client uses listener's address to send msg, service does not need addr
+    let addr = address.unwrap_or(&empty_addr);
+    let addr_loc = addr.lock().await.clone();
+
+    // use service id to identify client
+    let mut service_id = 0;
+    if *payload_loc != "".to_string() {
+        service_id = deserialize(&payload_loc).service_id;
+    }
+    let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
+
+    // setup http connection with/without tls
+    let https_connector = match tls.clone() {
+        Some(t) => {
+            HttpsConnectorBuilder::new()
+            .with_tls_config(t)
+            .https_or_http()
+            .enable_http1()
+            .build()
+        }
+        None => {
+            HttpsConnectorBuilder::new()
+            .with_native_roots().unwrap()
+            .https_or_http()
+            .enable_http1()
+            .build()
+        }
+    };
+    let client: Client<HttpsConnector<HttpConnector>, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(https_connector);
+
+    let msg_body = MsgBody{
+        msg: "".to_string(),
+        id: service_id
+    };
+
+    let msg = serialize_message( & Message{
+            header: MessageHeader::HB,
+            body: serde_json::to_string(& msg_body).unwrap()
     });
-    return Ok(());
+    tokio::spawn( async move {
+        // send heartbeats to broker as long as it is alive
+        loop {
+            let mut read_fail = 0;
+            loop {
+                sleep(Duration::from_millis(1000)).await;
+                trace!("sent message to listener on {:?}", addr_loc);
+        
+                let req = match tls.clone() {
+                    Some(_t) => {
+                        Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("https://{}:{}/request_handler", addr_loc.host, addr_loc.port))
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from(msg.clone())))
+                        .unwrap()
+                    }
+                    None => {
+                        Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("http://{}:{}/request_handler", addr_loc.host, addr_loc.port))
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(Full::new(Bytes::from(msg.clone())))
+                        .unwrap()
+                    }
+                };
+
+                let result = timeout(timeout_duration, client.request(req)).await;
+                
+                // check for valid response, quit process if broker is dead
+                match result {
+                    Ok(Ok(resp)) => {
+                        trace!("Received response: {:?}", resp);
+                        let body = resp.collect().await.unwrap().aggregate();
+                        let data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                        let json = serde_json::to_string(&data).unwrap();
+                        let m = deserialize_message(& json);
+                        match m.header {
+                            MessageHeader::HB => info!("Request acknowledged: {:?}", m),
+                            _ => warn!("Server responds with unexpected message: {:?}", m),
+                        }
+                        break;
+                    }
+                    Ok(Err(_e)) => {
+                        read_fail += 1;
+                        warn!("Failed to send request to listener");
+                        if read_fail > 10 {
+                            warn!("Shutting down pings");
+                            std::process::exit(0);
+                        }
+                    }
+                    Err(_e) => {
+                        read_fail += 1;
+                        warn!("Failed to send request to listener");
+                        if read_fail > 10 {
+                            warn!("Request timed out");
+                            std::process::exit(0);
+                        }
+                    }
+                }
+            }
+            let _ = sleep(Duration::from_millis(10000));
+        }
+    });
+    response = Response::builder()
+    .status(StatusCode::OK)
+    .header(hyper::header::CONTENT_TYPE, "application/json")
+    .body(Full::new(Bytes::from(serialize_message(& Message{
+        header: MessageHeader::ACK,
+        body: "".to_string()
+    })))).unwrap();
+    Ok(response)
 }
 
 /// Receive a heartbeat from broker and send one back to show life of connection.
 /// If a client, HB message contains payload of connected service to use in Collect()
-pub fn heartbeat_handler(stream: & Arc<Mutex<TcpStream>>, payload: &String, addr: &Addr)
-  -> std::io::Result<()> {
+pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>, 
+    request: &mut Option<Request<Incoming>>, payload: &String,
+     addr: Addr, tls: Option<ClientConfig>)
+    -> Result<Response<Full<Bytes>>, std::io::Error> {
     trace!("Starting heartbeat handler");
 
+    // enter tcp or api mode
+    // receive message from broker
+    let message = match (stream, &mut *request) {
+        (Some(s), None) => {
+            let loc_stream: &mut TcpStream = &mut *s.lock().await;
+            match stream_read(loc_stream).await {
+                Ok(message) => {
+                    trace!("{:?}", message);
+                    deserialize_message(& message)
+                },
+                Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
+                    trace!("ConnectionReset error");
+                    std::process::exit(0);
+                }
+                Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
+                    trace!("ConnectionAborted error");
+                    std::process::exit(0);
+                }
+                Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                    trace!("TimeOut error");
+                    std::process::exit(0);
+                }
+                Err(_err) => {
+                    trace!("Unknown error reading from stream");
+                    std::process::exit(0);
+                }
+            }
+        },
+        (None, Some(r)) => collect_request((&mut *r).body_mut()).await.unwrap(), 
+        _ => panic!("Unexpected state: no stream or request.")
+    };
     // set service_id to know which service to send msg to
     let mut service_id = 0;
     if *payload != "".to_string() {
         service_id = deserialize(payload).service_id;
     }
+    let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
 
-    loop{
-        let mut loc_stream: &mut TcpStream = &mut *stream.lock().unwrap();
+    // receive heartbeat/message
+    let mut response = Response::new(Full::default());
 
-        // allots time for reading from stream
-        match loc_stream.set_read_timeout(Some(Duration::from_secs(2))) {
-            Ok(_x) => trace!("set_read_timeout OK"),
-            Err(_e) => warn!("set_read_timeout Error")
-        }
+    // if a MSG: connect to listener to alter the msg value in the service's heartbeat
+    trace!("Heartbeat handler received {:?}", message);
 
-        // receive heartbeat/message
-        let request = match stream_read(loc_stream) {
-            Ok(message) => {
-                deserialize_message(& message)
+    // match message header
+    if matches!(message.header, MessageHeader::MSG){
+        // enter tcp or api mode
+        match (stream, &mut *request) {
+            (Some(_s), None) => {
+                // create new connection to broker
+                let listen_stream = match connect(& addr).await{
+                    Ok(s) => s,
+                    Err(_e) => {
+                        return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,"MSG connection unsuccessful."));
+                        }
+                };
+                let stream_mut = Arc::new(Mutex::new(listen_stream));
+                let msg_body = MsgBody{
+                    msg: message.body.clone(),
+                    id: service_id
+                };
+                // relay message from send_msg() to broker
+                let _ack = send(& stream_mut, & Message{
+                    header: MessageHeader::MSG,
+                    body: serde_json::to_string(& msg_body).unwrap()
+                }).await;
             },
-            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
-                trace!("ConnectionReset error");
-                std::process::exit(0);
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
-                trace!("ConnectionAborted error");
-                std::process::exit(0);
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
-                trace!("TimeOut error");
-                std::process::exit(0);
-            }
-            Err(err) => {
-                trace!("Unknown error reading from stream");
-                std::process::exit(0);
-            }
-        };
-
-        // if a MSG: connect to listener to alter the msg value in the service's heartbeat
-        if matches!(request.header, MessageHeader::MSG){
-            let listen_stream = match connect(& addr){
-                Ok(s) => s,
-                Err(_e) => {
-                    return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,"MSG connection unsuccessful."));
+            (None, Some(_r)) => {
+                // Prepare the HTTPS connector
+                trace!("initiating request to listener");
+                let https_connector = match tls.clone() {
+                    Some(t) => {
+                        HttpsConnectorBuilder::new()
+                        .with_tls_config(t)
+                        .https_or_http()
+                        .enable_http1()
+                        .build()
                     }
+                    None => {
+                        HttpsConnectorBuilder::new()
+                        .with_native_roots().unwrap()
+                        .https_or_http()
+                        .enable_http1()
+                        .build()
+                    }
+                };
+
+                let client: Client<HttpsConnector<HttpConnector>, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(https_connector);
+
+                let msg_body = MsgBody{
+                    msg: message.body.clone(),
+                    id: service_id
+                };
+            
+                let msg = serialize_message( & Message{
+                        header: MessageHeader::MSG,
+                        body: serde_json::to_string(& msg_body).unwrap()
+                });
+                let mut read_fail = 0;
+                loop {
+                    sleep(Duration::from_millis(1000)).await;
+                    trace!("sent message to listener on {:?}", addr);
+
+                    // relay message from send_msg() to broker with new request
+                    let req = match tls.clone() {
+                        Some(_t) => {
+                            Request::builder()
+                            .method(Method::POST)
+                            .uri(format!("https://{}:{}/request_handler", addr.host, addr.port))
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from(msg.clone())))
+                            .unwrap()
+                        }
+                        None => {
+                            Request::builder()
+                            .method(Method::POST)
+                            .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from(msg.clone())))
+                            .unwrap()
+                        }
+                    };
+
+                    let result = timeout(timeout_duration, client.request(req)).await;
+                
+                    // check for valid response
+                    match result {
+                        Ok(Ok(resp)) => {
+                            trace!("Received response: {:?}", resp);
+                            let body = resp.collect().await.unwrap().aggregate();
+                            let data: serde_json::Value = serde_json::from_reader(body.reader()).unwrap();
+                            let json = serde_json::to_string(&data).unwrap();
+                            let m = deserialize_message(& json);
+                            match m.header {
+                                MessageHeader::MSG => info!("Request acknowledged: {:?}", m),
+                                _ => warn!("Server responds with unexpected message: {:?}", m),
+                            }
+                            response = Response::builder()
+                            .status(StatusCode::OK)
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from(serialize_message(& Message{
+                                header: MessageHeader::ACK,
+                                body: "".to_string()
+                            })))).unwrap();
+                            break;
+                        }
+                        Ok(Err(_e)) => {
+                            read_fail += 1;
+                            if read_fail > 5 {
+                                panic!("Failed to send request to listener")
+                            }
+                        }
+                        Err(_e) => {
+                            read_fail += 1;
+                            if read_fail > 5 {
+                                panic!("Request timed out")
+                            }
+                        }
+                    };
+                }
+                response = Response::builder()
+                .status(StatusCode::OK)
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Full::new(Bytes::from(serialize_message(& Message{
+                    header: MessageHeader::ACK,
+                    body: message.body.clone()
+                })))).unwrap();
+            },
+            _ => panic!("Unexpected state: no stream or request.")
+        }
+    }
+    else if matches!(message.header, MessageHeader::COL) {
+        // payload is empty for services, retrieve and send msg waiting in global variable
+        if *payload == "".to_string(){
+            // send msg back
+            let msg = GLOBAL_MSGBODY.lock().await;
+            // enter tcp or api mode
+            let _ = match (&stream, &mut *request) {
+                (Some(s), None) => {
+                    // return message to collect()
+                    let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: message.header,
+                        body: serde_json::to_string(&* msg.msg).unwrap()
+                    })).await;  
+                },
+                (None, Some(_r)) => {
+                    // return message to collect()
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: MessageHeader::ACK,
+                        body: serde_json::to_string(&* msg.msg).unwrap()
+                    })))).unwrap()
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
             };
-            let stream_mut = Arc::new(Mutex::new(listen_stream));
-            let msg_body = MsgBody{
-                msg: request.body.clone(),
-                id: service_id
-            };
-            let ack = send(& stream_mut, & Message{
-                header: MessageHeader::MSG,
-                body: serde_json::to_string(& msg_body).unwrap()
-            });
-        }
-        trace!("Heartbeat handler received {:?}", request);
-        if matches!(request.header, MessageHeader::COL) {
-            // payload is empty for services, retrieve and send msg waiting in global variable
-            if *payload == "".to_string(){
-                // send msg back
-                let mut msg = GLOBAL_MSGBODY.lock().unwrap();
-                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: request.header,
-                    body: serde_json::to_string(&* msg.msg).unwrap()
-                }));
-            }
-            else {
-                // payload not empty for clients, send payload w/ address of the paired service
-                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: request.header,
-                    body: payload.clone()
-                }));
-            }
-            trace!("Heartbeat handler has returned request");
-            return Ok(())
-        }
-        else if matches!(request.header, MessageHeader::HB){
-            let msg_body: MsgBody = serde_json::from_str(& request.body.clone()).unwrap();
-            // default HB/MSG response to send what was received
-            if msg_body.msg.is_empty(){
-                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: request.header,
-                    body: payload.clone(),
-                }));
-            }
-            else{
-                // store msg received from listener into global msg variable
-                let mut msg = GLOBAL_MSGBODY.lock().unwrap();
-                *msg = serde_json::from_str(& request.body).unwrap();
-                let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                    header: request.header,
-                    body: request.body
-                }));
-            }   
-            trace!("Heartbeat handler has returned request");
-        }
-        else if matches!(request.header, MessageHeader::MSG){
-            let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
-                header: MessageHeader::ACK,
-                body: request.body.clone(),
-            }));
-            return Ok(())
         }
         else {
-            warn!(
-                "Unexpected request sent to heartbeat_handler: {}",
-                request.header
-            );
-            info!("Dropping request");
-        }
-
-        sleep(Duration::from_millis(2000)); // change to any time interval, must match time in monitor()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn init_logger() {
-        let _ = env_logger::builder().is_test(true).try_init();
-    }
-
-    /// check if function returns an error when a client claims an unused key
-    #[test]
-    fn test_claim_key_DNE() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
-        
-        // add published services to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let mut p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12020,
-                service_claim: 0,
-                interface_addr: Vec::new(),
-                bind_port: 12010,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
+            // payload not empty for clients, send payload w/ address of the paired service
+            let _ = match (&stream, &mut *request) {
+                (Some(s), None) => {
+                    // return published service payload to client
+                    let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: message.header,
+                        body: payload.clone()
+                    })).await;
+                },
+                (None, Some(_r)) => {
+                    // return published service payload to client
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: MessageHeader::ACK,
+                        body: payload.clone()
+                    })))).unwrap();
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
             };
-            let mut state_loc = lock.lock().unwrap();
-            let seq = state_loc.seq;
-            let cl: &mut Vec<Payload> = state_loc.clients.entry(p.key).or_insert(Vec::new());
-            p.id = seq;
-            p.service_id = seq;
-            cl.push(p);
-            state_loc.seq += 1;
         }
-        // claim published services with matching keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let mut state_loc = lock.lock().unwrap();
-            let _ = state_loc.claim(k.floor() as u64);
-        }
-        // try to claim a key that does not exist in State
-        let mut state_loc = lock.lock().unwrap();
-        let result = state_loc.claim(2000);
-        assert!(result.is_err());
+        trace!("Heartbeat handler has returned request");
     }
-
-    /// check if function returns an error when a client claims a used key with no more available services
-    #[test]
-    fn test_claim_filled_services() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
-        
-        // add published services to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let mut p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12020,
-                service_claim: 0,
-                interface_addr: Vec::new(),
-                bind_port: 12010,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
+    else if matches!(message.header, MessageHeader::HB){
+        let msg_body: MsgBody = serde_json::from_str(& message.body.clone()).unwrap();
+        // default HB/MSG response to send what was received
+        if msg_body.msg.is_empty(){
+            let _ = match (&stream, &mut *request) {
+                    // return acknowledgment heartbeat
+                    (Some(s), None) => {
+                    let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: message.header,
+                        body: payload.clone(),
+                    })).await;
+                },
+                (None, Some(_r)) => {
+                    // return acknowledgment heartbeat
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: message.header,
+                        body: payload.clone()
+                    })))).unwrap();
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
             };
-            let mut state_loc = lock.lock().unwrap();
-            let seq = state_loc.seq;
-            let cl: &mut Vec<Payload> = state_loc.clients.entry(p.key).or_insert(Vec::new());
-            p.id = seq;
-            p.service_id = seq;
-            cl.push(p);
-            state_loc.seq += 1;
         }
-        // claim published services with matching keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let mut state_loc = lock.lock().unwrap();
-            let _ = state_loc.claim(k.floor() as u64);
-        }
-        // try to claim existing key without available service
-        let mut state_loc = lock.lock().unwrap();
-        let result = state_loc.claim(1000);
-        assert!(result.is_err());
+        else{
+            // store msg received from listener into global msg variable
+            let mut msg = GLOBAL_MSGBODY.lock().await;
+            *msg = serde_json::from_str(& message.body).unwrap();
+            // send new message to broker
+            let _ = match (&stream, &mut *request) {
+                (Some(s), None) => {
+                    let mut loc_stream: &mut TcpStream = &mut *s.lock().await;
+                    let _ = stream_write(&mut loc_stream, & serialize_message(& Message{
+                        header: message.header,
+                        body: message.body
+                    })).await;
+                },
+                (None, Some(_r)) => {
+                    response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Full::new(Bytes::from(serialize_message(& Message{
+                        header: message.header,
+                        body: message.body
+                    })))).unwrap();
+                }, 
+                _ => panic!("Unexpected state: no stream or request.")
+            };
+        }   
+        trace!("Heartbeat handler has returned request");
     }
-
-    /// Test adding services and clients to State
-    #[test]
-    fn test_add() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
-
-        let _listener = TcpListener::bind("127.0.0.1:12010");
-        
-        // add published services to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12020,
-                service_claim: 0,
-                interface_addr: Vec::new(),
-                bind_port: 12010,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
-            };
-            let mut state_loc = lock.lock().unwrap();
-            let result = state_loc.add(p, 0);
-            assert!(result.is_ok());
-        }
-
-        sleep(Duration::from_millis(500));
-        let _listener = TcpListener::bind("127.0.0.1:12015");
-    
-        // add clients to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12000,
-                service_claim: epoch(),
-                interface_addr: Vec::new(),
-                bind_port: 12015,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
-            };
-            let mut state_loc = lock.lock().unwrap();
-            let mut service_id = 0;
-            match state_loc.claim(p.key){
-                Ok(pl) => service_id = (*pl).service_id,
-                _ => panic!("Error: Failed to claim key")
-            };
-            let result = state_loc.add(p, service_id);
-            assert!(result.is_ok());
-        }
-
+    else {
+        warn!(
+            "Unexpected request sent to heartbeat_handler: {}",
+            message.header
+        );
+        info!("Dropping request");
+        *response.status_mut() = StatusCode::BAD_REQUEST;
     }
-
-    /// test if rmv() properly removes clients
-    #[test]
-    fn test_rmv_client() {
-    
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
-
-        sleep(Duration::from_millis(500));
-        let _listener = TcpListener::bind("127.0.0.1:12010");
-        
-        // add published services to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12020,
-                service_claim: 0,
-                interface_addr: Vec::new(),
-                bind_port: 12010,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
-            };
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.add(p, 0);
-        }
-
-        sleep(Duration::from_millis(500));
-        let _listener = TcpListener::bind("127.0.0.1:12015");
-    
-        // add clients to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12000,
-                service_claim: epoch(),
-                interface_addr: Vec::new(),
-                bind_port: 12015,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
-            };
-            let mut state_loc = lock.lock().unwrap();
-            let mut service_id = 0;
-            match state_loc.claim(p.key){
-                Ok(pl) => service_id = (*pl).service_id,
-                _ => panic!("Error: Failed to claim key")
-            };
-            state_loc.add(p, service_id);
-        }
-        {
-            // State contains all services and clients
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.print();
-        }
-        // remove all clients from State
-        for x in 1..21{
-            let mut state_loc = lock.lock().unwrap();
-            let k: f64 = (1000 + x/2) as f64;
-            // id = x+20 : services' ids are 1-21
-            // service_id = x : client's service_ids match services' ids
-            let result = state_loc.rmv(k.floor() as u64, x + 20, x);
-            assert!(result.is_ok());
-        }
-        {
-            // State only contains clients
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.print();
-        }
-    }
-    
-    // test if rmv() properly removes services
-    #[test]
-    fn test_rmv_service() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
-
-        sleep(Duration::from_millis(500));
-        let _listener = TcpListener::bind("127.0.0.1:12010");
-        
-        // add published services to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12020,
-                service_claim: 0,
-                interface_addr: Vec::new(),
-                bind_port: 12010,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
-            };
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.add(p, 0);
-        }
-
-        sleep(Duration::from_millis(500));
-        let _listener = TcpListener::bind("127.0.0.1:12015");
-    
-        // add clients to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12000,
-                service_claim: epoch(),
-                interface_addr: Vec::new(),
-                bind_port: 12015,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
-            };
-            let mut state_loc = lock.lock().unwrap();
-            let mut service_id = 0;
-            match state_loc.claim(p.key){
-                Ok(pl) => service_id = (*pl).service_id,
-                _ => panic!("Error: Failed to claim key")
-            };
-            state_loc.add(p, service_id);
-        }
-        {
-            // State contains all services and clients
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.print();
-        }
-        // remove all services from State
-        for x in 1..21{
-            let mut state_loc = lock.lock().unwrap();
-            let k: f64 = (1000 + x/2) as f64;
-            // id = x: services' ids are 1-21
-            // service_id = x : id == service_id
-            let result = state_loc.rmv(k.floor() as u64, x, x);
-            assert!(result.is_ok());
-        }
-        {
-            // State only contains clients
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.print();
-        }
-    }
-
-    // test if rmv() properly removes clients and services
-    #[test]
-    fn test_rmv_clients_and_services() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-        let (lock, _cvar) = &*state;
-
-        sleep(Duration::from_millis(500));
-        let _listener = TcpListener::bind("127.0.0.1:12010");
-        
-        // add published services to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12020,
-                service_claim: 0,
-                interface_addr: Vec::new(),
-                bind_port: 12010,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
-            };
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.add(p, 0);
-        }
-
-        sleep(Duration::from_millis(500));
-        let _listener = TcpListener::bind("127.0.0.1:12015");
-    
-        // add clients to State struct with two copies of 10 keys
-        for x in 1..21{
-            let k: f64 = (1000 + x/2) as f64;
-            let p = Payload {
-                service_addr: vec!["127.0.0.1".to_string()],
-                service_port: 12000,
-                service_claim: epoch(),
-                interface_addr: Vec::new(),
-                bind_port: 12015,
-                key: k.floor() as u64,
-                id: 0,
-                service_id: 0,
-            };
-            let mut state_loc = lock.lock().unwrap();
-            let mut service_id = 0;
-            match state_loc.claim(p.key){
-                Ok(pl) => service_id = (*pl).service_id,
-                _ => panic!("Error: Failed to claim key")
-            };
-            state_loc.add(p, service_id);
-        }
-        {
-            // State contains all services and clients
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.print();
-        }
-        // remove all services from State
-        for x in 1..21{
-            let mut state_loc = lock.lock().unwrap();
-            let k: f64 = (1000 + x/2) as f64;
-            // id = x: services' ids are 1-21
-            // service_id = x : id == service_id
-            let result = state_loc.rmv(k.floor() as u64, x, x);
-            assert!(result.is_ok());
-            let result = state_loc.rmv(k.floor() as u64, x + 20, x);
-            assert!(result.is_ok());
-        }
-        {
-            // State only contains clients
-            let mut state_loc = lock.lock().unwrap();
-            state_loc.print();
-        }
-    }
-
-    /// test if request_handler() panics when receiving a NULL message
-    #[test]
-    #[should_panic]
-    fn test_request_handler_null() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-
-        let listener = TcpListener::bind("127.0.0.1:11000").unwrap();
-        sleep(Duration::from_millis(500));
-        let mut stream = TcpStream::connect("127.0.0.1:11000").unwrap();
-
-        let _ = stream_write(&mut stream, & serialize_message(& Message{
-            header: MessageHeader::NULL,
-            body: "".to_string()
-        }));
-
-        for s in listener.incoming(){
-            match s {
-                Ok(s) => {
-                    let shared_stream = Arc::new(Mutex::new(s));
-                    let _ = request_handler(&state, &shared_stream);
-                }
-                Err(e) => {
-                    panic!("Error: {}", e);
-                }
-            }
-        }
-    }
-
-    /// test if request_handler() panics when receiving an ACK message
-    #[test]
-    #[should_panic]
-    fn test_request_handler_ack() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-
-        let listener = TcpListener::bind("127.0.0.1:13000").unwrap();
-        sleep(Duration::from_millis(500));
-        let mut stream = TcpStream::connect("127.0.0.1:13000").unwrap();
-
-        let _ = stream_write(&mut stream, & serialize_message(& Message{
-            header: MessageHeader::ACK,
-            body: "".to_string()
-        }));
-
-        for s in listener.incoming(){
-            match s {
-                Ok(s) => {
-                    let shared_stream = Arc::new(Mutex::new(s));
-                    let _ = request_handler(&state, &shared_stream);
-                }
-                Err(e) => {
-                    panic!("Error: {}", e);
-                }
-            }
-        }
-    }
-
-    /// test if request_handler() panics when receiving a HB message
-    #[test]
-    #[should_panic]
-    fn test_request_handler_HB() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-
-        let listener = TcpListener::bind("127.0.0.1:14000").unwrap();
-        sleep(Duration::from_millis(500));
-        let mut stream = TcpStream::connect("127.0.0.1:14000").unwrap();
-
-        let _ = stream_write(&mut stream, & serialize_message(& Message{
-            header: MessageHeader::HB,
-            body: "".to_string()
-        }));
-
-        for s in listener.incoming(){
-            match s {
-                Ok(s) => {
-                    let shared_stream = Arc::new(Mutex::new(s));
-                    let _ = request_handler(&state, &shared_stream);
-                }
-                Err(e) => {
-                    panic!("Error: {}", e);
-                }
-            }
-        }
-    }
-
-    /// test if request_handler() panics when no service to claim
-    #[test]
-    #[should_panic]
-    fn test_request_handler_CLAIM() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-
-        sleep(Duration::from_millis(500));
-        let listener = TcpListener::bind("127.0.0.1:15000").unwrap();
-        sleep(Duration::from_millis(500));
-        let mut stream = TcpStream::connect("127.0.0.1:15000").unwrap();
-
-        let p = Payload {
-            service_addr: vec!["127.0.0.1".to_string()],
-            service_port: 15000,
-            service_claim: epoch(),
-            interface_addr: Vec::new(),
-            bind_port: 15015,
-            key: 1000,
-            id: 0,
-            service_id: 0,
-        };
-
-        let _ = stream_write(&mut stream, & serialize_message(
-            & Message {
-                header: MessageHeader::CLAIM,
-                body: serialize(&p)
-            }
-        ));
-
-        for s in listener.incoming(){
-            match s {
-                Ok(s) => {
-                    let shared_stream = Arc::new(Mutex::new(s));
-                    let stream_clone = Arc::clone(&shared_stream);
-                    let state_clone = state.clone();
-                    let thread_handler = thread::spawn(move || {
-                        let _ = request_handler(&state_clone, &stream_clone);
-                    });
-                    let _ = thread_handler.join();
-                    loop {
-                        sleep(Duration::from_millis(1000));
-                        let message = match stream_read(&mut stream) {
-                            Ok(m) => deserialize_message(& m),
-                            Err(err) => panic!("server correctly dropped claim")
-                        };
-                        trace!("{:?}", message);
-                        // print service's address to client
-                        if matches!(message.header, MessageHeader::ACK){
-                            panic!("server should not have acknowledged claim");
-                        }
-                    }
-                }
-                Err(e) => {
-                    panic!("Error: {}", e);
-                }
-            }
-        }
-    }
-
-    /// test if request_handler() successfully completes with PUB message
-    #[test]
-    fn test_request_handler_PUB() {
-
-        let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-
-        sleep(Duration::from_millis(500));
-        let listener = TcpListener::bind("127.0.0.1:16000").unwrap();
-        sleep(Duration::from_millis(500));
-        let mut stream = TcpStream::connect("127.0.0.1:16000").unwrap();
-
-        let p = Payload {
-            service_addr: vec!["127.0.0.1".to_string()],
-            service_port: 16020,
-            service_claim: epoch(),
-            interface_addr: Vec::new(),
-            bind_port: 16010,
-            key: 1000,
-            id: 0,
-            service_id: 0,
-        };
-
-        let _ = stream_write(&mut stream, & serialize_message(
-            & Message {
-                header: MessageHeader::PUB,
-                body: serialize(&p)
-            }
-        ));
-
-        for s in listener.incoming(){
-            match s {
-                Ok(s) => {
-                    let shared_stream = Arc::new(Mutex::new(s));
-                    let stream_clone = Arc::clone(&shared_stream);
-                    let state_clone = state.clone();
-                    let thread_handler = thread::spawn(move || {
-                        let result = request_handler(&state_clone, &stream_clone);
-                        assert!(result.is_ok());
-                    });
-                    let _ = thread_handler.join();
-                    break;
-                }
-                Err(e) => {
-                    panic!("Error: {}", e);
-                }
-            }
-        }
-    }
-
-    /// test if heartbeat handler properly processes non-heartbeat messages
-    #[test]
-    #[should_panic]
-    fn test_heartbeat_handler_incorrect_message() {
-
-        let publisher = TcpListener::bind("127.0.0.1:17000").unwrap();
-        sleep(Duration::from_millis(500));
-        let mut stream = TcpStream::connect("127.0.0.1:17000").unwrap();
-
-        let _ = stream_write(&mut stream, & serialize_message(
-            & Message {
-                header: MessageHeader::PUB,
-                body: "".to_string()
-            }
-        ));
-        for s in publisher.incoming(){
-            match s {
-                Ok(s) => {
-                    let shared_stream = Arc::new(Mutex::new(s));
-                    let stream_clone = Arc::clone(&shared_stream);
-                    let thread_handler = thread::spawn(move || {
-                        let _ = heartbeat_handler_helper(&stream_clone, None, None);
-                    });
-                    sleep(Duration::from_millis(1000));
-                    let failure_duration = Duration::from_secs(10);
-                    match stream.set_read_timeout(Some(failure_duration)) {
-                        Ok(_x) => trace!("set_read_timeout OK"),
-                        Err(_e) => trace!("set_read_timeout Error")
-                    }
-                    let _ = match stream_read(&mut stream) {
-                        Ok(m) => deserialize_message(& m),
-                        Err(err) => panic!("server correctly dropped claim")
-                    };
-                }
-                Err(e) => {
-                    panic!("Error: {}", e);
-                }
-            }
-        }
-
-    }
-
-    /// test if heartbeat handler returns a heartbeat message
-    #[test]
-    fn test_heartbeat_handler_correct_message() {
-
-        init_logger();
-
-        let publisher = TcpListener::bind("127.0.0.1:17010").unwrap();
-        sleep(Duration::from_millis(500));
-        let mut stream = TcpStream::connect("127.0.0.1:17010").unwrap();
-
-        let _ = stream_write(&mut stream, & serialize_message(
-            & Message {
-                header: MessageHeader::HB,
-                body: serde_json::to_string(&MsgBody::default()).unwrap()
-            }
-        ));
-        for s in publisher.incoming(){
-            match s {
-                Ok(s) => {
-                    let shared_stream = Arc::new(Mutex::new(s));
-                    let stream_clone = Arc::clone(&shared_stream);
-                    let thread_handler = thread::spawn(move || {
-                        let _ = heartbeat_handler_helper(&stream_clone, None, None);
-                    });
-                    sleep(Duration::from_millis(1000));
-                    let failure_duration = Duration::from_secs(5);
-                    match stream.set_read_timeout(Some(failure_duration)) {
-                        Ok(_x) => trace!("set_read_timeout OK"),
-                        Err(_e) => trace!("set_read_timeout Error")
-                    }
-                    let message = match stream_read(&mut stream) {
-                        Ok(m) => deserialize_message(& m),
-                        Err(err) => panic!("server dropped claim")
-                    };
-                    let header = match message.header{
-                        MessageHeader::HB => "HB",
-                        _ => panic!("heartbeat not returned properly")
-                    };
-                    assert!(header == "HB");
-                    break;
-                }
-                Err(e) => {
-                    panic!("Error: {}", e);
-                }
-            }
-        }
-
-    }
-
-        /// test if faulty connection restarts 
-        #[test]
-        fn test_connect_with_retry() {
-            init_logger();
-
-            let state = Arc::new((Mutex::new(State::new()), Condvar::new()));
-
-            sleep(Duration::from_millis(500));
-            let publisher = TcpListener::bind("127.0.0.1:18000").unwrap();
-            sleep(Duration::from_millis(500));
-            let mut stream = TcpStream::connect("127.0.0.1:18000").unwrap();
-
-            let shared_stream = Arc::new(Mutex::new(stream));
-            let hb = Heartbeat {
-                key: 1000,
-                id: 1,
-                service_id: 1,
-                addr: "127.0.0.1:18000".to_string(),
-                stream: Arc::clone(&shared_stream),
-                fail_counter: FailCounter::new(),
-                msg_body: MsgBody::default(),
-            };
-            let mut loc_stream = hb.stream.lock().unwrap();
-            let _ = stream_write(&mut loc_stream, & serialize_message(
-                & Message {
-                    header: MessageHeader::HB,
-                    body: serde_json::to_string(&MsgBody::default()).unwrap()
-                }
-            ));
-    
-            let thread_handler = thread::spawn(move || {
-                for s in publisher.incoming(){
-                    match s {
-                        Ok(s) => {
-                            trace!("new connection");
-                            let shared_s = Arc::new(Mutex::new(s));
-                            let mut loc_s = shared_s.lock().unwrap();
-                            let response_a = match stream_read(&mut loc_s) {
-                                Ok(m) => deserialize_message(& m),
-                                Err(err) => panic!("failed to read from stream")
-                            };
-                            trace!("Received on stream : {:?}", response_a);
-
-                            sleep(Duration::from_millis(5000));
-                        }
-                        Err(e) => {
-                            panic!("Error: {}", e);
-                        }
-                    }
-                }
-            });
-
-            drop(shared_stream);
-            *loc_stream = connect_with_retry("127.0.0.1:18000".to_string()).unwrap();
-
-            trace!("writing to same stream");
-            let _ = stream_write(&mut loc_stream, & serialize_message(
-                & Message {
-                    header: MessageHeader::HB,
-                    body: serde_json::to_string(&MsgBody::default()).unwrap()
-                }
-            ));
-
-            sleep(Duration::from_millis(30000));
-
-        }
+    Ok(response)
 }
