@@ -47,10 +47,11 @@ pub async fn handle_list_ips(request: Request<Incoming>) -> Result<Response<Full
     println!("{:?}", query_pairs);
 
     let name = match query_pairs.get("name") {
-        Some(n) => n.to_string(),
+        Some(n) => Some(n.to_string()),
         None => {
-            *response.body_mut() = Full::from("Error: 'name' parameter is required.");
-            return Ok(response);
+            // *response.body_mut() = Full::from("Error: 'name' parameter is required.");
+            // return Ok(response);
+            None
         }
     };
 
@@ -76,17 +77,16 @@ pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<F
     let whole_body = request.body_mut().collect().await.unwrap().aggregate();
     let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
 
-    let name = match data.get("name")
-        .and_then(|v| v.as_str()) {
-        Some(n) => n.trim_matches('"').to_string(),
+    let name = match data.get("name").and_then(|v| v.as_str()) {
+        Some(n) => Some(n.trim_matches('"').to_string()),
         None => {
-            *response.body_mut() = Full::from("Error: 'name' parameter is required.");
-            return Ok(response);
+            // *response.body_mut() = Full::from("Error: 'name' parameter is required.");
+            // return Ok(response);
+            None
         }
     };
 
-    let host = match data.get("host") 
-        .and_then(|v| v.as_str()) {
+    let host = match data.get("host").and_then(|v| v.as_str()) {
         Some(n) => n.trim_matches('"').to_string(),
         None => {
             *response.body_mut() = Full::from("Error: 'host' parameter is required.");
@@ -94,8 +94,7 @@ pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<F
         }
     };
 
-    let port = match data.get("port")
-        .and_then(|v| v.as_i64()){
+    let port = match data.get("port").and_then(|v| v.as_i64()){
         Some(port) => port as i32,
         None => {
             *response.body_mut() = Full::from("Error: 'port' parameter is required.");
@@ -103,8 +102,7 @@ pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<F
         }
     };
 
-    let bind_port = match data.get("bind_port")
-        .and_then(|v| v.as_i64()){
+    let bind_port = match data.get("bind_port").and_then(|v| v.as_i64()){
         Some(port) => port as i32,
         None => {
             *response.body_mut() = Full::from("Error: 'bind_port' parameter is required.");
@@ -112,33 +110,33 @@ pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<F
         }
     };
 
-    let service_port = match data.get("service_port")
-        .and_then(|v| v.as_i64()){
+    let service_port = match data.get("service_port").and_then(|v| v.as_i64()){
         Some(port) => port as i32,
         None => {
             *response.body_mut() = Full::from("Error: 'service_port' parameter is required.");
             return Ok(response);
         }
-        };  
+    };  
 
-    let key = match data.get("key")
-        .and_then(|v| v.as_i64()){
+    let key = match data.get("key").and_then(|v| v.as_i64()){
         Some(k) => k as u64,
         None => {
             *response.body_mut() = Full::from("Error: 'key' parameter is required.");
             return Ok(response);
         }
     };
-    let starting_octets = match data.get("starting_octets")
-        .and_then(|v| v.as_str()) {
+
+    let starting_octets = match data.get("starting_octets").and_then(|v| v.as_str()) {
         Some(s) => Some(s.trim_matches('"').to_string()),
         None => None
     };
+
     let root_ca = match data.get("root_ca")
         .and_then(|v| v.as_str()) {
         Some(s) => Some(s.trim_matches('"').to_string()),
         None => None
     };
+
     tokio::spawn(async move{
         let mut task_response: Response<Full<Bytes>> = Response::new(Full::default());
         let _result = match publish(Publish {
@@ -164,6 +162,7 @@ pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<F
         };
         let _ = Ok::<Response<Full<Bytes>>, hyper::Error>(task_response);
     });
+
     *response.body_mut() = Full::from("Successful request to publish");
     Ok(response)
 }
@@ -178,10 +177,11 @@ pub async fn handle_claim(request: Request<Incoming>) -> Result<Response<Full<By
     let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
     println!("{:?}", query_pairs);
     let name = match query_pairs.get("name") {
-        Some(n) => n.to_string(),
+        Some(n) => Some(n.to_string()),
         None => {
-            *response.body_mut() = Full::from("Error: 'name' parameter is required.");
-            return Ok(response);
+            // *response.body_mut() = Full::from("Error: 'name' parameter is required.");
+            // return Ok(response);
+            None
         }
     };
 
@@ -193,8 +193,7 @@ pub async fn handle_claim(request: Request<Incoming>) -> Result<Response<Full<By
         }
     };
 
-    let port = match query_pairs.get("port")
-        .and_then(|p| p.parse::<i32>().ok()) {
+    let port = match query_pairs.get("port").and_then(|p| p.parse::<i32>().ok()) {
         Some(port) => port,
         None => {
             *response.body_mut() = Full::from("Error: 'port' parameter is required.");
@@ -202,32 +201,32 @@ pub async fn handle_claim(request: Request<Incoming>) -> Result<Response<Full<By
         }
     };
 
-    let bind_port = match query_pairs.get("bind_port")
-    .and_then(|p| p.parse::<i32>().ok()) {
-    Some(port) => port,
-    None => {
-        *response.body_mut() = Full::from("Error: 'bind_port' parameter is required.");
-        return Ok(response);
-    }
+    let bind_port = match query_pairs.get("bind_port").and_then(|p| p.parse::<i32>().ok()) {
+        Some(port) => port,
+        None => {
+            *response.body_mut() = Full::from("Error: 'bind_port' parameter is required.");
+            return Ok(response);
+        }
     };
 
-    let key = match query_pairs.get("key")
-    .and_then(|p| p.parse::<u64>().ok()) {
-    Some(k) => k,
-    None => {
-        *response.body_mut() = Full::from("Error: 'key' parameter is required.");
-        return Ok(response);
-    }
+    let key = match query_pairs.get("key").and_then(|p| p.parse::<u64>().ok()) {
+        Some(k) => k,
+        None => {
+            *response.body_mut() = Full::from("Error: 'key' parameter is required.");
+            return Ok(response);
+        }
     };
 
     let starting_octets = match query_pairs.get("starting_octets") {
         Some(s) => Some(s.to_string()),
         None => None
     };
+
     let root_ca = match query_pairs.get("root_ca") {
         Some(s) => Some(s.trim_matches('"').to_string()),
         None => None
     };
+
     tokio::spawn(async move{
         let mut task_response: Response<Full<Bytes>> = Response::new(Full::default());
         let _result = match claim(Claim {
@@ -252,6 +251,7 @@ pub async fn handle_claim(request: Request<Incoming>) -> Result<Response<Full<By
         };
         let _ = Ok::<Response<Full<Bytes>>, hyper::Error>(task_response);
     });
+
     *response.body_mut() = Full::from("Successful request to claim");
     Ok(response)
 }
@@ -266,10 +266,11 @@ pub async fn handle_collect(request: Request<Incoming>) -> Result<Response<Full<
     let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
     println!("{:?}", query_pairs);
     let name = match query_pairs.get("name") {
-        Some(n) => n.to_string(),
+        Some(n) => Some(n.to_string()),
         None => {
-            *response.body_mut() = Full::from("Error: 'name' parameter is required.");
-            return Ok(response);
+            // *response.body_mut() = Full::from("Error: 'name' parameter is required.");
+            // return Ok(response);
+            None
         }
     };
 
@@ -281,8 +282,7 @@ pub async fn handle_collect(request: Request<Incoming>) -> Result<Response<Full<
         }
     };
 
-    let port = match query_pairs.get("port")
-        .and_then(|p| p.parse::<i32>().ok()) {
+    let port = match query_pairs.get("port").and_then(|p| p.parse::<i32>().ok()) {
         Some(port) => port,
         None => {
             *response.body_mut() = Full::from("Error: 'port' parameter is required.");
@@ -290,24 +290,25 @@ pub async fn handle_collect(request: Request<Incoming>) -> Result<Response<Full<
         }
     };
 
-    let key = match query_pairs.get("key")
-    .and_then(|p| p.parse::<u64>().ok()) {
-    Some(k) => k,
-    None => {
-        *response.body_mut() = Full::from("Error: 'key' parameter is required.");
-        return Ok(response);
-    }
+    let key = match query_pairs.get("key").and_then(|p| p.parse::<u64>().ok()) {
+        Some(k) => k,
+        None => {
+            *response.body_mut() = Full::from("Error: 'key' parameter is required.");
+            return Ok(response);
+        }
     };
 
     let starting_octets = match query_pairs.get("starting_octets") {
         Some(s) => Some(s.to_string()),
         None => None
     };
+
     let root_ca = match query_pairs.get("root_ca") {
         Some(s) => Some(s.trim_matches('"').to_string()),
         None => None
     };
-    let _result = match collect(Collect {
+
+    let _result = match collect(Collect{
         print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
         print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
         host,
@@ -325,6 +326,7 @@ pub async fn handle_collect(request: Request<Incoming>) -> Result<Response<Full<
             *response.body_mut() = Full::from(format!("Error processing request: {}", e));
         }
     };
+
     *response.body_mut() = Full::from("Successful request to collect");
     Ok(response)
 }
@@ -336,17 +338,16 @@ pub async fn handle_send(mut request: Request<Incoming>) -> Result<Response<Full
     let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
 
     println!("Received body: {}", data);
-    let name = match data.get("name")
-        .and_then(|v| v.as_str()) {
-        Some(n) => n.trim_matches('"').to_string(),
+    let name = match data.get("name").and_then(|v| v.as_str()) {
+        Some(n) => Some(n.trim_matches('"').to_string()),
         None => {
-            *response.body_mut() = Full::from("Error: 'name' parameter is required.");
-            return Ok(response);
+            // *response.body_mut() = Full::from("Error: 'name' parameter is required.");
+            // return Ok(response);
+            None
         }
     };
 
-    let host = match data.get("host") 
-        .and_then(|v| v.as_str()) {
+    let host = match data.get("host").and_then(|v| v.as_str()) {
         Some(n) => n.trim_matches('"').to_string(),
         None => {
             *response.body_mut() = Full::from("Error: 'host' parameter is required.");
@@ -354,8 +355,7 @@ pub async fn handle_send(mut request: Request<Incoming>) -> Result<Response<Full
         }
     };
 
-    let port = match data.get("port")
-        .and_then(|v| v.as_i64()){
+    let port = match data.get("port").and_then(|v| v.as_i64()){
         Some(port) => port as i32,
         None => {
             *response.body_mut() = Full::from("Error: 'port' parameter is required.");
@@ -363,8 +363,7 @@ pub async fn handle_send(mut request: Request<Incoming>) -> Result<Response<Full
         }
     };
 
-    let msg = match data.get("msg") 
-        .and_then(|v| v.as_str()) {
+    let msg = match data.get("msg").and_then(|v| v.as_str()) {
         Some(n) => n.trim_matches('"').to_string(),
         None => {
             *response.body_mut() = Full::from("Error: 'msg' parameter is required.");
@@ -372,25 +371,25 @@ pub async fn handle_send(mut request: Request<Incoming>) -> Result<Response<Full
         }
     };
 
-    let key = match data.get("key")
-        .and_then(|v| v.as_i64()){
+    let key = match data.get("key").and_then(|v| v.as_i64()){
         Some(k) => k as u64,
         None => {
             *response.body_mut() = Full::from("Error: 'key' parameter is required.");
             return Ok(response);
         }
     };
-    let starting_octets = match data.get("starting_octets")
-        .and_then(|v| v.as_str()) {
+
+    let starting_octets = match data.get("starting_octets").and_then(|v| v.as_str()) {
         Some(s) => Some(s.trim_matches('"').to_string()),
         None => None
     };
-    let root_ca = match data.get("root_ca")
-        .and_then(|v| v.as_str()) {
+
+    let root_ca = match data.get("root_ca").and_then(|v| v.as_str()) {
         Some(s) => Some(s.trim_matches('"').to_string()),
         None => None
     };
-    let _result = match send_msg(SendMSG {
+
+    let _result = match send_msg(SendMSG{
         print_v4: data.get("print_v4").map_or(true, |v| v == "true"),
         print_v6: data.get("print_v6").map_or(true, |v| v == "true"),
         host,
@@ -409,6 +408,7 @@ pub async fn handle_send(mut request: Request<Incoming>) -> Result<Response<Full
             *response.body_mut() = Full::from(format!("Error processing request: {}", e));
         }
     };
+
     Ok(response)
 }
 

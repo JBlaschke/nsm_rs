@@ -98,7 +98,7 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
         let ipstr = get_matching_ipstr(
             & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
         ).await;
-        if inputs.verbose {println!("IPv4 Addresses for {}:", inputs.name);}
+        if inputs.verbose {println!("IPv4 Addresses for {:?}:", inputs.name);}
         for ip in ipstr {
             if inputs.verbose {
                 println!(" - {}", ip);
@@ -112,7 +112,7 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
         let ipstr = get_matching_ipstr(
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
         ).await;
-        if inputs.verbose {println!("IPv6 Addresses for {}:", inputs.name);}
+        if inputs.verbose {println!("IPv6 Addresses for {:?}:", inputs.name);}
         for ip in ipstr {
             if inputs.verbose {
                 println!(" - {}", ip);
@@ -197,7 +197,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
             let state_clone = Arc::clone(& state);
 
             // send State into event monitor to handle heartbeat queue
-            let event_loop = tokio::spawn(async move {
+            let _event_loop = tokio::spawn(async move {
                 let _ = match event_monitor(state_clone).await{
                     Ok(_resp) => trace!("exited event monitor"),
                     Err(_) => trace!("event monitor error")
@@ -266,7 +266,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
                     };
                 });
             }
-            let _ = event_loop.await;
+            // let _ = event_loop.await;
         }
     };
     
@@ -457,7 +457,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
 
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-                let broker_addr_value = Arc::clone(&broker_addr);
+                let _broker_addr_value = Arc::clone(&broker_addr);
                 if inputs.tls {
                     let tls_clone = tls.clone().unwrap();
                     Box::pin(async move {
@@ -858,7 +858,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             if inputs.ping {
                 tokio::spawn(async move {
                     let client = setup_https_client(inputs.root_ca.clone()).await;
-                    read_fail = 0;
+                    let mut read_fail = 0;
                     loop {
                         sleep(Duration::from_millis(1000)).await;
                         trace!("sending request to {}:{}", inputs.host, inputs.bind_port);
@@ -884,7 +884,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         
                         // check for successful connection to a published service
                         match result {
-                            Ok(Ok(mut resp)) => {
+                            Ok(Ok(resp)) => {
                                 trace!("Received ping response: {:?}", resp);
                                 break;
                             }

@@ -174,7 +174,7 @@ impl Heartbeat {
                             *response.status_mut() = StatusCode::REQUEST_TIMEOUT;
                             return Ok(response); 
                         }
-                        Err(err) => {
+                        Err(_err) => {
                             // open connection, read timed out
                             if self.fail_counter.fail_count == 0 {
                                 self.fail_counter.first_increment = Instant::now();
@@ -368,7 +368,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
             // check status of heartbeat
             let fail_id: i64 = if hb.id != hb.service_id {
                 match response {
-                    Ok(mut resp) => {
+                    Ok(resp) => {
                         let status = resp.status();
                         if status == StatusCode::ACCEPTED {
                             trace!("ping is alive");
@@ -461,7 +461,7 @@ pub struct State {
 
 impl State {
     /// inititate State struct with empty and default variables
-    pub fn new(tls: Option<ClientConfig>) -> State {
+    pub fn new(_tls: Option<ClientConfig>) -> State { // TODO: Should use default constructor instead?
         State{
             clients: HashMap::new(),
             timeout: 60,
@@ -754,7 +754,7 @@ pub async fn request_handler(
 
             let (lock, _notify) = &**state;
 
-            let mut service_id = 0;
+            // let mut service_id = 0;
             let mut claim_fail = 0; // initiate counter for connection failure
 
             // loop solves race case when client starts faster than service can be published
@@ -763,7 +763,7 @@ pub async fn request_handler(
                 match state_loc.claim(payload.key).await{
                     Ok(p) => {
                         trace!("found key");
-                        service_id = (*p).service_id; // capture claimed service's service_id for add()
+                        let mut service_id = (*p).service_id; // capture claimed service's service_id for add()
                         // send acknowledgment of successful service claim with service's payload containing its address
                         let json = serialize_message( & Message {
                             header: MessageHeader::ACK,
@@ -1007,10 +1007,10 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
     -> Result<Response<Full<Bytes>>, std::io::Error> {
     trace!("entering ping heartbeat");
     sleep(Duration::from_millis(2000)).await;
-    let mut response = Response::new(Full::default());
+    // let mut response = Response::new(Full::default());
 
     // retrieve service's payload from client or set an empty message body
-    let binding = Arc::new(Mutex::new("".to_string()));
+    let _binding = Arc::new(Mutex::new("".to_string()));
     let payload_loc = payload.lock().await.clone();
 
     let empty_addr = Arc::new(Mutex::new(Addr{
@@ -1120,7 +1120,7 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
             let _ = sleep(Duration::from_millis(10000));
         }
     });
-    response = Response::builder()
+    let response = Response::builder()
     .status(StatusCode::OK)
     .header(hyper::header::CONTENT_TYPE, "application/json")
     .body(Full::new(Bytes::from(serialize_message(& Message{
@@ -1276,13 +1276,13 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                                 MessageHeader::MSG => info!("Request acknowledged: {:?}", m),
                                 _ => warn!("Server responds with unexpected message: {:?}", m),
                             }
-                            response = Response::builder()
-                            .status(StatusCode::OK)
-                            .header(hyper::header::CONTENT_TYPE, "application/json")
-                            .body(Full::new(Bytes::from(serialize_message(& Message{
-                                header: MessageHeader::ACK,
-                                body: "".to_string()
-                            })))).unwrap();
+                            // response = Response::builder()
+                            // .status(StatusCode::OK)
+                            // .header(hyper::header::CONTENT_TYPE, "application/json")
+                            // .body(Full::new(Bytes::from(serialize_message(& Message{
+                            //     header: MessageHeader::ACK,
+                            //     body: "".to_string()
+                            // })))).unwrap();
                             break;
                         }
                         Ok(Err(_e)) => {
