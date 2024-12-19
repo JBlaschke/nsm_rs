@@ -527,9 +527,6 @@ where
                     if let Some(to_write) = to_write {
                         self.out_buf.get_mut().extend_from_slice(&to_write);
                     }
-                    if self.enc_in.position() != 0 {
-                        self.decrypt()?;
-                    }
                     if let State::Initializing {
                         ref mut more_calls, ..
                     } = self.state
@@ -839,7 +836,8 @@ where
                 Foundation::SEC_E_OK => {
                     let start = bufs[1].pvBuffer as usize - self.enc_in.get_ref().as_ptr() as usize;
                     let end = start + bufs[1].cbBuffer as usize;
-                    self.dec_in.get_mut().clear();
+                    let dec_in_read_pos = self.dec_in.position() as usize;
+                    self.dec_in.get_mut().drain(..dec_in_read_pos);
                     self.dec_in
                         .get_mut()
                         .extend_from_slice(&self.enc_in.get_ref()[start..end]);

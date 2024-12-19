@@ -26,8 +26,6 @@ use core_foundation::base::FromVoid;
 use core_foundation::error::{CFError, CFErrorRef};
 #[cfg(any(feature = "OSX_10_12", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
 use core_foundation::number::CFNumber;
-#[cfg(feature = "serial-number-bigint")]
-use num_bigint::BigUint;
 use security_framework_sys::item::kSecValueRef;
 #[cfg(any(feature = "OSX_10_12", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
 use std::ops::Deref;
@@ -55,8 +53,7 @@ impl SecCertificate {
     pub fn from_der(der_data: &[u8]) -> Result<Self> {
         let der_data = CFData::from_buffer(der_data);
         unsafe {
-            let certificate =
-                SecCertificateCreateWithData(kCFAllocatorDefault, der_data.as_concrete_TypeRef());
+            let certificate = SecCertificateCreateWithData(kCFAllocatorDefault, der_data.as_concrete_TypeRef());
             if certificate.is_null() {
                 Err(Error::from_code(errSecParam))
             } else {
@@ -75,7 +72,7 @@ impl SecCertificate {
     }
 
     /// Adds a certificate to a keychain.
-    #[cfg(target_os="macos")]
+    #[cfg(target_os = "macos")]
     pub fn add_to_keychain(&self, keychain: Option<SecKeychain>) -> Result<()> {
         let kch = match keychain {
             Some(kch) => kch,
@@ -143,13 +140,6 @@ impl SecCertificate {
         }
     }
 
-    /// Use `BigUint::from_bytes_be(serial_number_bytes())` instead
-    #[deprecated(note = "use serial_number_bytes()")]
-    #[cfg(feature = "serial-number-bigint")]
-    pub fn serial_number(&self) -> Result<BigUint, CFError> {
-        Ok(BigUint::from_bytes_be(&self.serial_number_bytes()?))
-    }
-
     #[cfg(any(feature = "OSX_10_12", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
     /// Returns DER encoded subjectPublicKeyInfo of certificate if available. This can be used
     /// for certificate pinning.
@@ -163,8 +153,7 @@ impl SecCertificate {
     #[cfg(any(feature = "OSX_10_12", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
     #[must_use]
     fn pk_to_der(&self, public_key: key::SecKey) -> Option<Vec<u8>> {
-        use security_framework_sys::item::kSecAttrKeyType;
-        use security_framework_sys::item::kSecAttrKeySizeInBits;
+        use security_framework_sys::item::{kSecAttrKeySizeInBits, kSecAttrKeyType};
 
         let public_key_attributes = public_key.attributes();
         let public_key_type = public_key_attributes
@@ -217,8 +206,7 @@ impl SecCertificate {
 
 #[cfg(any(feature = "OSX_10_12", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
 fn get_asn1_header_bytes(pkt: CFString, ksz: u32) -> Option<&'static [u8]> {
-    use security_framework_sys::item::kSecAttrKeyTypeRSA;
-    use security_framework_sys::item::kSecAttrKeyTypeECSECPrimeRandom;
+    use security_framework_sys::item::{kSecAttrKeyTypeECSECPrimeRandom, kSecAttrKeyTypeRSA};
 
     if pkt == unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeRSA) } && ksz == 2048 {
         return Some(&RSA_2048_ASN1_HEADER);
@@ -226,14 +214,10 @@ fn get_asn1_header_bytes(pkt: CFString, ksz: u32) -> Option<&'static [u8]> {
     if pkt == unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeRSA) } && ksz == 4096 {
         return Some(&RSA_4096_ASN1_HEADER);
     }
-    if pkt == unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) }
-        && ksz == 256
-    {
+    if pkt == unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) } && ksz == 256 {
         return Some(&EC_DSA_SECP_256_R1_ASN1_HEADER);
     }
-    if pkt == unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) }
-        && ksz == 384
-    {
+    if pkt == unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) } && ksz == 384 {
         return Some(&EC_DSA_SECP_384_R1_ASN1_HEADER);
     }
     None
@@ -266,8 +250,6 @@ const EC_DSA_SECP_384_R1_ASN1_HEADER: [u8; 23] = [
 #[cfg(test)]
 mod test {
     use crate::test::certificate;
-    #[cfg(feature = "serial-number-bigint")]
-    use num_bigint::BigUint;
     #[cfg(any(feature = "OSX_10_12", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos"))]
     use x509_parser::prelude::*;
 
@@ -307,14 +289,5 @@ mod test {
             "C=US, ST=CALIFORNIA, L=PALO ALTO, O=FOOBAR LLC, OU=DEV LAND, CN=FOOBAR.COM",
             name_str
         );
-    }
-
-    #[test]
-    #[cfg(feature = "serial-number-bigint")]
-    #[allow(deprecated)]
-    fn serial_number() {
-        let cert = certificate();
-        let serial_number = cert.serial_number().unwrap();
-        assert_eq!(BigUint::from(16452297291294946383_u128), serial_number);
     }
 }

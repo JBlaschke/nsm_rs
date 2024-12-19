@@ -55,7 +55,7 @@ pub enum ServerName<'a> {
     IpAddress(IpAddr),
 }
 
-impl<'a> ServerName<'a> {
+impl ServerName<'_> {
     /// Produce an owned `ServerName` from this (potentially borrowed) `ServerName`.
     #[cfg(feature = "alloc")]
     pub fn to_owned(&self) -> ServerName<'static> {
@@ -78,7 +78,7 @@ impl<'a> ServerName<'a> {
     }
 }
 
-impl<'a> fmt::Debug for ServerName<'a> {
+impl fmt::Debug for ServerName<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::DnsName(d) => f.debug_tuple("DnsName").field(&d.as_ref()).finish(),
@@ -124,6 +124,45 @@ impl<'a> TryFrom<&'a str> for ServerName<'a> {
                 Err(_) => Err(InvalidDnsNameError),
             },
         }
+    }
+}
+
+impl From<IpAddr> for ServerName<'_> {
+    fn from(addr: IpAddr) -> Self {
+        Self::IpAddress(addr)
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::net::IpAddr> for ServerName<'_> {
+    fn from(addr: std::net::IpAddr) -> Self {
+        Self::IpAddress(addr.into())
+    }
+}
+
+impl From<Ipv4Addr> for ServerName<'_> {
+    fn from(v4: Ipv4Addr) -> Self {
+        Self::IpAddress(IpAddr::V4(v4))
+    }
+}
+
+impl From<Ipv6Addr> for ServerName<'_> {
+    fn from(v6: Ipv6Addr) -> Self {
+        Self::IpAddress(IpAddr::V6(v6))
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::net::Ipv4Addr> for ServerName<'_> {
+    fn from(v4: std::net::Ipv4Addr) -> Self {
+        Self::IpAddress(IpAddr::V4(v4.into()))
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::net::Ipv6Addr> for ServerName<'_> {
+    fn from(v6: std::net::Ipv6Addr) -> Self {
+        Self::IpAddress(IpAddr::V6(v6.into()))
     }
 }
 
@@ -194,7 +233,7 @@ impl<'a> TryFrom<&'a [u8]> for DnsName<'a> {
     }
 }
 
-impl<'a> AsRef<str> for DnsName<'a> {
+impl AsRef<str> for DnsName<'_> {
     fn as_ref(&self) -> &str {
         match self {
             Self(DnsNameInner::Borrowed(s)) => s,
@@ -211,7 +250,7 @@ enum DnsNameInner<'a> {
     Owned(String),
 }
 
-impl<'a> PartialEq<Self> for DnsNameInner<'a> {
+impl PartialEq<Self> for DnsNameInner<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Borrowed(s), Self::Borrowed(o)) => s.eq_ignore_ascii_case(o),
@@ -225,7 +264,7 @@ impl<'a> PartialEq<Self> for DnsNameInner<'a> {
     }
 }
 
-impl<'a> Hash for DnsNameInner<'a> {
+impl Hash for DnsNameInner<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let s = match self {
             Self::Borrowed(s) => s,
@@ -237,7 +276,7 @@ impl<'a> Hash for DnsNameInner<'a> {
     }
 }
 
-impl<'a> fmt::Debug for DnsNameInner<'a> {
+impl fmt::Debug for DnsNameInner<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Borrowed(s) => f.write_fmt(format_args!("{:?}", s)),
@@ -366,6 +405,20 @@ impl From<IpAddr> for std::net::IpAddr {
             IpAddr::V4(v4) => Self::from(std::net::Ipv4Addr::from(v4)),
             IpAddr::V6(v6) => Self::from(std::net::Ipv6Addr::from(v6)),
         }
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::net::Ipv4Addr> for IpAddr {
+    fn from(v4: std::net::Ipv4Addr) -> Self {
+        Self::V4(v4.into())
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::net::Ipv6Addr> for IpAddr {
+    fn from(v6: std::net::Ipv6Addr) -> Self {
+        Self::V6(v6.into())
     }
 }
 

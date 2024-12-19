@@ -41,7 +41,8 @@ static const int32_t zetas[N] = {
 /*************************************************
 * Name:        ntt
 *
-* Description: Forward NTT, in-place. No modular reduction is performed after
+* Description: FIPS 204: Algorithm 41.
+*              Forward NTT, in-place. No modular reduction is performed after
 *              additions or subtractions. Output vector is in bitreversed order.
 *
 * Arguments:   - uint32_t p[N]: input/output coefficient array
@@ -55,7 +56,7 @@ void ntt(int32_t a[N]) {
     for(start = 0; start < N; start = j + len) {
       zeta = zetas[++k];
       for(j = start; j < start + len; ++j) {
-        t = montgomery_reduce((int64_t)zeta * a[j + len]);
+        t = fqmul(zeta, a[j + len]);
         a[j + len] = a[j] - t;
         a[j] = a[j] + t;
       }
@@ -66,7 +67,8 @@ void ntt(int32_t a[N]) {
 /*************************************************
 * Name:        invntt_tomont
 *
-* Description: Inverse NTT and multiplication by Montgomery factor 2^32.
+* Description: FIPS 204: Algorithm 42.
+*              Inverse NTT and multiplication by Montgomery factor 2^32.
 *              In-place. No modular reductions after additions or
 *              subtractions; input coefficients need to be smaller than
 *              Q in absolute value. Output coefficient are smaller than Q in
@@ -87,12 +89,12 @@ void invntt_tomont(int32_t a[N]) {
         t = a[j];
         a[j] = t + a[j + len];
         a[j + len] = t - a[j + len];
-        a[j + len] = montgomery_reduce((int64_t)zeta * a[j + len]);
+        a[j + len] = fqmul(zeta, a[j + len]);
       }
     }
   }
 
   for(j = 0; j < N; ++j) {
-    a[j] = montgomery_reduce((int64_t)f * a[j]);
+    a[j] = fqmul(f, a[j]);
   }
 }

@@ -67,7 +67,6 @@
 
 
 static int trust_1oidany(const X509_TRUST *trust, X509 *x, int flags);
-static int trust_1oid(const X509_TRUST *trust, X509 *x, int flags);
 static int trust_compat(const X509_TRUST *trust, X509 *x, int flags);
 
 static int obj_trust(int id, X509 *x, int flags);
@@ -82,28 +81,22 @@ static const X509_TRUST trstandard[] = {
      NID_email_protect, NULL},
     {X509_TRUST_OBJECT_SIGN, 0, trust_1oidany, (char *)"Object Signer",
      NID_code_sign, NULL},
-    {X509_TRUST_OCSP_SIGN, 0, trust_1oid, (char *)"OCSP responder",
-     NID_OCSP_sign, NULL},
-    {X509_TRUST_OCSP_REQUEST, 0, trust_1oid, (char *)"OCSP request",
-     NID_ad_OCSP, NULL},
     {X509_TRUST_TSA, 0, trust_1oidany, (char *)"TSA server", NID_time_stamp,
      NULL}};
 
 int X509_check_trust(X509 *x, int id, int flags) {
-  int idx;
   if (id == -1) {
-    return 1;
+    return X509_TRUST_TRUSTED;
   }
   // We get this as a default value
   if (id == 0) {
-    int rv;
-    rv = obj_trust(NID_anyExtendedKeyUsage, x, 0);
+    int rv = obj_trust(NID_anyExtendedKeyUsage, x, 0);
     if (rv != X509_TRUST_UNTRUSTED) {
       return rv;
     }
     return trust_compat(NULL, x, 0);
   }
-  idx = X509_TRUST_get_by_id(id);
+  int idx = X509_TRUST_get_by_id(id);
   if (idx == -1) {
     return obj_trust(id, x, flags);
   }
@@ -153,13 +146,6 @@ static int trust_1oidany(const X509_TRUST *trust, X509 *x, int flags) {
   // we don't have any trust settings: for compatibility we return trusted
   // if it is self signed
   return trust_compat(trust, x, flags);
-}
-
-static int trust_1oid(const X509_TRUST *trust, X509 *x, int flags) {
-  if (x->aux) {
-    return obj_trust(trust->arg1, x, flags);
-  }
-  return X509_TRUST_UNTRUSTED;
 }
 
 static int trust_compat(const X509_TRUST *trust, X509 *x, int flags) {

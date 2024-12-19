@@ -70,13 +70,13 @@ async fn main() -> std::io::Result<()> {
             // # ListInterfaces
             // Lists available interfaces on device
             CLIOperation::ListInterfaces(inputs) => {
-                let _ = list_interfaces(inputs);
+                let _ = list_interfaces(inputs).await;
             }
 
             // Lists available IP addresses on interface
             // Match command line entries with variables in struct
             CLIOperation::ListIPs(inputs) => {
-                let _ = list_ips(inputs);
+                let _ = list_ips(inputs).await;
             }
 
             // Inititate broker

@@ -77,6 +77,7 @@ pub struct Config {
     uses_cxx11: bool,
     always_configure: bool,
     no_build_target: bool,
+    no_default_flags: bool,
     verbose_cmake: bool,
     verbose_make: bool,
     pic: Option<bool>,
@@ -184,6 +185,7 @@ impl Config {
             path: env::current_dir().unwrap().join(path),
             generator: None,
             generator_toolset: None,
+            no_default_flags: false,
             cflags: OsString::new(),
             cxxflags: OsString::new(),
             asmflags: OsString::new(),
@@ -294,6 +296,13 @@ impl Config {
     /// Note that this isn't related to the target triple passed to the compiler!
     pub fn no_build_target(&mut self, no_build_target: bool) -> &mut Config {
         self.no_build_target = no_build_target;
+        self
+    }
+
+    /// Disables the generation of default compiler flags. The default compiler
+    /// flags may cause conflicts in some cross compiling scenarios.
+    pub fn no_default_flags(&mut self, no_default_flags: bool) -> &mut Config {
+        self.no_default_flags = no_default_flags;
         self
     }
 
@@ -515,7 +524,7 @@ impl Config {
             .debug(false)
             .warnings(false)
             .host(&host)
-            .no_default_flags(ndk);
+            .no_default_flags(ndk || self.no_default_flags);
         if !ndk {
             c_cfg.target(&target);
         }
@@ -527,7 +536,7 @@ impl Config {
             .debug(false)
             .warnings(false)
             .host(&host)
-            .no_default_flags(ndk);
+            .no_default_flags(ndk || self.no_default_flags);
         if !ndk {
             cxx_cfg.target(&target);
         }
@@ -846,7 +855,7 @@ impl Config {
             }
         }
 
-        cmd.arg("--build").arg(".");
+        cmd.arg("--build").arg(&build);
 
         if !self.no_build_target {
             let target = self
@@ -1075,6 +1084,12 @@ fn run(cmd: &mut Command, program: &str) {
         Err(e) => fail(&format!("failed to execute command: {}", e)),
     };
     if !status.success() {
+        if status.code() == Some(127) {
+            fail(&format!(
+                "command did not execute successfully, got: {}, is `{}` not installed?",
+                status, program
+            ));
+        }
         fail(&format!(
             "command did not execute successfully, got: {}",
             status

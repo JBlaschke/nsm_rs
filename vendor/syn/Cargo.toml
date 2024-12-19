@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.61"
 name = "syn"
-version = "2.0.75"
+version = "2.0.90"
 authors = ["David Tolnay <dtolnay@gmail.com>"]
 build = false
 include = [
@@ -25,6 +25,7 @@ include = [
     "/src/**",
     "/tests/**",
 ]
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -45,7 +46,10 @@ repository = "https://github.com/dtolnay/syn"
 
 [package.metadata.docs.rs]
 all-features = true
-rustdoc-args = ["--generate-link-to-definition"]
+rustdoc-args = [
+    "--generate-link-to-definition",
+    "--extend-css=src/gen/token.css",
+]
 targets = ["x86_64-unknown-linux-gnu"]
 
 [package.metadata.playground]
@@ -192,7 +196,7 @@ required-features = [
 ]
 
 [dependencies.proc-macro2]
-version = "1.0.83"
+version = "1.0.91"
 default-features = false
 
 [dependencies.quote]

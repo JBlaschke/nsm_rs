@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.70"
 name = "tokio"
-version = "1.39.3"
+version = "1.42.0"
 authors = ["Tokio Contributors <team@tokio.rs>"]
 build = false
 autobins = false
@@ -378,6 +378,10 @@ name = "rt_handle_block_on"
 path = "tests/rt_handle_block_on.rs"
 
 [[test]]
+name = "rt_local"
+path = "tests/rt_local.rs"
+
+[[test]]
 name = "rt_metrics"
 path = "tests/rt_metrics.rs"
 
@@ -512,6 +516,10 @@ path = "tests/task_blocking.rs"
 [[test]]
 name = "task_builder"
 path = "tests/task_builder.rs"
+
+[[test]]
+name = "task_hooks"
+path = "tests/task_hooks.rs"
 
 [[test]]
 name = "task_id"
@@ -749,6 +757,9 @@ version = "0.5.5"
 features = ["all"]
 optional = true
 
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies.proptest]
+version = "1"
+
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies.socket2]
 version = "0.5.5"
 
@@ -763,7 +774,7 @@ features = ["tokio"]
 version = "0.3.58"
 
 [target."cfg(tokio_unstable)".dependencies.tracing]
-version = "0.1.25"
+version = "0.1.29"
 features = ["std"]
 optional = true
 default-features = false

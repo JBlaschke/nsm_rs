@@ -7,7 +7,6 @@ use std::io;
 use std::io::Write;
 use std::sync::Mutex;
 
-#[cfg(feature = "logging")]
 use crate::log::warn;
 use crate::KeyLog;
 
@@ -19,14 +18,11 @@ struct KeyLogFileInner {
 
 impl KeyLogFileInner {
     fn new(var: Option<OsString>) -> Self {
-        let path = match &var {
-            Some(path) => path,
-            None => {
-                return Self {
-                    file: None,
-                    buf: Vec::new(),
-                };
-            }
+        let Some(path) = &var else {
+            return Self {
+                file: None,
+                buf: Vec::new(),
+            };
         };
 
         #[cfg_attr(not(feature = "logging"), allow(unused_variables))]

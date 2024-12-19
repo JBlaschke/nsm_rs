@@ -6,12 +6,12 @@ function(msbuild_aarch64_asm)
   set(options "")
   set(oneValueArgs TARGET OUTPUT_OBJECTS)
   set(multiValueArgs ASM_FILES)
-  
+
   cmake_parse_arguments(MSBUILD_AARCH64_ASM "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGV})
- 
+
   # Set the output directory for object files
   set(OBJ_DIR "${CMAKE_CURRENT_BINARY_DIR}/${MSBUILD_AARCH64_ASM_TARGET}.dir/$<CONFIG>")
-  
+
   # Initialize list to store assembled object files
   set(ASSEMBLED_OBJECTS "")
 
@@ -22,9 +22,9 @@ function(msbuild_aarch64_asm)
 
     add_custom_command(
       OUTPUT ${OBJ_FILE}
-      COMMAND "${CMAKE_ASM_COMPILER}" 
-              --target=arm64-pc-windows-msvc 
-              /c 
+      COMMAND "${CMAKE_ASM_COMPILER}"
+              --target=arm64-pc-windows-msvc
+              /c
               /I "${PROJECT_BINARY_DIR}/symbol_prefix_include/"
               /I "${PROJECT_SOURCE_DIR}/include"
               /o "${OBJ_FILE}"
@@ -32,7 +32,7 @@ function(msbuild_aarch64_asm)
       DEPENDS ${ASM_FILE}
       COMMENT "Assembling ${ASM_FILE}"
     )
-    
+
     # Mark the generated object file as an external object
     set_source_files_properties(${OBJ_FILE} PROPERTIES EXTERNAL_OBJECT TRUE)
 
@@ -63,7 +63,7 @@ if(NOT OPENSSL_NO_ASM)
       set(PERLASM_STYLE linux64le)
     else()
       if(ARCH STREQUAL "x86")
-        set(PERLASM_FLAGS "-fPIC -DOPENSSL_IA32_SSE2")
+        set(PERLASM_FLAGS "-fPIC")
       endif()
       if(APPLE)
         set(PERLASM_STYLE macosx)
@@ -109,11 +109,14 @@ if(NOT OPENSSL_NO_ASM)
         set(PERLASM_STYLE nasm)
       else()
         set(PERLASM_STYLE win32n)
-        set(PERLASM_FLAGS "-DOPENSSL_IA32_SSE2")
       endif()
       find_program(NASM_EXECUTABLE nasm)
       set(CMAKE_ASM_NASM_COMPILER ${NASM_EXECUTABLE})
-      set(CMAKE_ASM_NASM_FLAGS "${CMAKE_ASM_NASM_FLAGS} -gcv8")
+      if("${CMAKE_BUILD_TYPE_LOWER}" STREQUAL "relwithdebinfo" OR
+              "${CMAKE_BUILD_TYPE_LOWER}" STREQUAL "debug")
+        # Provide debug in the default format
+        set(CMAKE_ASM_NASM_FLAGS "${CMAKE_ASM_NASM_FLAGS} -g")
+      endif()
 
       # On Windows, we use the NASM output.
       set(ASM_EXT asm)
@@ -137,10 +140,16 @@ if(PERL_EXECUTABLE)
       set(PERLASM_FLAGS "${PERLASM_FLAGS} -DMY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX")
     endif()
 
+    set(PERL_COMMAND "${PERL_EXECUTABLE}")
+    list(APPEND PERL_COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/${src}")
+    list(APPEND PERL_COMMAND "${PERLASM_STYLE}")
+    list(APPEND PERL_COMMAND "${dest}")
+    list(APPEND PERL_COMMAND ${PERLASM_FLAGS})
+
     add_custom_command(
       OUTPUT ${dest}
       COMMAND ${CMAKE_COMMAND} -E make_directory ${dir}
-      COMMAND ${PERL_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${src} ${PERLASM_STYLE} ${dest} ${PERLASM_FLAGS}
+      COMMAND ${PERL_COMMAND}
       DEPENDS
       ${src}
       ${PROJECT_SOURCE_DIR}/crypto/perlasm/arm-xlate.pl
@@ -298,6 +307,7 @@ if(GO_EXECUTABLE)
     err/engine.errordata
     err/evp.errordata
     err/hkdf.errordata
+    err/hmac.errordata
     err/obj.errordata
     err/ocsp.errordata
     err/pem.errordata
@@ -319,10 +329,8 @@ if(ENABLE_DILITHIUM)
   set(
     DILITHIUM_SOURCES
 
-    dilithium/dilithium3r3_ref.c
-    dilithium/p_dilithium3.c
-    dilithium/p_dilithium3_asn1.c
-    dilithium/sig_dilithium3.c
+    evp_extra/p_pqdsa_asn1.c
+    dilithium/ml_dsa.c
   )
 endif()
 
@@ -399,10 +407,6 @@ add_library(
   cipher_extra/tls_cbc.c
   conf/conf.c
   crypto.c
-  curve25519/curve25519.c
-  curve25519/curve25519_nohw.c
-  curve25519/curve25519_s2n_bignum_asm.c
-  curve25519/spake25519.c
   des/des.c
   dh_extra/params.c
   dh_extra/dh_asn1.c
@@ -419,12 +423,13 @@ add_library(
   err_data.c
   engine/engine.c
   evp_extra/evp_asn1.c
+  evp_extra/p_dh.c
+  evp_extra/p_dh_asn1.c
+  evp_extra/p_dsa.c
   evp_extra/p_dsa_asn1.c
   evp_extra/p_ec_asn1.c
-  evp_extra/p_ed25519.c
   evp_extra/p_ed25519_asn1.c
   evp_extra/p_hmac_asn1.c
-  evp_extra/p_kem.c
   evp_extra/p_kem_asn1.c
   evp_extra/p_rsa_asn1.c
   evp_extra/p_x25519.c
@@ -436,8 +441,6 @@ add_library(
   ex_data.c
   hpke/hpke.c
   hrss/hrss.c
-  kem/kem.c
-  kem/kem_methods.c
   kyber/kyber512r3_ref.c
   kyber/kyber768r3_ref.c
   kyber/kyber1024r3_ref.c
@@ -445,8 +448,6 @@ add_library(
   kyber/kem_kyber.c
   lhash/lhash.c
   mem.c
-  ml_kem/ml_kem_512_ipd.c
-  ml_kem/ml_kem.c
   obj/obj.c
   obj/obj_xref.c
   ocsp/ocsp_asn.c
@@ -465,7 +466,10 @@ add_library(
   pem/pem_pkey.c
   pem/pem_x509.c
   pem/pem_xaux.c
+  pkcs7/bio/cipher.c
+  pkcs7/bio/md.c
   pkcs7/pkcs7.c
+  pkcs7/pkcs7_asn1.c
   pkcs7/pkcs7_x509.c
   pkcs8/pkcs8.c
   pkcs8/pkcs8_x509.c
@@ -479,7 +483,6 @@ add_library(
   rand_extra/forkunsafe.c
   rand_extra/fuchsia.c
   rand_extra/rand_extra.c
-  rand_extra/pq_custom_randombytes.c
   rand_extra/trusty.c
   rand_extra/windows.c
   rc4/rc4.c
@@ -492,6 +495,7 @@ add_library(
   rsa_extra/rsa_print.c
   stack/stack.c
   siphash/siphash.c
+  spake25519/spake25519.c
   thread.c
   thread_none.c
   thread_pthread.c
@@ -685,7 +689,7 @@ if(FIPS_SHARED)
     #
     # Note: we use CMAKE_SYSTEM_PROCESSOR directly instead of the ARCH variable
     # because if NO_ASM build flag is defined then ARCH is set to "generic".
-    if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64.*|ARM64|aarch64")
+    if (APPLE AND CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "arm64.*|aarch64")
       add_custom_command(
         TARGET crypto POST_BUILD
         COMMAND codesign -s - $<TARGET_FILE:crypto>
@@ -698,7 +702,13 @@ else()
   build_libcrypto(crypto $<TARGET_OBJECTS:fipsmodule>)
 endif()
 
-if(NOT ANDROID)
+# CMAKE_SYSTEM_NAME is "Generic" for embedded OSes:
+# https://cmake.org/cmake/help/book/mastering-cmake/chapter/Cross%20Compiling%20With%20CMake.html#toolchain-files
+#
+# For now we assume embedded OSes do not have threads. Additionally, the Threads
+# package does not work with Android, but Android does not require any extra
+# parameters to link pthreads.
+if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Generic|Android)$")
   find_package(Threads REQUIRED)
   target_link_libraries(crypto PUBLIC Threads::Threads)
 endif()
@@ -766,13 +776,10 @@ if(BUILD_TESTING)
     conf/conf_test.cc
     constant_time_test.cc
     crypto_test.cc
-    curve25519/ed25519_test.cc
-    curve25519/spake25519_test.cc
-    curve25519/x25519_test.cc
     ecdh_extra/ecdh_test.cc
     dh_extra/dh_test.cc
     digest_extra/digest_test.cc
-    dilithium/p_dilithium_test.cc
+    dilithium/p_pqdsa_test.cc
     dsa/dsa_test.cc
     des/des_test.cc
     endian_test.cc
@@ -784,9 +791,12 @@ if(BUILD_TESTING)
     fipsmodule/bn/bn_test.cc
     fipsmodule/bn/bn_assert_test.cc
     fipsmodule/cmac/cmac_test.cc
+    fipsmodule/curve25519/ed25519_test.cc
+    fipsmodule/curve25519/x25519_test.cc
     fipsmodule/ec/ec_test.cc
     fipsmodule/ec/p256-nistz_test.cc
     fipsmodule/ecdsa/ecdsa_test.cc
+    fipsmodule/evp/evp_ctx_test.cc
     fipsmodule/kdf/kdf_test.cc
     fipsmodule/md5/md5_test.cc
     fipsmodule/modes/gcm_test.cc
@@ -800,6 +810,7 @@ if(BUILD_TESTING)
     fipsmodule/sha/sha_test.cc
     fipsmodule/sha/sha3_test.cc
     fipsmodule/cpucap/cpu_arm_linux_test.cc
+    fipsmodule/cpucap/cpu_aarch64_dit_test.cc
     fipsmodule/hkdf/hkdf_test.cc
     fipsmodule/sshkdf/sshkdf_test.cc
     hpke/hpke_test.cc
@@ -810,6 +821,8 @@ if(BUILD_TESTING)
     obj/obj_test.cc
     ocsp/ocsp_test.cc
     pem/pem_test.cc
+    pkcs7/bio/bio_cipher_test.cc
+    pkcs7/bio/bio_md_test.cc
     pkcs7/pkcs7_test.cc
     pkcs8/pkcs8_test.cc
     pkcs8/pkcs12_test.cc
@@ -823,6 +836,8 @@ if(BUILD_TESTING)
     self_test.cc
     stack/stack_test.cc
     siphash/siphash_test.cc
+    spake25519/spake25519_test.cc
+    test/file_util.cc
     test/file_test_gtest.cc
     thread_test.cc
     trust_token/trust_token_test.cc

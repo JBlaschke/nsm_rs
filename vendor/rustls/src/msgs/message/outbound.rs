@@ -2,9 +2,9 @@ use alloc::vec::Vec;
 
 use super::{MessageError, PlainMessage, HEADER_SIZE, MAX_PAYLOAD};
 use crate::enums::{ContentType, ProtocolVersion};
-use crate::internal::record_layer::RecordLayer;
 use crate::msgs::base::Payload;
 use crate::msgs::codec::{Codec, Reader};
+use crate::record_layer::RecordLayer;
 
 /// A TLS frame, named `TLSPlaintext` in the standard.
 ///
@@ -94,7 +94,7 @@ impl<'a> OutboundChunks<'a> {
                     if size <= start || psize >= end {
                         continue;
                     }
-                    let start = if psize < start { start - psize } else { 0 };
+                    let start = start.saturating_sub(psize);
                     let end = if end - psize < len { end - psize } else { len };
                     vec.extend_from_slice(&chunk[start..end]);
                 }

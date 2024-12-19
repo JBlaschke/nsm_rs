@@ -13,8 +13,9 @@
 edition = "2021"
 rust-version = "1.63"
 name = "indexmap"
-version = "2.4.0"
+version = "2.7.0"
 build = false
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -47,7 +48,8 @@ rustdoc-args = [
 ]
 
 [package.metadata.release]
-no-dev-version = true
+allow-branch = ["master"]
+sign-tag = true
 tag-name = "{{version}}"
 
 [profile.bench]
@@ -97,8 +99,7 @@ version = "1.0"
 default-features = false
 
 [dependencies.hashbrown]
-version = "0.14.1"
-features = ["raw"]
+version = "0.15.0"
 default-features = false
 
 [dependencies.quickcheck]
@@ -107,7 +108,7 @@ optional = true
 default-features = false
 
 [dependencies.rayon]
-version = "1.5.3"
+version = "1.9"
 optional = true
 
 [dependencies.rustc-rayon]

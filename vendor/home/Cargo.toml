@@ -11,10 +11,11 @@
 
 [package]
 edition = "2021"
-rust-version = "1.70.0"
+rust-version = "1.81"
 name = "home"
-version = "0.5.9"
+version = "0.5.11"
 authors = ["Brian Anderson <andersrb@gmail.com>"]
+build = false
 include = [
     "/src",
     "/Cargo.toml",
@@ -22,14 +23,24 @@ include = [
     "/LICENSE-*",
     "/README.md",
 ]
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "Shared definitions of home directories."
+homepage = "https://github.com/rust-lang/cargo"
 documentation = "https://docs.rs/home"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rust-lang/cargo"
 
+[lib]
+name = "home"
+path = "src/lib.rs"
+
 [target."cfg(windows)".dependencies.windows-sys]
-version = "0.52"
+version = "0.59"
 features = [
     "Win32_Foundation",
     "Win32_UI_Shell",
@@ -45,6 +56,10 @@ self_named_module_files = "warn"
 
 [lints.clippy.all]
 level = "allow"
+priority = -2
+
+[lints.clippy.correctness]
+level = "warn"
 priority = -1
 
 [lints.rust]

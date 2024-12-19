@@ -128,6 +128,7 @@ impl Builder {
     }
 
     /// Computes the digest of the data.
+    // FIXME: deprecate and remove: don't expose CFData in Rust APIs.
     pub fn execute(&self, data: &CFData) -> Result<CFData, CFError> {
         unsafe {
             let digest_type = match self.digest_type {
@@ -153,9 +154,7 @@ impl Builder {
             transform.set_attribute(&key, data)?;
 
             let result = transform.execute()?;
-            Ok(CFData::wrap_under_get_rule(
-                result.as_CFTypeRef() as CFDataRef
-            ))
+            Ok(CFData::wrap_under_get_rule(result.as_CFTypeRef() as CFDataRef))
         }
     }
 }
@@ -167,28 +166,15 @@ mod test {
     #[test]
     fn md5() {
         let data = CFData::from_buffer("The quick brown fox jumps over the lazy dog".as_bytes());
-        let hash = Builder::new()
-            .type_(DigestType::md5())
-            .execute(&data)
-            .unwrap();
-        assert_eq!(
-            hex::encode(hash.bytes()),
-            "9e107d9d372bb6826bd81d3542a419d6"
-        );
+        let hash = Builder::new().type_(DigestType::md5()).execute(&data).unwrap();
+        assert_eq!(hex::encode(hash.bytes()), "9e107d9d372bb6826bd81d3542a419d6");
     }
 
     #[test]
     fn hmac_sha1() {
         let data = CFData::from_buffer("The quick brown fox jumps over the lazy dog".as_bytes());
         let key = CFData::from_buffer(b"key");
-        let hash = Builder::new()
-            .type_(DigestType::hmac_sha1())
-            .hmac_key(key)
-            .execute(&data)
-            .unwrap();
-        assert_eq!(
-            hex::encode(hash.bytes()),
-            "de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9"
-        );
+        let hash = Builder::new().type_(DigestType::hmac_sha1()).hmac_key(key).execute(&data).unwrap();
+        assert_eq!(hex::encode(hash.bytes()), "de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9");
     }
 }

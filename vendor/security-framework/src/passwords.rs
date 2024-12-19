@@ -27,14 +27,22 @@ pub fn set_generic_password(service: &str, account: &str, password: &[u8]) -> Re
     set_password_internal(&mut options, password)
 }
 
+/// Set a generic password using the given password options.
+/// Creates or updates a keychain entry.
+pub fn set_generic_password_options(password: &[u8], mut options: PasswordOptions) -> Result<()> {
+    set_password_internal(&mut options, password)
+}
+
 /// Get the generic password for the given service and account.  If no matching
 /// keychain entry exists, fails with error code `errSecItemNotFound`.
 pub fn get_generic_password(service: &str, account: &str) -> Result<Vec<u8>> {
     let mut options = PasswordOptions::new_generic_password(service, account);
+    #[allow(deprecated)]
     options.query.push((
         unsafe { CFString::wrap_under_get_rule(kSecReturnData) },
         CFBoolean::from(true).into_CFType(),
     ));
+    #[allow(deprecated)]
     let params = CFDictionary::from_CFType_pairs(&options.query);
     let mut ret: CFTypeRef = std::ptr::null();
     cvt(unsafe { SecItemCopyMatching(params.as_concrete_TypeRef(), &mut ret) })?;
@@ -45,6 +53,7 @@ pub fn get_generic_password(service: &str, account: &str) -> Result<Vec<u8>> {
 /// If none exists, fails with error code `errSecItemNotFound`.
 pub fn delete_generic_password(service: &str, account: &str) -> Result<()> {
     let options = PasswordOptions::new_generic_password(service, account);
+    #[allow(deprecated)]
     let params = CFDictionary::from_CFType_pairs(&options.query);
     cvt(unsafe { SecItemDelete(params.as_concrete_TypeRef()) })
 }
@@ -94,10 +103,12 @@ pub fn get_internet_password(
         protocol,
         authentication_type,
     );
+    #[allow(deprecated)]
     options.query.push((
         unsafe { CFString::wrap_under_get_rule(kSecReturnData) },
         CFBoolean::from(true).into_CFType(),
     ));
+    #[allow(deprecated)]
     let params = CFDictionary::from_CFType_pairs(&options.query);
     let mut ret: CFTypeRef = std::ptr::null();
     cvt(unsafe { SecItemCopyMatching(params.as_concrete_TypeRef(), &mut ret) })?;
@@ -124,12 +135,14 @@ pub fn delete_internet_password(
         protocol,
         authentication_type,
     );
+    #[allow(deprecated)]
     let params = CFDictionary::from_CFType_pairs(&options.query);
     cvt(unsafe { SecItemDelete(params.as_concrete_TypeRef()) })
 }
 
 // This starts by trying to create the password with the given query params.
 // If the creation attempt reveals that one exists, its password is updated.
+#[allow(deprecated)]
 fn set_password_internal(options: &mut PasswordOptions, password: &[u8]) -> Result<()> {
     let query_len = options.query.len();
     options.query.push((
@@ -211,6 +224,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "OSX_10_12")]
     fn update_generic() {
         let name = "update_generic";
         set_generic_password(name, name, name.as_bytes()).expect("set_generic_password");

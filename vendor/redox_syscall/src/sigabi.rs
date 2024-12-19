@@ -6,8 +6,16 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 pub struct SigProcControl {
     pub pending: AtomicU64,
     pub actions: [RawAction; 64],
+    pub sender_infos: [AtomicU64; 32],
+    //pub queue: [RealtimeSig; 32], TODO
+    // qhead, qtail TODO
 }
-#[derive(Debug)]
+/*#[derive(Debug)]
+#[repr(transparent)]
+pub struct RealtimeSig {
+    pub arg: NonatomicUsize,
+}*/
+#[derive(Debug, Default)]
 #[repr(C, align(16))]
 pub struct RawAction {
     /// Only two MSBs are interesting for the kernel. If bit 63 is set, signal is ignored. If bit
@@ -26,15 +34,40 @@ pub struct Sigcontrol {
     // composed of [lo "pending" | lo "unmasked", hi "pending" | hi "unmasked"]
     pub word: [AtomicU64; 2],
 
+    // lo = sender pid, hi = sender ruid
+    pub sender_infos: [AtomicU64; 32],
+
     pub control_flags: SigatomicUsize,
 
-    pub saved_ip: NonatomicUsize, // rip/eip/pc
-    pub saved_archdep_reg: NonatomicUsize, // rflags/eflags/x0
+    pub saved_ip: NonatomicUsize,          // rip/eip/pc
+    pub saved_archdep_reg: NonatomicUsize, // rflags(x64)/eflags(x86)/x0(aarch64)/t0(riscv64)
+}
+#[derive(Clone, Copy, Debug)]
+pub struct SenderInfo {
+    pub pid: u32,
+    pub ruid: u32,
+}
+impl SenderInfo {
+    #[inline]
+    pub fn raw(self) -> u64 {
+        u64::from(self.pid) | (u64::from(self.ruid) << 32)
+    }
+    #[inline]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self {
+            pid: raw as u32,
+            ruid: (raw >> 32) as u32,
+        }
+    }
 }
 
 impl Sigcontrol {
-    pub fn currently_pending_unblocked(&self) -> u64 {
-        let [w0, w1] = self.word.each_ref().map(|w| w.load(Ordering::Relaxed)).map(|w| (w & 0xffff_ffff) & (w >> 32));
+    pub fn currently_pending_unblocked(&self, proc: &SigProcControl) -> u64 {
+        let proc_pending = proc.pending.load(Ordering::Relaxed);
+        let [w0, w1] = core::array::from_fn(|i| {
+            let w = self.word[i].load(Ordering::Relaxed);
+            ((w | (proc_pending >> (i * 32))) & 0xffff_ffff) & (w >> 32)
+        });
         //core::sync::atomic::fence(Ordering::Acquire);
         w0 | (w1 << 32)
     }
@@ -83,6 +116,11 @@ pub struct NonatomicUsize(AtomicUsize);
 
 impl NonatomicUsize {
     #[inline]
+    pub const fn new(a: usize) -> Self {
+        Self(AtomicUsize::new(a))
+    }
+
+    #[inline]
     pub fn get(&self) -> usize {
         self.0.load(Ordering::Relaxed)
     }
@@ -105,7 +143,8 @@ impl SigProcControl {
     }
     pub fn signal_will_stop(&self, sig: usize) -> bool {
         use crate::flag::*;
-        matches!(sig, SIGTSTP | SIGTTIN | SIGTTOU) && self.actions[sig - 1].first.load(Ordering::Relaxed) & (1 << 62) != 0
+        matches!(sig, SIGTSTP | SIGTTIN | SIGTTOU)
+            && self.actions[sig - 1].first.load(Ordering::Relaxed) & (1 << 62) != 0
     }
 }
 
@@ -210,23 +249,40 @@ mod atomic {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::Ordering;
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
 
     #[cfg(not(loom))]
-    use std::{thread, sync::Mutex};
+    use std::{sync::Mutex, thread};
     #[cfg(not(loom))]
-    fn model(f: impl FnOnce()) { f() }
+    fn model(f: impl FnOnce()) {
+        f()
+    }
 
     #[cfg(loom)]
-    use loom::{model, thread, sync::Mutex};
+    use loom::{model, sync::Mutex, thread};
 
-    use crate::Sigcontrol;
+    use crate::{RawAction, SigProcControl, Sigcontrol};
 
-    #[derive(Default)]
     struct FakeThread {
         ctl: Sigcontrol,
+        pctl: SigProcControl,
         ctxt: Mutex<()>,
+    }
+    impl Default for FakeThread {
+        fn default() -> Self {
+            Self {
+                ctl: Sigcontrol::default(),
+                pctl: SigProcControl {
+                    pending: AtomicU64::new(0),
+                    actions: core::array::from_fn(|_| RawAction::default()),
+                    sender_infos: Default::default(),
+                },
+                ctxt: Default::default(),
+            }
+        }
     }
 
     #[test]
@@ -241,7 +297,11 @@ mod tests {
                     fake_thread.ctl.set_allowset(!0);
                     {
                         let _g = fake_thread.ctxt.lock();
-                        if fake_thread.ctl.currently_pending_unblocked() == 0 {
+                        if fake_thread
+                            .ctl
+                            .currently_pending_unblocked(&fake_thread.pctl)
+                            == 0
+                        {
                             drop(_g);
                             thread::park();
                         }

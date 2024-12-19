@@ -13,10 +13,10 @@
 edition = "2021"
 rust-version = "1.63.0"
 name = "aws-lc-sys"
-version = "0.20.1"
+version = "0.24.0"
 authors = ["AWS-LC"]
 build = "builder/main.rs"
-links = "aws_lc_0_20_1"
+links = "aws_lc_0_24_0"
 include = [
     "LICENSE",
     "/aws-lc/**/*.c",
@@ -45,6 +45,8 @@ include = [
     "/aws-lc/util/fipstools/**/*.c",
     "/CMakeLists.txt",
     "/builder/**/*.rs",
+    "/builder/**/*.bat",
+    "/builder/**/*.obj",
     "/Cargo.toml",
     "/generated-include/**",
     "/include/**",
@@ -52,6 +54,7 @@ include = [
     "/src/**/*.rs",
     "/tests/**/*.rs",
 ]
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -62,7 +65,7 @@ license = "ISC AND (Apache-2.0 OR ISC) AND OpenSSL"
 repository = "https://github.com/aws/aws-lc-rs"
 
 [package.metadata.aws-lc-sys]
-commit-hash = "47333e18117875148fc737c38c2d5586b45c7dfc"
+commit-hash = "1be42a3e16a53c229690ae8215f0de8e2a1a54e7"
 
 [lib]
 name = "aws_lc_sys"
@@ -79,7 +82,7 @@ version = "0.2.121"
 version = "1.0.11"
 
 [build-dependencies.cc]
-version = "1.0.83"
+version = "1.0.100"
 features = ["parallel"]
 
 [build-dependencies.cmake]
@@ -94,11 +97,12 @@ version = "1.3"
 [features]
 asan = []
 bindgen = ["dep:bindgen"]
-ssl = []
+prebuilt-nasm = []
+ssl = ["bindgen"]
 
-[target.'cfg(any(all(any(target_arch = "x86_64", target_arch = "aarch64"), any(target_os = "linux", target_os = "macos"), any(target_env = "gnu", target_env = "musl", target_env = "")), all(target_arch = "x86", target_os = "linux", target_env = "gnu")))'.build-dependencies.bindgen]
-version = "0.69.2"
+[target.'cfg(any(all(any(target_arch="x86_64",target_arch="aarch64"),any(target_os="linux",target_os="macos",target_os="windows"),any(target_env="gnu",target_env="musl",target_env="msvc",target_env="")),all(target_arch="x86",target_os="windows",target_env="msvc"),all(target_arch="x86",target_os="linux",target_env="gnu")))'.build-dependencies.bindgen]
+version = "0.69.5"
 optional = true
 
-[target.'cfg(not(any(all(any(target_arch = "x86_64", target_arch = "aarch64"), any(target_os = "linux", target_os = "macos"), any(target_env = "gnu", target_env = "musl", target_env = "")), all(target_arch = "x86", target_os = "linux", target_env = "gnu"))))'.build-dependencies.bindgen]
-version = "0.69.2"
+[target.'cfg(not(any(all(any(target_arch="x86_64",target_arch="aarch64"),any(target_os="linux",target_os="macos",target_os="windows"),any(target_env="gnu",target_env="musl",target_env="msvc",target_env="")),all(target_arch="x86",target_os="windows",target_env="msvc"),all(target_arch="x86",target_os="linux",target_env="gnu"))))'.build-dependencies.bindgen]
+version = "0.69.5"

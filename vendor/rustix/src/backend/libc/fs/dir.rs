@@ -220,18 +220,19 @@ impl Dir {
     /// `fchdir(self)`
     #[cfg(feature = "process")]
     #[cfg(not(any(target_os = "fuchsia", target_os = "vita", target_os = "wasi")))]
-    #[cfg_attr(doc_cfg, doc(cfg(feature = "process")))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "process")))]
     #[inline]
     pub fn chdir(&self) -> io::Result<()> {
         fchdir(unsafe { BorrowedFd::borrow_raw(c::dirfd(self.libc_dir.as_ptr())) })
     }
 }
 
-/// `Dir` implements `Send` but not `Sync`, because we use `readdir` which is
-/// not guaranteed to be thread-safe. Users can wrap this in a `Mutex` if they
-/// need `Sync`, which is effectively what'd need to do to implement `Sync`
-/// ourselves.
+/// `Dir` is `Send` and `Sync`, because even though it contains internal
+/// state, all methods that modify the state require a `mut &self` and
+/// can therefore not be called concurrently. Calling them from different
+/// threads sequentially is fine.
 unsafe impl Send for Dir {}
+unsafe impl Sync for Dir {}
 
 impl Drop for Dir {
     #[inline]

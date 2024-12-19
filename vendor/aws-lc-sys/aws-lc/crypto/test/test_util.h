@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include <gtest/gtest.h>
+
 #include <openssl/span.h>
 
 #include "../internal.h"
@@ -73,14 +75,33 @@ std::string EncodeHex(bssl::Span<const uint8_t> in);
 // |X509*|.
 bssl::UniquePtr<X509> CertFromPEM(const char *pem);
 
+// CertsToStack converts a vector of |X509*| to an OpenSSL STACK_OF(X509),
+// bumping the reference counts for each certificate in question.
+bssl::UniquePtr<STACK_OF(X509)> CertsToStack(const std::vector<X509 *> &certs);
+
+// RSAFromPEM parses the given, NUL-terminated pem block and returns an
+// |RSA*|.
+bssl::UniquePtr<RSA> RSAFromPEM(const char *pem);
+
+// kReferenceTime is the reference time used by certs created by |MakeTestCert|.
+// It is the unix timestamp for Sep 27th, 2016.
+static const int64_t kReferenceTime = 1474934400;
+
+// MakeTestCert creates an X509 certificate for use in testing. It is configured
+// to be valid from 1 day prior |kReferenceTime| until 1 day after
+// |kReferenceTime|.
+bssl::UniquePtr<X509> MakeTestCert(const char *issuer,
+                                          const char *subject, EVP_PKEY *key,
+                                          bool is_ca);
+
 // unique_ptr will automatically call fclose on the file descriptior when the
 // variable goes out of scope, so we need to specify BIO_NOCLOSE close flags
 // to avoid a double-free condition.
-struct FileCloser {
+struct TempFileCloser {
   void operator()(FILE *f) const { fclose(f); }
 };
 
-using TempFILE = std::unique_ptr<FILE, FileCloser>;
+using TempFILE = std::unique_ptr<FILE, TempFileCloser>;
 
 #if defined(OPENSSL_WINDOWS)
 #include <windows.h>
@@ -102,5 +123,9 @@ typedef struct {
 
 void CustomDataFree(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
                            int index, long argl, void *argp);
+// ErrorEquals asserts that |err| is an error with library |lib| and reason
+// |reason|.
+testing::AssertionResult ErrorEquals(uint32_t err, int lib, int reason);
+
 
 #endif  // OPENSSL_HEADER_CRYPTO_TEST_TEST_UTIL_H

@@ -28,7 +28,6 @@ impl EphemeralPrivateKey {
     ///
     /// # *ring* Compatibility
     ///  Our implementation ignores the `SecureRandom` parameter.
-    ///
     // # FIPS
     // Use this function with one of the following algorithms:
     // * `ECDH_P256`
@@ -42,7 +41,7 @@ impl EphemeralPrivateKey {
     }
 
     #[cfg(test)]
-    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::missing_errors_doc, missing_docs)]
     pub fn generate_for_test(
         alg: &'static Algorithm,
         rng: &dyn SecureRandom,
@@ -87,7 +86,6 @@ impl EphemeralPrivateKey {
 /// After the key agreement is done, `agree_ephemeral` calls `kdf` with the raw
 /// key material from the key agreement operation and then returns what `kdf`
 /// returns.
-///
 // # FIPS
 // Use this function with one of the following key algorithms:
 // * `ECDH_P256`
@@ -114,6 +112,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::agreement::{AlgorithmID, PublicKey};
+    use crate::encoding::{
+        AsBigEndian, AsDer, EcPublicKeyCompressedBin, EcPublicKeyUncompressedBin, PublicKeyX509Der,
+    };
     use crate::error::Unspecified;
     use crate::{agreement, rand, test, test_file};
 
@@ -348,6 +350,49 @@ mod tests {
         );
     }
 
+    fn check_computed_public_key(
+        algorithm: &AlgorithmID,
+        expected_format: &str,
+        expected_public_key_bytes: &[u8],
+        computed_public: &PublicKey,
+    ) {
+        match (algorithm, expected_format) {
+            (_, "X509") => {
+                let der = AsDer::<PublicKeyX509Der>::as_der(computed_public)
+                    .expect("serialize to uncompressed format");
+                assert_eq!(
+                    expected_public_key_bytes,
+                    der.as_ref(),
+                    "hex: {:x?}",
+                    der.as_ref()
+                );
+            }
+            (
+                AlgorithmID::ECDH_P256 | AlgorithmID::ECDH_P384 | AlgorithmID::ECDH_P521,
+                "COMPRESSED",
+            ) => {
+                let bin = AsBigEndian::<EcPublicKeyCompressedBin>::as_be_bytes(computed_public)
+                    .expect("serialize to compressed format");
+                assert_eq!(expected_public_key_bytes, bin.as_ref());
+            }
+            (
+                AlgorithmID::ECDH_P256 | AlgorithmID::ECDH_P384 | AlgorithmID::ECDH_P521,
+                "UNCOMPRESSED" | "",
+            ) => {
+                let bin = AsBigEndian::<EcPublicKeyUncompressedBin>::as_be_bytes(computed_public)
+                    .expect("serialize to uncompressed format");
+                assert_eq!(expected_public_key_bytes, bin.as_ref());
+                assert_eq!(expected_public_key_bytes, computed_public.as_ref());
+            }
+            (AlgorithmID::X25519, "") => {
+                assert_eq!(expected_public_key_bytes, computed_public.as_ref());
+            }
+            (ai, pf) => {
+                panic!("Unexpected PeerFormat={pf:?} for {ai:?}")
+            }
+        }
+    }
+
     #[test]
     fn agreement_agree_ephemeral() {
         let rng = rand::SystemRandom::new();
@@ -362,59 +407,55 @@ mod tests {
                 let peer_public =
                     agreement::UnparsedPublicKey::new(alg, test_case.consume_bytes("PeerQ"));
 
-                match test_case.consume_optional_string("Error") {
-                    None => {
-                        let my_private_bytes = test_case.consume_bytes("D");
-                        let my_private = {
-                            let rng = test::rand::FixedSliceRandom {
-                                bytes: &my_private_bytes,
-                            };
-                            agreement::EphemeralPrivateKey::generate_for_test(alg, &rng)?
+                let myq_format = test_case
+                    .consume_optional_string("MyQFormat")
+                    .unwrap_or_default();
+
+                if test_case.consume_optional_string("Error").is_none() {
+                    let my_private_bytes = test_case.consume_bytes("D");
+                    let my_private = {
+                        let rng = test::rand::FixedSliceRandom {
+                            bytes: &my_private_bytes,
                         };
-                        let my_public = test_case.consume_bytes("MyQ");
-                        let output = test_case.consume_bytes("Output");
+                        agreement::EphemeralPrivateKey::generate_for_test(alg, &rng)?
+                    };
+                    let my_public = test_case.consume_bytes("MyQ");
+                    let output = test_case.consume_bytes("Output");
 
-                        assert_eq!(my_private.algorithm(), alg);
+                    assert_eq!(my_private.algorithm(), alg);
 
-                        let computed_public = my_private.compute_public_key().unwrap();
-                        assert_eq!(computed_public.as_ref(), &my_public[..]);
+                    let computed_public = my_private.compute_public_key().unwrap();
 
-                        assert_eq!(my_private.algorithm(), alg);
+                    check_computed_public_key(&alg.id, &myq_format, &my_public, &computed_public);
 
-                        let result = agreement::agree_ephemeral(
-                            my_private,
-                            &peer_public,
-                            (),
-                            |key_material| {
-                                assert_eq!(key_material, &output[..]);
-                                Ok(())
-                            },
-                        );
-                        assert_eq!(
-                            result,
-                            Ok(()),
-                            "Failed on private key: {:?}",
-                            test::to_hex(my_private_bytes)
-                        );
-                    }
+                    assert_eq!(my_private.algorithm(), alg);
 
-                    Some(_) => {
-                        fn kdf_not_called(_: &[u8]) -> Result<(), ()> {
-                            panic!(
-                                "The KDF was called during ECDH when the peer's \
+                    let result =
+                        agreement::agree_ephemeral(my_private, &peer_public, (), |key_material| {
+                            assert_eq!(key_material, &output[..]);
+                            Ok(())
+                        });
+                    assert_eq!(
+                        result,
+                        Ok(()),
+                        "Failed on private key: {:?}",
+                        test::to_hex(my_private_bytes)
+                    );
+                } else {
+                    fn kdf_not_called(_: &[u8]) -> Result<(), ()> {
+                        panic!(
+                            "The KDF was called during ECDH when the peer's \
                          public key is invalid."
-                            );
-                        }
-                        let dummy_private_key =
-                            agreement::EphemeralPrivateKey::generate(alg, &rng)?;
-                        assert!(agreement::agree_ephemeral(
-                            dummy_private_key,
-                            &peer_public,
-                            (),
-                            kdf_not_called
-                        )
-                        .is_err());
+                        );
                     }
+                    let dummy_private_key = agreement::EphemeralPrivateKey::generate(alg, &rng)?;
+                    assert!(agreement::agree_ephemeral(
+                        dummy_private_key,
+                        &peer_public,
+                        (),
+                        kdf_not_called
+                    )
+                    .is_err());
                 }
 
                 Ok(())

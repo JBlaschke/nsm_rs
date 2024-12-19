@@ -13,8 +13,9 @@
 edition = "2021"
 rust-version = "1.60"
 name = "rustls-pki-types"
-version = "1.8.0"
+version = "1.10.1"
 build = false
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -51,6 +52,10 @@ name = "key_type"
 path = "tests/key_type.rs"
 
 [[test]]
+name = "pem"
+path = "tests/pem.rs"
+
+[[test]]
 name = "server_name"
 path = "tests/server_name.rs"
 
@@ -63,3 +68,6 @@ web = ["web-time"]
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies.web-time]
 version = "1"
 optional = true
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies.crabgrind]
+version = "=0.1.9"

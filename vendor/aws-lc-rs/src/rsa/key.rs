@@ -18,8 +18,9 @@ use crate::{
     error::{KeyRejected, Unspecified},
     fips::indicator_check,
     hex,
-    ptr::{DetachableLcPtr, LcPtr, Pointer},
+    ptr::{DetachableLcPtr, LcPtr},
     rand,
+    rsa::PublicEncryptingKey,
     sealed::Sealed,
 };
 #[cfg(feature = "fips")]
@@ -40,7 +41,6 @@ use core::{
 // use core::ffi::c_int;
 use std::os::raw::c_int;
 
-use mirai_annotations::verify_unreachable;
 #[cfg(feature = "ring-io")]
 use untrusted::Input;
 use zeroize::Zeroize;
@@ -109,7 +109,7 @@ unsafe impl Sync for KeyPair {}
 impl KeyPair {
     fn new(evp_pkey: LcPtr<EVP_PKEY>) -> Result<Self, KeyRejected> {
         KeyPair::validate_private_key(&evp_pkey)?;
-        let serialized_public_key = unsafe { PublicKey::new(&evp_pkey)? };
+        let serialized_public_key = PublicKey::new(&evp_pkey)?;
         Ok(KeyPair {
             evp_pkey,
             serialized_public_key,
@@ -221,12 +221,15 @@ impl KeyPair {
         let digest = digest::match_digest_type(&encoding.digest_algorithm().id);
 
         if 1 != unsafe {
+            // EVP_DigestSignInit does not mutate |pkey| for thread-safety purposes and may be
+            // used concurrently with other non-mutating functions on |pkey|.
+            // https://github.com/aws/aws-lc/blob/9b4b5a15a97618b5b826d742419ccd54c819fa42/include/openssl/evp.h#L297-L313
             EVP_DigestSignInit(
                 md_ctx.as_mut_ptr(),
                 &mut pctx,
                 *digest,
                 null_mut(),
-                *self.evp_pkey,
+                *self.evp_pkey.as_mut_unsafe(),
             )
         } {
             return Err(Unspecified);
@@ -258,9 +261,9 @@ impl KeyPair {
         match self.evp_pkey.get_rsa() {
             Ok(rsa) => {
                 // https://github.com/awslabs/aws-lc/blob/main/include/openssl/rsa.h#L99
-                unsafe { RSA_size(*rsa) as usize }
+                unsafe { RSA_size(*rsa.as_const()) as usize }
             }
-            Err(_) => verify_unreachable!(),
+            Err(_) => unreachable!(),
         }
     }
 }
@@ -312,14 +315,14 @@ impl Drop for PublicKey {
 }
 
 impl PublicKey {
-    pub(super) unsafe fn new(evp_pkey: &LcPtr<EVP_PKEY>) -> Result<Self, Unspecified> {
+    pub(super) fn new(evp_pkey: &LcPtr<EVP_PKEY>) -> Result<Self, Unspecified> {
         let key = encoding::rfc8017::encode_public_key_der(evp_pkey)?;
         #[cfg(feature = "ring-io")]
         {
             let pubkey = evp_pkey.get_rsa()?;
-            let modulus = ConstPointer::new(RSA_get0_n(*pubkey))?;
+            let modulus = ConstPointer::new(unsafe { RSA_get0_n(*pubkey.as_const()) })?;
             let modulus = modulus.to_be_bytes().into_boxed_slice();
-            let exponent = ConstPointer::new(RSA_get0_e(*pubkey))?;
+            let exponent = ConstPointer::new(unsafe { RSA_get0_e(*pubkey.as_const()) })?;
             let exponent = exponent.to_be_bytes().into_boxed_slice();
             Ok(PublicKey {
                 key,
@@ -343,6 +346,7 @@ impl Debug for PublicKey {
 }
 
 impl AsRef<[u8]> for PublicKey {
+    /// DER encode a RSA public key to (RFC 8017) `RSAPublicKey` structure.
     fn as_ref(&self) -> &[u8] {
         self.key.as_ref()
     }
@@ -363,7 +367,7 @@ impl PublicKey {
     }
 }
 
-/// Low-level API for the verification of RSA signatures.
+/// Low-level API for RSA public keys.
 ///
 /// When the public key is in DER-encoded PKCS#1 ASN.1 format, it is
 /// recommended to use `aws_lc_rs::signature::verify()` with
@@ -399,7 +403,7 @@ where
     B: AsRef<[u8]> + Debug,
 {
     #[inline]
-    unsafe fn build_rsa(&self) -> Result<LcPtr<EVP_PKEY>, ()> {
+    fn build_rsa(&self) -> Result<LcPtr<EVP_PKEY>, ()> {
         let n_bytes = self.n.as_ref();
         if n_bytes.is_empty() || n_bytes[0] == 0u8 {
             return Err(());
@@ -412,15 +416,15 @@ where
         }
         let e_bn = DetachableLcPtr::try_from(e_bytes)?;
 
-        let rsa = DetachableLcPtr::new(RSA_new())?;
-        if 1 != RSA_set0_key(*rsa, *n_bn, *e_bn, null_mut()) {
+        let rsa = DetachableLcPtr::new(unsafe { RSA_new() })?;
+        if 1 != unsafe { RSA_set0_key(*rsa, *n_bn, *e_bn, null_mut()) } {
             return Err(());
         }
         n_bn.detach();
         e_bn.detach();
 
-        let pkey = LcPtr::new(EVP_PKEY_new())?;
-        if 1 != EVP_PKEY_assign_RSA(*pkey, *rsa) {
+        let mut pkey = LcPtr::new(unsafe { EVP_PKEY_new() })?;
+        if 1 != unsafe { EVP_PKEY_assign_RSA(*pkey.as_mut(), *rsa) } {
             return Err(());
         }
         rsa.detach();
@@ -441,17 +445,31 @@ where
         message: &[u8],
         signature: &[u8],
     ) -> Result<(), Unspecified> {
-        unsafe {
-            let rsa = self.build_rsa()?;
-            super::signature::verify_rsa_signature(
-                params.digest_algorithm(),
-                params.padding(),
-                &rsa,
-                message,
-                signature,
-                params.bit_size_range(),
-            )
-        }
+        let rsa = self.build_rsa()?;
+        super::signature::verify_rsa_signature(
+            params.digest_algorithm(),
+            params.padding(),
+            &rsa,
+            message,
+            signature,
+            params.bit_size_range(),
+        )
+    }
+}
+
+impl<B> TryInto<PublicEncryptingKey> for PublicKeyComponents<B>
+where
+    B: AsRef<[u8]> + Debug,
+{
+    type Error = Unspecified;
+
+    /// Try to build a `PublicEncryptingKey` from the public key components.
+    ///
+    /// # Errors
+    /// `error::Unspecified` if the key failed to verify.
+    fn try_into(self) -> Result<PublicEncryptingKey, Self::Error> {
+        let rsa = self.build_rsa()?;
+        PublicEncryptingKey::new(rsa)
     }
 }
 
@@ -462,20 +480,20 @@ pub(super) fn generate_rsa_key(size: c_int, fips: bool) -> Result<LcPtr<EVP_PKEY
 
     const RSA_F4: u64 = 65537;
 
-    let rsa = DetachableLcPtr::new(unsafe { RSA_new() })?;
+    let mut rsa = DetachableLcPtr::new(unsafe { RSA_new() })?;
 
     if 1 != if fips {
-        indicator_check!(unsafe { RSA_generate_key_fips(*rsa, size, null_mut()) })
+        indicator_check!(unsafe { RSA_generate_key_fips(*rsa.as_mut(), size, null_mut()) })
     } else {
         let e: LcPtr<BIGNUM> = RSA_F4.try_into()?;
-        unsafe { RSA_generate_key_ex(*rsa, size, *e, null_mut()) }
+        unsafe { RSA_generate_key_ex(*rsa.as_mut(), size, *e.as_const(), null_mut()) }
     } {
         return Err(Unspecified);
     }
 
-    let evp_pkey = LcPtr::new(unsafe { EVP_PKEY_new() })?;
+    let mut evp_pkey = LcPtr::new(unsafe { EVP_PKEY_new() })?;
 
-    if 1 != unsafe { EVP_PKEY_assign_RSA(*evp_pkey, *rsa) } {
+    if 1 != unsafe { EVP_PKEY_assign_RSA(*evp_pkey.as_mut(), *rsa) } {
         return Err(Unspecified);
     };
 
@@ -490,19 +508,19 @@ pub(super) fn is_valid_fips_key(key: &LcPtr<EVP_PKEY>) -> bool {
     // This should always be an RSA key and must-never panic.
     let rsa_key = key.get_rsa().expect("RSA EVP_PKEY");
 
-    1 == unsafe { RSA_check_fips(*rsa_key) }
+    1 == unsafe { RSA_check_fips(*rsa_key.as_mut_unsafe()) }
 }
 
 pub(super) fn key_size_bytes(key: &LcPtr<EVP_PKEY>) -> usize {
     // Safety: RSA modulous byte sizes supported fit an usize
-    unsafe { EVP_PKEY_size(key.as_const_ptr()) }
+    unsafe { EVP_PKEY_size(*key.as_const()) }
         .try_into()
         .expect("modulous to fit in usize")
 }
 
 pub(super) fn key_size_bits(key: &LcPtr<EVP_PKEY>) -> usize {
     // Safety: RSA modulous byte sizes supported fit an usize
-    unsafe { EVP_PKEY_bits(key.as_const_ptr()) }
+    unsafe { EVP_PKEY_bits(*key.as_const()) }
         .try_into()
         .expect("modulous to fit in usize")
 }

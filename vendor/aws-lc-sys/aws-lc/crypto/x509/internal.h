@@ -394,7 +394,7 @@ int x509_print_rsa_pss_params(BIO *bp, const X509_ALGOR *sigalg, int indent,
 // Signature algorithm functions.
 
 // x509_digest_sign_algorithm encodes the signing parameters of |ctx| as an
-// AlgorithmIdentifer and saves the result in |algor|. It returns one on
+// AlgorithmIdentifier and saves the result in |algor|. It returns one on
 // success, or zero on error.
 int x509_digest_sign_algorithm(EVP_MD_CTX *ctx, X509_ALGOR *algor);
 
@@ -564,6 +564,8 @@ GENERAL_NAMES *v2i_GENERAL_NAMES(const X509V3_EXT_METHOD *method,
 // |X509_NAME| issue is resolved.
 int X509_check_akid(X509 *issuer, const AUTHORITY_KEYID *akid);
 
+// TODO(https://crbug.com/boringssl/695): Remove this.
+int DIST_POINT_set_dpname(DIST_POINT_NAME *dpn, X509_NAME *iname);
 
 #if defined(__cplusplus)
 }  // extern C

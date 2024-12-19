@@ -60,7 +60,7 @@ impl EcdsaKeyPair {
         algorithm: &'static EcdsaSigningAlgorithm,
         evp_pkey: LcPtr<EVP_PKEY>,
     ) -> Result<Self, ()> {
-        let pubkey = ec::marshal_public_key(&evp_pkey.as_const(), algorithm)?;
+        let pubkey = ec::public_key_from_evp_pkey(&evp_pkey, algorithm)?;
 
         Ok(Self {
             algorithm,
@@ -126,7 +126,9 @@ impl EcdsaKeyPair {
     /// `error::Unspecified` on internal error.
     ///
     pub fn to_pkcs8v1(&self) -> Result<Document, Unspecified> {
-        self.evp_pkey.marshall_private_key(Version::V1)
+        Ok(Document::new(
+            self.evp_pkey.marshall_private_key(Version::V1)?,
+        ))
     }
 
     /// Constructs an ECDSA key pair from the private key and public key bytes
@@ -182,7 +184,7 @@ impl EcdsaKeyPair {
         alg: &'static EcdsaSigningAlgorithm,
         private_key: &[u8],
     ) -> Result<Self, KeyRejected> {
-        let evp_pkey = unsafe { ec::unmarshal_der_to_private_key(private_key, alg.id.nid())? };
+        let evp_pkey = ec::unmarshal_der_to_private_key(private_key, alg.id.nid())?;
 
         Ok(Self::new(alg, evp_pkey)?)
     }
@@ -212,12 +214,15 @@ impl EcdsaKeyPair {
         let digest = digest::match_digest_type(&self.algorithm.digest.id);
 
         if 1 != unsafe {
+            // EVP_DigestSignInit does not mutate |pkey| for thread-safety purposes and may be
+            // used concurrently with other non-mutating functions on |pkey|.
+            // https://github.com/aws/aws-lc/blob/9b4b5a15a97618b5b826d742419ccd54c819fa42/include/openssl/evp.h#L297-L313
             EVP_DigestSignInit(
                 md_ctx.as_mut_ptr(),
                 null_mut(),
                 *digest,
                 null_mut(),
-                *self.evp_pkey,
+                *self.evp_pkey.as_mut_unsafe(),
             )
         } {
             return Err(Unspecified);
@@ -297,13 +302,11 @@ impl AsBigEndian<EcPrivateKeyBin<'static>> for PrivateKey<'_> {
     /// # Errors
     /// `error::Unspecified` if serialization failed.
     fn as_be_bytes(&self) -> Result<EcPrivateKeyBin<'static>, Unspecified> {
-        unsafe {
-            let buffer = ec::marshal_private_key_to_buffer(
-                self.0.algorithm.id.private_key_size(),
-                &self.0.evp_pkey.as_const(),
-            )?;
-            Ok(EcPrivateKeyBin::new(buffer))
-        }
+        let buffer = ec::marshal_private_key_to_buffer(
+            self.0.algorithm.id.private_key_size(),
+            &self.0.evp_pkey.as_const(),
+        )?;
+        Ok(EcPrivateKeyBin::new(buffer))
     }
 }
 
@@ -315,12 +318,12 @@ impl AsDer<EcPrivateKeyRfc5915Der<'static>> for PrivateKey<'_> {
     fn as_der(&self) -> Result<EcPrivateKeyRfc5915Der<'static>, Unspecified> {
         unsafe {
             let mut outp = null_mut::<u8>();
-            let ec_key = ConstPointer::new(EVP_PKEY_get0_EC_KEY(*self.0.evp_pkey))?;
+            let ec_key = ConstPointer::new(EVP_PKEY_get0_EC_KEY(*self.0.evp_pkey.as_const()))?;
             let length = usize::try_from(aws_lc::i2d_ECPrivateKey(*ec_key, &mut outp))
                 .map_err(|_| Unspecified)?;
-            let outp = LcPtr::new(outp)?;
+            let mut outp = LcPtr::new(outp)?;
             Ok(EcPrivateKeyRfc5915Der::take_from_slice(
-                core::slice::from_raw_parts_mut(*outp, length),
+                core::slice::from_raw_parts_mut(*outp.as_mut(), length),
             ))
         }
     }

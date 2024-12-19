@@ -1,5 +1,5 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-// SPDX-License-Identifier: Apache-2.0 OR ISC
+// SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT-0
 
 // ----------------------------------------------------------------------------
 // Given table: uint64_t[height*16], copy table[idx*16...(idx+1)*16-1]
@@ -12,7 +12,7 @@
 //     (uint64_t *z, uint64_t *table, uint64_t height, uint64_t idx);
 //
 // Initial version written by Hanno Becker
-// Standard ARM ABI: X0 = z, X1 = table, X2 = height, X4 = idx
+// Standard ARM ABI: X0 = z, X1 = table, X2 = height, X3 = idx
 // ----------------------------------------------------------------------------
 #include "_internal_s2n_bignum.h"
 

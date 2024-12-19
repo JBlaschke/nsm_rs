@@ -57,20 +57,29 @@
 //! The community has also started developing third-party providers for Rustls:
 //!
 //!   * [`rustls-mbedtls-provider`] - a provider that uses [`mbedtls`] for cryptography.
+//!   * [`rustls-openssl`] - a provider that uses [OpenSSL] for cryptography.
+//!   * [`rustls-post-quantum`]: an experimental provider that adds support for post-quantum
+//!     key exchange to the default aws-lc-rs provider.
 //!   * [`boring-rustls-provider`] - a work-in-progress provider that uses [`boringssl`] for
 //!     cryptography.
 //!   * [`rustls-rustcrypto`] - an experimental provider that uses the crypto primitives
 //!     from [`RustCrypto`] for cryptography.
-//!   * [`rustls-post-quantum`]: an experimental provider that adds support for post-quantum
-//!     key exchange to the default aws-lc-rs provider.
+//!   * [`rustls-symcrypt`] - a provider that uses Microsoft's [SymCrypt] library.
+//!   * [`rustls-wolfcrypt-provider`] - a work-in-progress provider that uses [`wolfCrypt`] for cryptography.
 //!
 //! [`rustls-mbedtls-provider`]: https://github.com/fortanix/rustls-mbedtls-provider
 //! [`mbedtls`]: https://github.com/Mbed-TLS/mbedtls
+//! [`rustls-openssl`]: https://github.com/tofay/rustls-openssl
+//! [OpenSSL]: https://openssl-library.org/
+//! [`rustls-symcrypt`]: https://github.com/microsoft/rustls-symcrypt
+//! [SymCrypt]: https://github.com/microsoft/SymCrypt
 //! [`boring-rustls-provider`]: https://github.com/janrueth/boring-rustls-provider
 //! [`boringssl`]: https://github.com/google/boringssl
 //! [`rustls-rustcrypto`]: https://github.com/RustCrypto/rustls-rustcrypto
 //! [`RustCrypto`]: https://github.com/RustCrypto
 //! [`rustls-post-quantum`]: https://crates.io/crates/rustls-post-quantum
+//! [`rustls-wolfcrypt-provider`]: https://github.com/wolfSSL/rustls-wolfcrypt-provider
+//! [`wolfCrypt`]: https://www.wolfssl.com/products/wolfcrypt
 //!
 //! #### Custom provider
 //!
@@ -284,6 +293,9 @@
 //!
 //!   See [manual::_06_fips] for more details.
 //!
+//! - `custom-provider`: disables implicit use of built-in providers (`aws-lc-rs` or `ring`). This forces
+//!    applications to manually install one, for instance, when using a custom `CryptoProvider`.
+//!
 //! - `tls12` (enabled by default): enable support for TLS version 1.2. Note that, due to the
 //!   additive nature of Cargo features and because it is enabled by default, other crates
 //!   in your dependency graph could re-enable it for your application. If you want to disable
@@ -310,6 +322,7 @@
 #![warn(
     clippy::alloc_instead_of_core,
     clippy::clone_on_ref_ptr,
+    clippy::manual_let_else,
     clippy::std_instead_of_core,
     clippy::use_self,
     clippy::upper_case_acronyms,
@@ -363,6 +376,9 @@ extern crate alloc;
 #[cfg(any(feature = "std", test))]
 extern crate std;
 
+#[cfg(doc)]
+use crate::crypto::CryptoProvider;
+
 // Import `test` sysroot crate for `Bencher` definitions.
 #[cfg(bench)]
 #[allow(unused_extern_crates)]
@@ -372,18 +388,16 @@ extern crate test;
 #[cfg(feature = "logging")]
 use log;
 
-#[cfg(doc)]
-use crate::crypto::CryptoProvider;
-
 #[cfg(not(feature = "logging"))]
-#[macro_use]
 mod log {
     macro_rules! trace    ( ($($tt:tt)*) => {{}} );
     macro_rules! debug    ( ($($tt:tt)*) => {{}} );
-    macro_rules! warn     ( ($($tt:tt)*) => {{}} );
     macro_rules! error    ( ($($tt:tt)*) => {{}} );
+    macro_rules! _warn    ( ($($tt:tt)*) => {{}} );
+    pub(crate) use {_warn as warn, debug, error, trace};
 }
 
+#[cfg(test)]
 #[macro_use]
 mod test_macros;
 
@@ -436,12 +450,10 @@ pub mod internal {
         pub mod codec {
             pub use crate::msgs::codec::{Codec, Reader};
         }
-        pub mod deframer {
-            pub use crate::msgs::deframer::{DeframerVecBuffer, MessageDeframer};
-        }
         pub mod enums {
             pub use crate::msgs::enums::{
-                AlertLevel, Compression, EchVersion, HpkeAead, HpkeKdf, HpkeKem, NamedGroup,
+                AlertLevel, CertificateType, Compression, EchVersion, HpkeAead, HpkeKdf, HpkeKem,
+                NamedGroup,
             };
         }
         pub mod fragmenter {
@@ -451,8 +463,8 @@ pub mod internal {
             pub use crate::msgs::handshake::{
                 CertificateChain, ClientExtension, ClientHelloPayload, DistinguishedName,
                 EchConfigContents, EchConfigPayload, HandshakeMessagePayload, HandshakePayload,
-                HpkeKeyConfig, HpkeSymmetricCipherSuite, KeyShareEntry, Random, ServerName,
-                SessionId,
+                HpkeKeyConfig, HpkeSymmetricCipherSuite, KeyShareEntry, Random, ServerExtension,
+                ServerName, SessionId,
             };
         }
         pub mod message {
@@ -465,8 +477,10 @@ pub mod internal {
         }
     }
 
-    pub mod record_layer {
-        pub use crate::record_layer::RecordLayer;
+    pub use crate::tls13::key_schedule::{derive_traffic_iv, derive_traffic_key};
+
+    pub mod fuzzing {
+        pub use crate::msgs::deframer::fuzz_deframer;
     }
 }
 
@@ -494,8 +508,8 @@ pub mod internal {
 /// [`unbuffered-client`] and [`unbuffered-server`] are examples that fully exercise the API in
 /// std, non-async context.
 ///
-/// [`unbuffered-client`]: https://github.com/rustls/rustls/blob/main/examples/src/bin/unbuffererd-client.rs
-/// [`unbuffered-server`]: https://github.com/rustls/rustls/blob/main/examples/src/bin/unbuffererd-server.rs
+/// [`unbuffered-client`]: https://github.com/rustls/rustls/blob/main/examples/src/bin/unbuffered-client.rs
+/// [`unbuffered-server`]: https://github.com/rustls/rustls/blob/main/examples/src/bin/unbuffered-server.rs
 pub mod unbuffered {
     pub use crate::conn::unbuffered::{
         AppDataRecord, ConnectionState, EncodeError, EncodeTlsData, EncryptError,
@@ -530,7 +544,9 @@ pub use crate::stream::{Stream, StreamOwned};
 pub use crate::suites::{
     CipherSuiteCommon, ConnectionTrafficSecrets, ExtractedSecrets, SupportedCipherSuite,
 };
-#[cfg(any(feature = "std", feature = "hashbrown"))]
+#[cfg(feature = "std")]
+pub use crate::ticketer::TicketRotator;
+#[cfg(any(feature = "std", feature = "hashbrown"))] // < XXX: incorrect feature gate
 pub use crate::ticketer::TicketSwitcher;
 #[cfg(feature = "tls12")]
 pub use crate::tls12::Tls12CipherSuite;
@@ -559,6 +575,7 @@ pub mod client {
     #[cfg(feature = "std")]
     pub use client_conn::{ClientConnection, WriteEarlyData};
     pub use ech::{EchConfig, EchGreaseConfig, EchMode, EchStatus};
+    pub use handy::AlwaysResolvesClientRawPublicKeys;
     #[cfg(any(feature = "std", feature = "hashbrown"))]
     pub use handy::ClientSessionMemoryCache;
 
@@ -592,11 +609,11 @@ pub mod server {
     mod tls13;
 
     pub use builder::WantsServerCert;
-    pub use handy::NoServerSessionStorage;
     #[cfg(any(feature = "std", feature = "hashbrown"))]
     pub use handy::ResolvesServerCertUsingSni;
     #[cfg(any(feature = "std", feature = "hashbrown"))]
     pub use handy::ServerSessionMemoryCache;
+    pub use handy::{AlwaysResolvesServerRawPublicKeys, NoServerSessionStorage};
     pub use server_conn::{
         Accepted, ClientHello, ProducesTickets, ResolvesServerCert, ServerConfig,
         ServerConnectionData, StoresServerSessions, UnbufferedServerConnection,
@@ -630,6 +647,7 @@ pub mod version {
 
 /// Re-exports the contents of the [rustls-pki-types](https://docs.rs/rustls-pki-types) crate for easy access
 pub mod pki_types {
+    #[doc(no_inline)]
     pub use pki_types::*;
 }
 
@@ -641,7 +659,7 @@ pub mod sign {
 /// APIs for implementing QUIC TLS
 pub mod quic;
 
-#[cfg(any(feature = "std", feature = "hashbrown"))]
+#[cfg(any(feature = "std", feature = "hashbrown"))] // < XXX: incorrect feature gate
 /// APIs for implementing TLS tickets
 pub mod ticketer;
 
@@ -652,6 +670,9 @@ pub mod time_provider;
 
 /// APIs abstracting over locking primitives.
 pub mod lock;
+
+/// Polyfills for features that are not yet stabilized or available with current MSRV.
+pub(crate) mod polyfill;
 
 #[cfg(any(feature = "std", feature = "hashbrown"))]
 mod hash_map {

@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.0)
 
+if(POLICY CMP0091)
+cmake_policy(SET CMP0091 NEW)
+endif()
+
 # Defer enabling C and CXX languages.
 project(AWSLC NONE)
 
@@ -27,6 +31,8 @@ option(ENABLE_DILITHIUM "Enable Dilithium signatures in the EVP API" OFF)
 option(DISABLE_PERL "Disable Perl for AWS-LC" OFF)
 option(DISABLE_GO "Disable Go for AWS-LC" OFF)
 option(ENABLE_FIPS_ENTROPY_CPU_JITTER "Enable FIPS entropy source: CPU Jitter" OFF)
+option(ENABLE_DATA_INDEPENDENT_TIMING "Enable automatic setting/resetting Data-Independent Timing
+(DIT) flag in cryptographic functions. Currently only applicable to Arm64 (except on Windows)" OFF)
 include(cmake/go.cmake)
 
 enable_language(C)
@@ -56,22 +62,55 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL "OpenBSD")
   endif()
 endif()
 
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "SunOS" AND NOT CMAKE_CROSSCOMPILING)
+  # Determine if the host is running an illumos distribution:
+  execute_process(COMMAND /usr/bin/uname -o OUTPUT_VARIABLE UNAME_O
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+  if (UNAME_O STREQUAL "illumos")
+    set(HOST_ILLUMOS 1)
+  endif()
+
+  if (UNAME_O STREQUAL "Solaris")
+    set(HOST_SOLARIS 1)
+  endif()
+
+  if (HOST_ILLUMOS)
+    #
+    # illumos systems require linking libsocket and libnsl to get various
+    # networking routines sometimes found in libc on other platforms:
+    #
+    if(NOT BUILD_SHARED_LIBS)
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lsocket -lnsl")
+    else()
+      set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lsocket -lnsl")
+    endif()
+  endif()
+endif()
+
 # Tests and libssl both require the CXX language to be enabled. If a consumer
 # chooses to disable building the tests and libssl, do not enable CXX
 if(BUILD_TESTING OR BUILD_LIBSSL)
   enable_language(CXX)
 endif()
 
-if(CMAKE_VERSION VERSION_GREATER "3.1.0")
-  if (NOT DEFINED CMAKE_CXX_STANDARD)
-    set(CMAKE_CXX_STANDARD 11)
-  endif()
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-  if (NOT DEFINED CMAKE_C_STANDARD)
+if (NOT DEFINED CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 11)
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if (NOT DEFINED CMAKE_C_STANDARD)
+  try_compile(
+          RESULT
+          ${PROJECT_BINARY_DIR}
+          SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests/compiler_features_tests/c11.c"
+          COMPILE_DEFINITIONS -c -std=c11)
+  if(RESULT)
+    set(CMAKE_C_STANDARD 11)
+  else()
     set(CMAKE_C_STANDARD 99)
-  endif ()
-  set(CMAKE_C_STANDARD_REQUIRED ON)
+  endif()
 endif ()
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
   set(CLANG 1)
@@ -102,16 +141,8 @@ if (TEST_SYSGENID_PATH)
   add_definitions(-DAWSLC_SYSGENID_PATH=\"${TEST_SYSGENID_PATH}\")
 endif()
 
-if(ANDROID)
-  # Android-NDK CMake files reconfigure the path and so Perl won't be found.
-  # However, ninja will still find them in $PATH if we just name them.
-  if(NOT DISABLE_PERL AND NOT PERL_EXECUTABLE)
-    set(PERL_EXECUTABLE "perl")
-  endif()
-else()
-  if(NOT DISABLE_PERL)
-    find_package(Perl)
-  endif()
+if(NOT DISABLE_PERL)
+  find_package(Perl REQUIRED)
 endif()
 
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
@@ -173,6 +204,9 @@ foreach(VAR CMAKE_C_FLAGS CMAKE_CXX_FLAGS CMAKE_ASM_FLAGS)
 endforeach()
 
 if(BORINGSSL_PREFIX AND BORINGSSL_PREFIX_SYMBOLS AND GO_EXECUTABLE)
+
+  message(STATUS "Prefix build configured: building headers using prefix \"${BORINGSSL_PREFIX}\" and symbols file \"${BORINGSSL_PREFIX_SYMBOLS}\"")
+
   if(IS_ABSOLUTE ${BORINGSSL_PREFIX_SYMBOLS})
     set(BORINGSSL_PREFIX_SYMBOLS_PATH ${BORINGSSL_PREFIX_SYMBOLS})
   else()
@@ -185,15 +219,6 @@ if(BORINGSSL_PREFIX AND BORINGSSL_PREFIX_SYMBOLS AND GO_EXECUTABLE)
            symbol_prefix_include/openssl/boringssl_prefix_symbols_nasm.inc
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl
     COMMAND ${GO_EXECUTABLE} run ${CMAKE_CURRENT_SOURCE_DIR}/util/make_prefix_headers.go -out ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl -prefix ${BORINGSSL_PREFIX} ${BORINGSSL_PREFIX_SYMBOLS_PATH}
-    COMMAND sed -i.bak '/ bignum_/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols.h
-    COMMAND sed -i.bak '/ bignum_/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols_asm.h
-    COMMAND sed -i.bak '/ bignum_/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols_nasm.inc
-    COMMAND sed -i.bak '/ curve25519_x25519/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols.h
-    COMMAND sed -i.bak '/ curve25519_x25519/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols_asm.h
-    COMMAND sed -i.bak '/ curve25519_x25519/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols_nasm.inc
-    COMMAND sed -i.bak '/ edwards25519_/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols.h
-    COMMAND sed -i.bak '/ edwards25519_/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols_asm.h
-    COMMAND sed -i.bak '/ edwards25519_/d' ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols_nasm.inc
     COMMAND ${CMAKE_COMMAND} -E remove
           ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols.h.bak
           ${CMAKE_CURRENT_BINARY_DIR}/symbol_prefix_include/openssl/boringssl_prefix_symbols_asm.h.bak
@@ -213,6 +238,8 @@ if(BORINGSSL_PREFIX AND BORINGSSL_PREFIX_SYMBOLS AND GO_EXECUTABLE)
           COMPONENT Development
   )
 elseif(BORINGSSL_PREFIX AND BORINGSSL_PREFIX_HEADERS)
+
+  message(STATUS "Prefix build configured: performing build using prefix \"${BORINGSSL_PREFIX}\" and headers path \"${BORINGSSL_PREFIX_HEADERS}\"")
 
   if(IS_ABSOLUTE ${BORINGSSL_PREFIX_HEADERS})
     set(BORINGSSL_PREFIX_HEADERS_PATH ${BORINGSSL_PREFIX_HEADERS})
@@ -354,9 +381,12 @@ endif ()
 if(GCC OR CLANG)
   # Note clang-cl is odd and sets both CLANG and MSVC. We base our configuration
   # primarily on our normal Clang one.
-  if (NOT CMAKE_C_STANDARD)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
-  endif ()
+  if (NOT CMAKE_VERSION VERSION_GREATER "3.1.0")
+    message(STATUS "Adding CMAKE_C_FLAGS -std=c${CMAKE_C_STANDARD}")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c${CMAKE_C_STANDARD}")
+  else()
+    message(STATUS "Setting CMAKE_C_STANDARD=${CMAKE_C_STANDARD}")
+  endif()
 
   # TODO(CryptoAlg-759): enable '-Wpedantic' if awslc has to follow c99 spec.
   if(CLANG OR (GCC AND CMAKE_C_COMPILER_VERSION VERSION_GREATER "4.1.3"))
@@ -378,8 +408,10 @@ if(GCC OR CLANG)
   endif()
   set(C_CXX_FLAGS "${C_CXX_FLAGS} -Werror -Wformat=2 -Wsign-compare -Wmissing-field-initializers -Wwrite-strings")
 
-  if(GCC AND CMAKE_C_COMPILER_VERSION VERSION_GREATER "8")
+  if((GCC AND CMAKE_C_COMPILER_VERSION VERSION_GREATER "8") OR
+     (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_C_COMPILER_VERSION VERSION_LESS "13"))
     # GCC 8.x added a warning called -Wcast-function-type to the -Wextra umbrella.
+    # Also suppress for all clang versions supporting this warning.
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-cast-function-type")
   endif()
 
@@ -769,10 +801,25 @@ if(OPENSSL_NO_SSE2_FOR_TESTING)
   add_definitions(-DOPENSSL_NO_SSE2_FOR_TESTING)
 endif()
 
+if(HOST_ILLUMOS OR HOST_SOLARIS)
+  #
+  # CMAKE_SYSTEM_PROCESSOR unfortunately comes from the output of "uname -p",
+  # which on illumos systems emits "i386".  Instead, use the value from
+  # "isainfo -n", which prints "the name of the native instruction set used by
+  # portable applications"; e.g., "amd64".
+  #
+  execute_process(COMMAND /usr/bin/isainfo -n OUTPUT_VARIABLE
+    CMAKE_SYSTEM_PROCESSOR_LOWER OUTPUT_STRIP_TRAILING_WHITESPACE)
+else()
+  # Some consumers might use upper-case (e.g.) "X86" or "X86_64".
+  # Matching below is based on lower-case.
+  string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" CMAKE_SYSTEM_PROCESSOR_LOWER)
+endif()
+
 if(OPENSSL_NO_ASM)
   add_definitions(-DOPENSSL_NO_ASM)
   set(ARCH "generic")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+elseif(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "x86_64|amd64")
   # If ARCH is originally detected as 64-bit, perform an additional check
   # to determine whether to build as 32-bit or 64-bit. This happens in some
   # cases such as when building in Docker, where the host-level architecture is 64-bit
@@ -782,9 +829,9 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
   else()
     set(ARCH "x86")
   endif()
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|i386|i686")
+elseif(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "x86|i386|i686")
   set(ARCH "x86")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64.*|ARM64|aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "arm64.*|aarch64")
   # If ARCH is originally detected as 64-bit, perform an additional check
   # to determine whether to build as 32-bit or 64-bit. This happens in some
   # cases such as when building on an 64-bit CPU where the OS is 32-bit.
@@ -793,19 +840,33 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64.*|ARM64|aarch64")
   else()
     set(ARCH "arm")
   endif()
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm*")
+elseif(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "^arm*")
   set(ARCH "arm")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "powerpc64le|ppc64le")
+elseif(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "powerpc64le|ppc64le")
   set(ARCH "ppc64le")
-elseif (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "riscv64")
+elseif (${CMAKE_SYSTEM_PROCESSOR_LOWER} STREQUAL "riscv64")
   set(ARCH "riscv64")
-elseif (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "s390x")
+elseif (${CMAKE_SYSTEM_PROCESSOR_LOWER} STREQUAL "s390x")
   set(ARCH "s390x")
-elseif (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "loongarch64")
+elseif (${CMAKE_SYSTEM_PROCESSOR_LOWER} STREQUAL "loongarch64")
   set(ARCH "loongarch64")
 else()
   message(STATUS "Unknown processor found. Using generic implementations. Processor: " ${CMAKE_SYSTEM_PROCESSOR})
   set(ARCH "generic")
+endif()
+
+# If target ARCH is 32-bit x86, ensure SSE2 is enabled since it's used by the optimized assembly.
+# To build for targets that do not support SSE2, use the `OPENSSL_NO_ASM` flag.
+if(ARCH STREQUAL "x86" AND NOT OPENSSL_NO_SSE2_FOR_TESTING)
+  # Most compilers enable SSE2 in 32-bit x86 by default, but in some cases GCC and Clang don't.
+  # See: https://github.com/aws/aws-lc/commit/6fe8dcbe96e580ea85233fdb98a142e42951b70b
+  if(GCC OR CLANG)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2")
+  endif()
+endif()
+
+if(ENABLE_DATA_INDEPENDENT_TIMING)
+  add_definitions(-DENABLE_AUTO_SET_RESET_DIT)
 endif()
 
 if(USE_CUSTOM_LIBCXX)
@@ -1203,6 +1264,11 @@ set(VERSION 1.1.1)
 # the downstream integration may build with the system's OpenSSL version instead.
 # Consider adjusting the PKG_CONFIG_PATH environment to get around this.
 file(GLOB OPENSSL_PKGCONFIGS "pkgconfig/*.pc.in")
+
+include(cmake/JoinPaths.cmake)
+join_paths(libdir_for_pc_file "\${prefix}" "${CMAKE_INSTALL_LIBDIR}")
+join_paths(includedir_for_pc_file "\${prefix}" "${CMAKE_INSTALL_INCLUDEDIR}")
+
 foreach(in_file ${OPENSSL_PKGCONFIGS})
   file(RELATIVE_PATH in_file ${PROJECT_SOURCE_DIR} ${in_file})
   string(REPLACE ".in" "" pc_file ${in_file})

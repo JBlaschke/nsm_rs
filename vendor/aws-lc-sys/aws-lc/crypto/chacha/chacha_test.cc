@@ -351,12 +351,24 @@ TEST(ChaChaTest, CounterOverflow) {
 
 static void check_abi(uint8_t *out, const uint8_t *in, size_t in_len,
                       const uint32_t key[8], const uint32_t counter[4]) {
-#if defined(CHACHA20_ASM)
-  CHECK_ABI(ChaCha20_ctr32, out, in, in_len, key, counter);
-#endif
 #if defined(CHACHA20_ASM_NEON)
   if (ChaCha20_ctr32_neon_capable(in_len)) {
     CHECK_ABI(ChaCha20_ctr32_neon, out, in, in_len, key, counter);
+  }
+#endif
+#if defined(CHACHA20_ASM_AVX2) && !defined(MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX)
+  if (ChaCha20_ctr32_avx2_capable(in_len)) {
+    CHECK_ABI(ChaCha20_ctr32_avx2, out, in, in_len, key, counter);
+  }
+#endif
+#if defined(CHACHA20_ASM_SSSE3_4X)
+  if (ChaCha20_ctr32_ssse3_4x_capable(in_len)) {
+    CHECK_ABI(ChaCha20_ctr32_ssse3_4x, out, in, in_len, key, counter);
+  }
+#endif
+#if defined(CHACHA20_ASM_SSSE3)
+  if (ChaCha20_ctr32_ssse3_capable(in_len)) {
+    CHECK_ABI(ChaCha20_ctr32_ssse3, out, in, in_len, key, counter);
   }
 #endif
 #if defined(CHACHA20_ASM_NOHW)

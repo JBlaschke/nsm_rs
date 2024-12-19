@@ -58,14 +58,14 @@
 
 use crate::loom::sync::{Arc, Condvar, Mutex, MutexGuard};
 use crate::runtime;
-use crate::runtime::context;
 use crate::runtime::driver::Driver;
 use crate::runtime::scheduler::multi_thread_alt::{
     idle, queue, stats, Counters, Handle, Idle, Overflow, Stats, TraceStatus,
 };
 use crate::runtime::scheduler::{self, inject, Lock};
-use crate::runtime::task::OwnedTasks;
+use crate::runtime::task::{OwnedTasks, TaskHarnessScheduleHooks};
 use crate::runtime::{blocking, coop, driver, task, Config, SchedulerMetrics, WorkerMetrics};
+use crate::runtime::{context, TaskHooks};
 use crate::util::atomic_cell::AtomicCell;
 use crate::util::rand::{FastRand, RngSeedGenerator};
 
@@ -303,6 +303,10 @@ pub(super) fn create(
     let (inject, inject_synced) = inject::Shared::new();
 
     let handle = Arc::new(Handle {
+        task_hooks: TaskHooks {
+            task_spawn_callback: config.before_spawn.clone(),
+            task_terminate_callback: config.after_termination.clone(),
+        },
         shared: Shared {
             remotes: remotes.into_boxed_slice(),
             inject,
@@ -1292,7 +1296,7 @@ impl Worker {
         let next = core.stats.tuned_global_queue_interval(&cx.shared().config);
 
         // Smooth out jitter
-        if abs_diff(self.global_queue_interval, next) > 2 {
+        if u32::abs_diff(self.global_queue_interval, next) > 2 {
             self.global_queue_interval = next;
         }
     }
@@ -1556,6 +1560,12 @@ impl task::Schedule for Arc<Handle> {
         self.shared.schedule_task(task, false);
     }
 
+    fn hooks(&self) -> TaskHarnessScheduleHooks {
+        TaskHarnessScheduleHooks {
+            task_terminate_callback: self.task_hooks.task_terminate_callback.clone(),
+        }
+    }
+
     fn yield_now(&self, task: Notified) {
         self.shared.schedule_task(task, true);
     }
@@ -1591,13 +1601,4 @@ fn with_current<R>(f: impl FnOnce(Option<&Context>) -> R) -> R {
         Some(MultiThreadAlt(ctx)) => f(Some(ctx)),
         _ => f(None),
     })
-}
-
-// `u32::abs_diff` is not available on Tokio's MSRV.
-fn abs_diff(a: u32, b: u32) -> u32 {
-    if a > b {
-        a - b
-    } else {
-        b - a
-    }
 }

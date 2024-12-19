@@ -32,14 +32,12 @@ test:
 	cargo test --all-targets --features unstable
 	cargo test --release --all-targets
 	cargo test --release --all-targets --features bindgen,unstable
-ifeq ($(UNAME_S),Linux)
 	cargo test --release --all-targets --features fips,unstable
-	cargo test --no-default-features --features fips,unstable
-endif
-	cargo test --no-default-features --features aws-lc-sys,unstable
-	cargo test --no-default-features --features aws-lc-sys,ring-sig-verify,unstable
-	cargo test --no-default-features --features aws-lc-sys,ring-io,unstable
-	cargo test --no-default-features --features aws-lc-sys,alloc,unstable
+	cargo test --no-default-features --all-targets --features fips,unstable
+	cargo test --no-default-features --all-targets --features aws-lc-sys,unstable
+	cargo test --no-default-features --all-targets --features aws-lc-sys,ring-sig-verify,unstable
+	cargo test --no-default-features --all-targets --features aws-lc-sys,ring-io,unstable
+	cargo test --no-default-features --all-targets --features aws-lc-sys,alloc,unstable
 
 msrv:
 	cargo msrv verify
@@ -48,5 +46,8 @@ clippy:
 	cargo +nightly clippy --all-targets --features bindgen,fips,unstable -- -W clippy::all  -W clippy::pedantic
 
 ci: format clippy msrv test coverage api-diff-pub
+
+readme:
+	cargo readme | tee README.md
 
 .PHONY: asan asan-fips asan-release ci clippy coverage coverage-fips test msrv clippy

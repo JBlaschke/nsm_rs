@@ -445,7 +445,12 @@ impl<'a> SliceRead<'a> {
         // than a naive loop. It runs faster than equivalent two-pass memchr2+SWAR code on
         // benchmarks and it's cross-platform, so probably the right fit.
         // [1]: https://groups.google.com/forum/#!original/comp.lang.c/2HtQXvg7iKc/xOJeipH6KLMJ
-        type Chunk = usize;
+
+        #[cfg(fast_arithmetic = "64")]
+        type Chunk = u64;
+        #[cfg(fast_arithmetic = "32")]
+        type Chunk = u32;
+
         const STEP: usize = mem::size_of::<Chunk>();
         const ONE_BYTES: Chunk = Chunk::MAX / 255; // 0x0101...01
 
@@ -746,9 +751,9 @@ impl<'a> Read<'a> for StrRead<'a> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-impl<'a, 'de, R> private::Sealed for &'a mut R where R: Read<'de> {}
+impl<'de, R> private::Sealed for &mut R where R: Read<'de> {}
 
-impl<'a, 'de, R> Read<'de> for &'a mut R
+impl<'de, R> Read<'de> for &mut R
 where
     R: Read<'de>,
 {
@@ -972,6 +977,11 @@ fn push_wtf8_codepoint(n: u32, scratch: &mut Vec<u8>) {
 
     scratch.reserve(4);
 
+    // SAFETY: After the `reserve` call, `scratch` has at least 4 bytes of
+    // allocated but unintialized memory after its last initialized byte, which
+    // is where `ptr` points. All reachable match arms write `encoded_len` bytes
+    // to that region and update the length accordingly, and `encoded_len` is
+    // always <= 4.
     unsafe {
         let ptr = scratch.as_mut_ptr().add(scratch.len());
 
@@ -1055,15 +1065,17 @@ static HEX0: [i16; 256] = build_hex_table(0);
 static HEX1: [i16; 256] = build_hex_table(4);
 
 fn decode_four_hex_digits(a: u8, b: u8, c: u8, d: u8) -> Option<u16> {
-    let a = HEX1[a as usize];
-    let b = HEX0[b as usize];
-    let c = HEX1[c as usize];
-    let d = HEX0[d as usize];
+    let a = HEX1[a as usize] as i32;
+    let b = HEX0[b as usize] as i32;
+    let c = HEX1[c as usize] as i32;
+    let d = HEX0[d as usize] as i32;
+
+    let codepoint = ((a | b) << 8) | c | d;
 
     // A single sign bit check.
-    if (a | b | c | d) < 0 {
-        return None;
+    if codepoint >= 0 {
+        Some(codepoint as u16)
+    } else {
+        None
     }
-
-    Some((((a | b) << 8) | c | d) as u16)
 }

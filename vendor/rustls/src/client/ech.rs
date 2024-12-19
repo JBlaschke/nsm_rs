@@ -10,7 +10,6 @@ use crate::crypto::hash::Hash;
 use crate::crypto::hpke::{EncapsulatedSecret, Hpke, HpkePublicKey, HpkeSealer, HpkeSuite};
 use crate::crypto::SecureRandom;
 use crate::hash_hs::{HandshakeHash, HandshakeHashBuffer};
-#[cfg(feature = "logging")]
 use crate::log::{debug, trace, warn};
 use crate::msgs::base::{Payload, PayloadU16};
 use crate::msgs::codec::{Codec, Reader};
@@ -322,12 +321,10 @@ impl EchState {
         secure_random: &'static dyn SecureRandom,
         enable_sni: bool,
     ) -> Result<Self, Error> {
-        // TODO(XXX): this would be cleaner as a `let..else` statement once MSRV is 1.64+
-        let config_contents = match &config.config {
-            EchConfigPayload::V18(config_contents) => config_contents,
+        let EchConfigPayload::V18(config_contents) = &config.config else {
             // the public EchConfig::new() constructor ensures we only have supported
             // configurations.
-            _ => unreachable!("ECH config version mismatch"),
+            unreachable!("ECH config version mismatch");
         };
         let key_config = &config_contents.key_config;
 

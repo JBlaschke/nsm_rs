@@ -13,9 +13,9 @@
 edition = "2021"
 rust-version = "1.65.0"
 name = "backtrace"
-version = "0.3.73"
+version = "0.3.74"
 authors = ["The Rust Project Developers"]
-build = "build.rs"
+build = false
 exclude = ["/ci/"]
 autobins = false
 autoexamples = false
@@ -45,22 +45,6 @@ path = "examples/raw.rs"
 required-features = ["std"]
 
 [[test]]
-name = "skip_inner_frames"
-path = "tests/skip_inner_frames.rs"
-required-features = ["std"]
-
-[[test]]
-name = "long_fn_name"
-path = "tests/long_fn_name.rs"
-required-features = ["std"]
-
-[[test]]
-name = "smoke"
-path = "tests/smoke.rs"
-required-features = ["std"]
-edition = "2021"
-
-[[test]]
 name = "accuracy"
 path = "tests/accuracy/main.rs"
 required-features = ["std"]
@@ -79,8 +63,24 @@ harness = false
 required-features = ["std"]
 
 [[test]]
+name = "long_fn_name"
+path = "tests/long_fn_name.rs"
+required-features = ["std"]
+
+[[test]]
 name = "sgx-image-base"
 path = "tests/sgx-image-base.rs"
+
+[[test]]
+name = "skip_inner_frames"
+path = "tests/skip_inner_frames.rs"
+required-features = ["std"]
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.rs"
+required-features = ["std"]
+edition = "2021"
 
 [[bench]]
 name = "benchmarks"
@@ -106,9 +106,6 @@ optional = true
 [dev-dependencies.libloading]
 version = "0.7"
 
-[build-dependencies.cc]
-version = "1.0.97"
-
 [features]
 coresymbolication = []
 dbghelp = []
@@ -120,34 +117,20 @@ libunwind = []
 serialize-serde = ["serde"]
 std = []
 unix-backtrace = []
-verify-winapi = [
-    "winapi/dbghelp",
-    "winapi/handleapi",
-    "winapi/libloaderapi",
-    "winapi/memoryapi",
-    "winapi/minwindef",
-    "winapi/processthreadsapi",
-    "winapi/synchapi",
-    "winapi/tlhelp32",
-    "winapi/winbase",
-    "winapi/winnt",
-    "winapi/winnls",
-    "winapi/stringapiset",
-]
 
-[target."cfg(not(all(windows, target_env = \"msvc\", not(target_vendor = \"uwp\"))))".dependencies.addr2line]
-version = "0.22.0"
+[target.'cfg(not(all(windows, target_env = "msvc", not(target_vendor = "uwp"))))'.dependencies.addr2line]
+version = "0.24.0"
 default-features = false
 
-[target."cfg(not(all(windows, target_env = \"msvc\", not(target_vendor = \"uwp\"))))".dependencies.libc]
-version = "0.2.146"
+[target.'cfg(not(all(windows, target_env = "msvc", not(target_vendor = "uwp"))))'.dependencies.libc]
+version = "0.2.156"
 default-features = false
 
-[target."cfg(not(all(windows, target_env = \"msvc\", not(target_vendor = \"uwp\"))))".dependencies.miniz_oxide]
-version = "0.7.0"
+[target.'cfg(not(all(windows, target_env = "msvc", not(target_vendor = "uwp"))))'.dependencies.miniz_oxide]
+version = "0.8"
 default-features = false
 
-[target."cfg(not(all(windows, target_env = \"msvc\", not(target_vendor = \"uwp\"))))".dependencies.object]
+[target.'cfg(not(all(windows, target_env = "msvc", not(target_vendor = "uwp"))))'.dependencies.object]
 version = "0.36.0"
 features = [
     "read_core",
@@ -160,9 +143,8 @@ features = [
 ]
 default-features = false
 
-[target."cfg(windows)".dependencies.winapi]
-version = "0.3.9"
-optional = true
+[target."cfg(windows)".dependencies.windows-targets]
+version = "0.52.6"
 
 [lints.rust]
 unexpected_cfgs = "allow"

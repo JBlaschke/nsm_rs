@@ -32,7 +32,7 @@ pub trait MutableKeys: private::Sealed {
 
     /// Return mutable reference to key and value at an index.
     ///
-    /// Valid indices are *0 <= index < self.len()*
+    /// Valid indices are `0 <= index < self.len()`.
     ///
     /// Computes in **O(1)** time.
     fn get_index_mut2(&mut self, index: usize) -> Option<(&mut Self::Key, &mut Self::Value)>;
@@ -106,6 +106,9 @@ where
 /// This trait is sealed and cannot be implemented for types outside this crate.
 pub trait MutableEntryKey: private::Sealed {
     type Key;
+
+    /// Gets a mutable reference to the entry's key, either within the map if occupied,
+    /// or else the new key that was used to find the entry.
     fn key_mut(&mut self) -> &mut Self::Key;
 }
 
@@ -114,9 +117,6 @@ pub trait MutableEntryKey: private::Sealed {
 /// See [`MutableEntryKey`] for more information.
 impl<K, V> MutableEntryKey for Entry<'_, K, V> {
     type Key = K;
-
-    /// Gets a mutable reference to the entry's key, either within the map if occupied,
-    /// or else the new key that was used to find the entry.
     fn key_mut(&mut self) -> &mut Self::Key {
         match self {
             Entry::Occupied(e) => e.key_mut(),

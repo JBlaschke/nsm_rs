@@ -23,11 +23,10 @@
 
 use std::error::Error as StdError;
 use std::ffi::OsStr;
-use std::fs::{self, File};
-use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
-use std::{env, fmt};
+use std::{env, fmt, fs, io};
 
+use pki_types::pem::{self, PemObject};
 use pki_types::CertificateDer;
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -118,9 +117,10 @@ use macos as platform;
 ///
 /// [c_rehash]: https://www.openssl.org/docs/manmaster/man1/c_rehash.html
 pub fn load_native_certs() -> CertificateResult {
-    match CertPaths::from_env().load() {
-        out if !out.certs.is_empty() => out,
-        _ => platform::load_native_certs(),
+    let paths = CertPaths::from_env();
+    match (&paths.dir, &paths.file) {
+        (Some(_), _) | (_, Some(_)) => paths.load(),
+        (None, None) => platform::load_native_certs(),
     }
 }
 
@@ -152,6 +152,19 @@ impl CertificateResult {
                 self.errors
             ),
         }
+    }
+
+    fn pem_error(&mut self, err: pem::Error, path: &Path) {
+        self.errors.push(Error {
+            context: "failed to read PEM from file",
+            kind: match err {
+                pem::Error::Io(err) => ErrorKind::Io {
+                    inner: err,
+                    path: path.to_owned(),
+                },
+                _ => ErrorKind::Pem(err),
+            },
+        });
     }
 
     fn io_error(&mut self, err: io::Error, path: &Path, context: &'static str) {
@@ -193,7 +206,7 @@ impl CertPaths {
     ///
     /// If `self.file` is `Some`, it is always used, so it must be a path to an existing,
     /// accessible file from which certificates can be loaded successfully. While parsing,
-    /// the [rustls_pemfile::certs()] parser will ignore parts of the file which are
+    /// the rustls-pki-types PEM parser will ignore parts of the file which are
     /// not considered part of a certificate. Certificates which are not in the right
     /// format (PEM) or are otherwise corrupted may get ignored silently.
     ///
@@ -276,18 +289,18 @@ fn load_pem_certs_from_dir(dir: &Path, out: &mut CertificateResult) {
 }
 
 fn load_pem_certs(path: &Path, out: &mut CertificateResult) {
-    let reader = match File::open(path) {
-        Ok(file) => BufReader::new(file),
+    let iter = match CertificateDer::pem_file_iter(path) {
+        Ok(iter) => iter,
         Err(err) => {
-            out.io_error(err, path, "failed to open file");
+            out.pem_error(err, path);
             return;
         }
     };
 
-    for result in rustls_pemfile::certs(&mut BufReader::new(reader)) {
+    for result in iter {
         match result {
             Ok(cert) => out.certs.push(cert),
-            Err(err) => out.io_error(err, path, "failed to parse PEM"),
+            Err(err) => out.pem_error(err, path),
         }
     }
 }
@@ -332,6 +345,7 @@ impl StdError for Error {
         Some(match &self.kind {
             ErrorKind::Io { inner, .. } => inner,
             ErrorKind::Os(err) => &**err,
+            ErrorKind::Pem(err) => err,
         })
     }
 }
@@ -342,9 +356,10 @@ impl fmt::Display for Error {
         f.write_str(": ")?;
         match &self.kind {
             ErrorKind::Io { inner, path } => {
-                write!(f, "{inner} in {}", path.display())
+                write!(f, "{inner} at '{}'", path.display())
             }
             ErrorKind::Os(err) => err.fmt(f),
+            ErrorKind::Pem(err) => err.fmt(f),
         }
     }
 }
@@ -354,6 +369,7 @@ impl fmt::Display for Error {
 pub enum ErrorKind {
     Io { inner: io::Error, path: PathBuf },
     Os(Box<dyn StdError + Send + Sync + 'static>),
+    Pem(pem::Error),
 }
 
 const ENV_CERT_FILE: &str = "SSL_CERT_FILE";
@@ -363,6 +379,7 @@ const ENV_CERT_DIR: &str = "SSL_CERT_DIR";
 mod tests {
     use super::*;
 
+    use std::fs::File;
     #[cfg(unix)]
     use std::fs::Permissions;
     use std::io::Write;

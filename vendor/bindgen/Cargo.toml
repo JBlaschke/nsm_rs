@@ -13,7 +13,7 @@
 edition = "2018"
 rust-version = "1.60.0"
 name = "bindgen"
-version = "0.69.4"
+version = "0.69.5"
 authors = [
     "Jyun-Yan You <jyyou.tw@gmail.com>",
     "Emilio Cobos Álvarez <emilio@crisal.io>",
@@ -21,6 +21,10 @@ authors = [
     "The Servo project developers",
 ]
 build = "build.rs"
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "Automatically generates Rust FFI bindings to C and C++ libraries."
 homepage = "https://rust-lang.github.io/rust-bindgen/"
 documentation = "https://docs.rs/bindgen"

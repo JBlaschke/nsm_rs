@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.60"
+rust-version = "1.71"
 name = "rustls-native-certs"
-version = "0.8.0"
+version = "0.8.1"
 build = false
 autobins = false
 autoexamples = false
@@ -50,11 +50,9 @@ name = "smoketests"
 path = "tests/smoketests.rs"
 
 [dependencies.pki-types]
-version = "1"
+version = "1.10"
+features = ["std"]
 package = "rustls-pki-types"
-
-[dependencies.rustls-pemfile]
-version = "2"
 
 [dev-dependencies.ring]
 version = "0.17"
@@ -84,7 +82,7 @@ version = "0.16"
 version = "0.1.2"
 
 [target.'cfg(target_os = "macos")'.dependencies.security-framework]
-version = "2"
+version = "3"
 
 [target."cfg(windows)".dependencies.schannel]
 version = "0.1"

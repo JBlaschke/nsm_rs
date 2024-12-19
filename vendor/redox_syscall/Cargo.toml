@@ -10,10 +10,15 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2018"
+edition = "2021"
 name = "redox_syscall"
-version = "0.5.3"
+version = "0.5.8"
 authors = ["Jeremy Soller <jackpot51@gmail.com>"]
+build = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "A Rust library to access raw Redox system calls"
 documentation = "https://docs.rs/redox_syscall"
 readme = "README.md"
@@ -22,6 +27,7 @@ repository = "https://gitlab.redox-os.org/redox-os/syscall"
 
 [lib]
 name = "syscall"
+path = "src/lib.rs"
 
 [dependencies.bitflags]
 version = "2.4"
@@ -32,11 +38,13 @@ optional = true
 package = "rustc-std-workspace-core"
 
 [features]
+default = ["userspace"]
 rustc-dep-of-std = [
     "core",
     "bitflags/rustc-dep-of-std",
 ]
 std = []
+userspace = []
 
 [target."cfg(loom)".dev-dependencies.loom]
 version = "0.7"

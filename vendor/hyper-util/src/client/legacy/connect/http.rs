@@ -76,7 +76,10 @@ struct Config {
     reuse_address: bool,
     send_buffer_size: Option<usize>,
     recv_buffer_size: Option<usize>,
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     interface: Option<String>,
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    tcp_user_timeout: Option<Duration>,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -179,7 +182,10 @@ impl<R> HttpConnector<R> {
                 reuse_address: false,
                 send_buffer_size: None,
                 recv_buffer_size: None,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 interface: None,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                tcp_user_timeout: None,
             }),
             resolver,
         }
@@ -322,6 +328,13 @@ impl<R> HttpConnector<R> {
         self
     }
 
+    /// Sets the value of the TCP_USER_TIMEOUT option on the socket.
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    #[inline]
+    pub fn set_tcp_user_timeout(&mut self, time: Option<Duration>) {
+        self.config_mut().tcp_user_timeout = time;
+    }
+
     // private
 
     fn config_mut(&mut self) -> &mut Config {
@@ -431,7 +444,8 @@ where
                 .map_err(ConnectError::dns)?;
             let addrs = addrs
                 .map(|mut addr| {
-                    addr.set_port(port);
+                    set_port(&mut addr, port, dst.port().is_some());
+
                     addr
                 })
                 .collect();
@@ -725,6 +739,13 @@ fn connect(
             .map_err(ConnectError::m("tcp bind interface error"))?;
     }
 
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    if let Some(tcp_user_timeout) = &config.tcp_user_timeout {
+        if let Err(e) = socket.set_tcp_user_timeout(Some(*tcp_user_timeout)) {
+            warn!("tcp set_tcp_user_timeout error: {}", e);
+        }
+    }
+
     bind_local_address(
         &socket,
         addr,
@@ -823,9 +844,19 @@ impl ConnectingTcp<'_> {
     }
 }
 
+/// Respect explicit ports in the URI, if none, either
+/// keep non `0` ports resolved from a custom dns resolver,
+/// or use the default port for the scheme.
+fn set_port(addr: &mut SocketAddr, host_port: u16, explicit: bool) {
+    if explicit || addr.port() == 0 {
+        addr.set_port(host_port)
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::net::SocketAddr;
 
     use ::http::Uri;
 
@@ -833,6 +864,8 @@ mod tests {
 
     use super::super::sealed::{Connect, ConnectSvc};
     use super::{Config, ConnectError, HttpConnector};
+
+    use super::set_port;
 
     async fn connect<C>(
         connector: C,
@@ -1117,7 +1150,18 @@ mod tests {
                         enforce_http: false,
                         send_buffer_size: None,
                         recv_buffer_size: None,
+                        #[cfg(any(
+                            target_os = "android",
+                            target_os = "fuchsia",
+                            target_os = "linux"
+                        ))]
                         interface: None,
+                        #[cfg(any(
+                            target_os = "android",
+                            target_os = "fuchsia",
+                            target_os = "linux"
+                        ))]
+                        tcp_user_timeout: None,
                     };
                     let connecting_tcp = ConnectingTcp::new(dns::SocketAddrs::new(addrs), &cfg);
                     let start = Instant::now();
@@ -1226,5 +1270,23 @@ mod tests {
         } else {
             panic!("test failed");
         }
+    }
+
+    #[test]
+    fn test_set_port() {
+        // Respect explicit ports no matter what the resolved port is.
+        let mut addr = SocketAddr::from(([0, 0, 0, 0], 6881));
+        set_port(&mut addr, 42, true);
+        assert_eq!(addr.port(), 42);
+
+        // Ignore default  host port, and use the socket port instead.
+        let mut addr = SocketAddr::from(([0, 0, 0, 0], 6881));
+        set_port(&mut addr, 443, false);
+        assert_eq!(addr.port(), 6881);
+
+        // Use the default port if the resolved port is `0`.
+        let mut addr = SocketAddr::from(([0, 0, 0, 0], 0));
+        set_port(&mut addr, 443, false);
+        assert_eq!(addr.port(), 443);
     }
 }

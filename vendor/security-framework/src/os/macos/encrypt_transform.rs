@@ -146,6 +146,7 @@ impl Builder {
     }
 
     /// Encrypts data with a provided key.
+    // FIXME: deprecate and remove: don't expose CFData in Rust APIs.
     pub fn encrypt(&self, key: &SecKey, data: &CFData) -> Result<CFData, CFError> {
         unsafe {
             let mut error = ptr::null_mut();
@@ -160,6 +161,7 @@ impl Builder {
     }
 
     /// Decrypts data with a provided key.
+    // FIXME: deprecate and remove: don't expose CFData in Rust APIs.
     pub fn decrypt(&self, key: &SecKey, data: &CFData) -> Result<CFData, CFError> {
         unsafe {
             let mut error = ptr::null_mut();
@@ -194,9 +196,7 @@ impl Builder {
             transform.set_attribute(&key, data)?;
 
             let result = transform.execute()?;
-            Ok(CFData::wrap_under_get_rule(
-                result.as_CFTypeRef() as CFDataRef
-            ))
+            Ok(CFData::wrap_under_get_rule(result.as_CFTypeRef() as CFDataRef))
         }
     }
 }

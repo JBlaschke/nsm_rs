@@ -667,7 +667,7 @@ static enum ssl_hs_wait_t ssl_lookup_session(
     // TODO(davidben): This should probably move it to the front of the list.
     if (session == nullptr) {
       ssl_update_counter(ssl->session_ctx.get(),
-                          ssl->session_ctx->stats.sess_miss, true);
+                         ssl->session_ctx->stats.sess_miss, true);
     }
   }
 
@@ -705,15 +705,17 @@ static enum ssl_hs_wait_t ssl_lookup_session(
   if (!ssl_session_is_time_valid(ssl, session.get())) {
     ssl_update_counter(ssl->session_ctx.get(),
                        ssl->session_ctx->stats.sess_timeout, true);
-    if(session) {
+    if (session) {
       // The session was from the cache, so remove it.
       SSL_CTX_remove_session(ssl->session_ctx.get(), session.get());
       session.reset();
     }
   }
 
-  ssl_update_counter(ssl->session_ctx.get(),
-                     ssl->session_ctx->stats.sess_hit, true);
+  if (session) {
+    ssl_update_counter(ssl->session_ctx.get(), ssl->session_ctx->stats.sess_hit,
+                       true);
+  }
   *out_session = std::move(session);
   return ssl_hs_ok;
 }
@@ -949,7 +951,8 @@ BSSL_NAMESPACE_END
 using namespace bssl;
 
 ssl_session_st::ssl_session_st(const SSL_X509_METHOD *method)
-    : x509_method(method),
+    : RefCounted(CheckSubClass()),
+      x509_method(method),
       extended_master_secret(false),
       peer_sha256_valid(false),
       not_resumable(false),
@@ -971,18 +974,14 @@ SSL_SESSION *SSL_SESSION_new(const SSL_CTX *ctx) {
 }
 
 int SSL_SESSION_up_ref(SSL_SESSION *session) {
-  CRYPTO_refcount_inc(&session->references);
+  session->UpRefInternal();
   return 1;
 }
 
 void SSL_SESSION_free(SSL_SESSION *session) {
-  if (session == NULL ||
-      !CRYPTO_refcount_dec_and_test_zero(&session->references)) {
-    return;
+  if (session != nullptr) {
+    session->DecRefInternal();
   }
-
-  session->~ssl_session_st();
-  OPENSSL_free(session);
 }
 
 const uint8_t *SSL_SESSION_get_id(const SSL_SESSION *session,
