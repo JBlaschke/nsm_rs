@@ -379,8 +379,10 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
-                let _server_name = ServerName::try_from(inputs.host.clone())
-                    .map_err(|_| format!("Invalid server DNS name: {}", inputs.host.clone())).unwrap();
+                let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap(); // Use the url crate to parse the URL
+                let server_name = ServerName::try_from(parsed_url.host_str().unwrap())
+                .map_err(|_| format!("Invalid server DNS name: {}", parsed_url.host_str().unwrap()))
+                .unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
