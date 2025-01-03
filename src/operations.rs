@@ -30,6 +30,7 @@ use tokio::sync::Mutex;
 use std::future::Future;
 use tokio_rustls::TlsAcceptor;
 use rustls::client::ClientConfig;
+use rustls::pki_types::ServerName;
 use lazy_static::lazy_static;
 
 
@@ -370,11 +371,16 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             let tls_acceptor = if inputs.tls {
                 trace!("entering tls config");
                 let server_config = tls_config().await.unwrap();
-                let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
-                let root_store = load_ca(Some(root_path)).await.unwrap();
+                let root_path = match env::var("ROOT_PATH") {
+                    Ok(path) => Some(path),
+                    Err(_) => None
+                };
+                let root_store = load_ca(root_path).await.unwrap();
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
+                let _server_name = ServerName::try_from(inputs.host.clone())
+                    .map_err(|_| format!("Invalid server DNS name: {}", inputs.host.clone())).unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -693,11 +699,16 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
-                let root_store = load_ca(Some(root_path)).await.unwrap();
+                let root_path = match env::var("ROOT_PATH") {
+                    Ok(path) => Some(path),
+                    Err(_) => None
+                };
+                let root_store = load_ca(root_path).await.unwrap();
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
+                let _server_name = ServerName::try_from(inputs.host.clone())
+                    .map_err(|_| format!("Invalid server DNS name: {}", inputs.host.clone())).unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
