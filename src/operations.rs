@@ -368,6 +368,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         ComType::API => {
             // start tls configuration
             let tls : Option<rustls::ClientConfig>;
+            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap(); // Use the url crate to parse the URL
             let tls_acceptor = if inputs.tls {
                 trace!("entering tls config");
                 let server_config = tls_config().await.unwrap();
@@ -379,7 +380,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
-                let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap(); // Use the url crate to parse the URL
                 let server_name = ServerName::try_from(parsed_url.host_str().unwrap())
                 .map_err(|_| format!("Invalid server DNS name: {}", parsed_url.host_str().unwrap()))
                 .unwrap();
@@ -414,11 +414,11 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             // retry sending requests to broker to add itself to event queue and state
             loop {
                 sleep(Duration::from_millis(1000)).await;
-                trace!("sending request to {}:{}", inputs.host, inputs.port);
+                trace!("sending request to {}", parsed_url.host_str().unwrap());
                 let req = if inputs.tls {
                     Request::builder()
                     .method(Method::POST)
-                    .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
+                    .uri(format!("https://{}/request_handler", parsed_url.host_str().unwrap()))
                     .header(hyper::header::CONTENT_TYPE, "application/json")
                     .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                     .unwrap()
@@ -426,7 +426,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 else {
                     Request::builder()
                     .method(Method::POST)
-                    .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+                    .uri(format!("http://{}/request_handler", parsed_url.host_str().unwrap()))
                     .header(hyper::header::CONTENT_TYPE, "application/json")
                     .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                     .unwrap()
@@ -699,6 +699,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         ComType::API => {
             // initialize tls configuration
             let tls : Option<rustls::ClientConfig>;
+            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap(); // Use the url crate to parse the URL
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
                 let root_path = match env::var("ROOT_PATH") {
@@ -709,8 +710,9 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
-                let _server_name = ServerName::try_from(inputs.host.clone())
-                    .map_err(|_| format!("Invalid server DNS name: {}", inputs.host.clone())).unwrap();
+                let server_name = ServerName::try_from(parsed_url.host_str().unwrap())
+                    .map_err(|_| format!("Invalid server DNS name: {}", parsed_url.host_str().unwrap()))
+                    .unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -740,12 +742,11 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             // retry sending requests to broker with metadata to add to event queue and state
             loop {
                 sleep(Duration::from_millis(1000)).await;
-                trace!("sending request to {}:{}", inputs.host, inputs.port);
-
+                trace!("sending request to {}", parsed_url.host_str().unwrap());
                 let req = if inputs.tls {
                     Request::builder()
                     .method(Method::POST)
-                    .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
+                    .uri(format!("https://{}/request_handler", parsed_url.host_str().unwrap()))
                     .header(hyper::header::CONTENT_TYPE, "application/json")
                     .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                     .unwrap()
@@ -753,7 +754,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                 else {
                     Request::builder()
                     .method(Method::POST)
-                    .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+                    .uri(format!("http://{}/request_handler", parsed_url.host_str().unwrap()))
                     .header(hyper::header::CONTENT_TYPE, "application/json")
                     .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                     .unwrap()
