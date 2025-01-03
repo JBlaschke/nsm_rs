@@ -28,6 +28,11 @@ url = "2.5.2"
 rustls-pemfile = "2"
 
 
+[features]
+ring = []
+aws-lc-rs = []
+
+
 [[bin]]
 name = "tcp"
 path = "src/tcp.rs"

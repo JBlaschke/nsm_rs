@@ -126,7 +126,7 @@ async fn main() -> std::io::Result<()> {
         }
     }
 
-    return Ok(());
+    // return Ok(());
 }
 
 async fn handle_requests(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {

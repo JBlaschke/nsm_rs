@@ -30,6 +30,7 @@ use tokio::sync::Mutex;
 use std::future::Future;
 use tokio_rustls::TlsAcceptor;
 use rustls::client::ClientConfig;
+use rustls::pki_types::ServerName;
 use lazy_static::lazy_static;
 
 
@@ -98,7 +99,7 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
         let ipstr = get_matching_ipstr(
             & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
         ).await;
-        if inputs.verbose {println!("IPv4 Addresses for {}:", inputs.name);}
+        if inputs.verbose {println!("IPv4 Addresses for {:?}:", inputs.name);}
         for ip in ipstr {
             if inputs.verbose {
                 println!(" - {}", ip);
@@ -112,7 +113,7 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
         let ipstr = get_matching_ipstr(
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
         ).await;
-        if inputs.verbose {println!("IPv6 Addresses for {}:", inputs.name);}
+        if inputs.verbose {println!("IPv6 Addresses for {:?}:", inputs.name);}
         for ip in ipstr {
             if inputs.verbose {
                 println!(" - {}", ip);
@@ -197,7 +198,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
             let state_clone = Arc::clone(& state);
 
             // send State into event monitor to handle heartbeat queue
-            let event_loop = tokio::spawn(async move {
+            let _event_loop = tokio::spawn(async move {
                 let _ = match event_monitor(state_clone).await{
                     Ok(_resp) => trace!("exited event monitor"),
                     Err(_) => trace!("event monitor error")
@@ -266,7 +267,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
                     };
                 });
             }
-            let _ = event_loop.await;
+            // let _ = event_loop.await;
         }
     };
     
@@ -370,11 +371,16 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             let tls_acceptor = if inputs.tls {
                 trace!("entering tls config");
                 let server_config = tls_config().await.unwrap();
-                let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
-                let root_store = load_ca(Some(root_path)).await.unwrap();
+                let root_path = match env::var("ROOT_PATH") {
+                    Ok(path) => Some(path),
+                    Err(_) => None
+                };
+                let root_store = load_ca(root_path).await.unwrap();
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
+                let _server_name = ServerName::try_from(inputs.host.clone())
+                    .map_err(|_| format!("Invalid server DNS name: {}", inputs.host.clone())).unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -457,7 +463,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
 
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-                let broker_addr_value = Arc::clone(&broker_addr);
+                let _broker_addr_value = Arc::clone(&broker_addr);
                 if inputs.tls {
                     let tls_clone = tls.clone().unwrap();
                     Box::pin(async move {
@@ -693,11 +699,16 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let tls : Option<rustls::ClientConfig>;
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                let root_path = env::var("ROOT_PATH").expect("ROOT_PATH not set");
-                let root_store = load_ca(Some(root_path)).await.unwrap();
+                let root_path = match env::var("ROOT_PATH") {
+                    Ok(path) => Some(path),
+                    Err(_) => None
+                };
+                let root_store = load_ca(root_path).await.unwrap();
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
+                let _server_name = ServerName::try_from(inputs.host.clone())
+                    .map_err(|_| format!("Invalid server DNS name: {}", inputs.host.clone())).unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -858,7 +869,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             if inputs.ping {
                 tokio::spawn(async move {
                     let client = setup_https_client(inputs.root_ca.clone()).await;
-                    read_fail = 0;
+                    let mut read_fail = 0;
                     loop {
                         sleep(Duration::from_millis(1000)).await;
                         trace!("sending request to {}:{}", inputs.host, inputs.bind_port);
@@ -884,7 +895,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         
                         // check for successful connection to a published service
                         match result {
-                            Ok(Ok(mut resp)) => {
+                            Ok(Ok(resp)) => {
                                 trace!("Received ping response: {:?}", resp);
                                 break;
                             }

@@ -189,31 +189,31 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
             )
         }
         "list_ips" => {
-            assert!(args.contains_id("interface_name"));
-            let name = args.get_one::<String>("interface_name").unwrap();
+            // assert!(args.contains_id("interface_name"));
+            let name = args.get_one::<String>("interface_name");
             let starting_octets = args.get_one::<String>("ip_start");
             return CLIOperation::ListIPs(
                 ListIPs{
                     verbose: verbose,
                     print_v4: print_v4,
                     print_v6: print_v6,
-                    name: name.to_string(),
+                    name: name.cloned(),
                     starting_octets: starting_octets.cloned()
                 }
             )
         }
         "listen" => {
-            assert!(args.contains_id("interface_name"));
+            // assert!(args.contains_id("interface_name"));
             assert!(args.contains_id("bind_port"));
             let port = * args.get_one::<i32>("bind_port").unwrap();
-            let name =   args.get_one::<String>("interface_name").unwrap();
+            let name =   args.get_one::<String>("interface_name");
             let starting_octets = args.get_one::<String>("ip_start");
             let root_ca = args.get_one::<String>("root_ca");
             return CLIOperation::Listen(
                 Listen{
                     print_v4: print_v4,
                     print_v6:print_v6,
-                    name: name.to_string(),
+                    name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     bind_port: port,
                     tls: tls,
@@ -224,13 +224,13 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
         "claim" => {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
-            assert!(args.contains_id("interface_name"));
+            // assert!(args.contains_id("interface_name"));
             assert!(args.contains_id("bind_port"));
             assert!(args.contains_id("key"));
             let host =   args.get_one::<String>("host").unwrap();
             let port = * args.get_one::<i32>("port").unwrap();
             let key  = * args.get_one::<u64>("key").unwrap();
-            let name = args.get_one::<String>("interface_name").unwrap();
+            let name = args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
             let root_ca = args.get_one::<String>("root_ca");
@@ -241,7 +241,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     print_v6: print_v6,
                     host: host.to_string(),
                     port: port,
-                    name: name.to_string(),
+                    name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
                     key: key,
@@ -254,14 +254,14 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
         "publish" => {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
-            assert!(args.contains_id("interface_name"));
+            // assert!(args.contains_id("interface_name"));
             assert!(args.contains_id("bind_port"));
             assert!(args.contains_id("service_port"));
             assert!(args.contains_id("key"));
             let host =   args.get_one::<String>("host").unwrap();
             let port = * args.get_one::<i32>("port").unwrap();
             let key  = * args.get_one::<u64>("key").unwrap();
-            let name = args.get_one::<String>("interface_name").unwrap();
+            let name = args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
             let service_port    = * args.get_one::<i32>("service_port").unwrap();
@@ -273,7 +273,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     print_v6: print_v6,
                     host: host.to_string(),
                     port: port,
-                    name: name.to_string(),
+                    name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
                     service_port: service_port,
@@ -287,10 +287,10 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
         "collect" => {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
-            assert!(args.contains_id("interface_name"));
+            // assert!(args.contains_id("interface_name"));
             let host =   args.get_one::<String>("host").unwrap();
             let port = * args.get_one::<i32>("port").unwrap();
-            let name = args.get_one::<String>("interface_name").unwrap();
+            let name = args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
             let key  = * args.get_one::<u64>("key").unwrap();
             let root_ca = args.get_one::<String>("root_ca");
@@ -300,7 +300,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     print_v6: print_v6,
                     host: host.to_string(),
                     port: port,
-                    name: name.to_string(),
+                    name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     key: key,
                     tls: tls,
@@ -311,12 +311,12 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
         "send" => {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
-            assert!(args.contains_id("interface_name"));
+            // assert!(args.contains_id("interface_name"));
             assert!(args.contains_id("key"));
             let host =   args.get_one::<String>("host").unwrap();
             let port = * args.get_one::<i32>("port").unwrap();
             let key  = * args.get_one::<u64>("key").unwrap();
-            let name = args.get_one::<String>("interface_name").unwrap();
+            let name = args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
             let msg = args.get_one::<String>("msg").unwrap();
             let root_ca = args.get_one::<String>("root_ca");
@@ -326,7 +326,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                     print_v6: print_v6,
                     host: host.to_string(),
                     port: port,
-                    name: name.to_string(),
+                    name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     msg: msg.to_string(),
                     key: key,

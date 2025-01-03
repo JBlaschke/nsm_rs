@@ -30,7 +30,7 @@ pub struct ListIPs {
     /// list version 6 IP addresses
     pub print_v6: bool,
     /// name of interface
-    pub name: String,
+    pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>
 }
@@ -51,7 +51,7 @@ pub struct Listen {
     /// connection to version 6 address
     pub print_v6: bool,
     /// name of interface
-    pub name: String,
+    pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>,
     /// port for listening for incoming connections
@@ -89,7 +89,7 @@ pub struct Claim {
     /// same as Listen's bind_port, notify of new connection
     pub port: i32,
     /// name of interface
-    pub name: String,
+    pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>,
     /// port for sending heartbeats to broker
@@ -130,7 +130,7 @@ pub struct Publish {
     /// same as Listen's bind_port, notify of new connection
     pub port: i32,
     /// name of interface
-    pub name: String,
+    pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>,
     /// port for sending heartbeats to broker
@@ -166,7 +166,7 @@ pub struct Collect {
     /// same as Listen's bind_port, notify of new connection
     pub port: i32,
     /// name of interface
-    pub name: String,
+    pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>,
     /// uniqueley identifies service
@@ -196,7 +196,7 @@ pub struct SendMSG {
     /// same as Listen's bind_port, notify of new connection
     pub port: i32,
     /// name of interface
-    pub name: String,
+    pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
     pub starting_octets: Option<String>,
     /// contains user-defined message

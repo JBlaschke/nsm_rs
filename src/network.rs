@@ -77,24 +77,24 @@ pub async fn ipstr_starts_with(
 ///  - Listen - uses starting_octets to return a unique address
 pub async fn get_matching_ipstr(
     ips: & Vec<LocalInterface>,
-    interface_name: & str, starting_octets: & Option<String>
+    iname: & Option<String>, starting_octets: & Option<String>
 ) -> Vec<String> {
     match starting_octets {
         Some(ip) => trace!(
             "Selecting IP addresses starting with: {:?} on interface: {:?}",
-            ip, interface_name
+            ip, iname
         ),
         None => trace!(
             "Selecting all IP addresses on interface: {:?}",
-            interface_name
+            iname
         )
     }
 
     let mut ipstr = Vec::new();
-    let target_name = Some(interface_name.to_string());
+    // let target_name = Some(iname.to_string());
 
     for ip in ips {
-        if ip.name == target_name || ip.name == None {
+        if *iname == None || ip.name == *iname || ip.name == None {
             if ! ipstr_starts_with(& ip.ip, starting_octets).await{continue;}
             trace!("Address {:?} is a positive match", ip.ip);
             ipstr.push(ip.ip.to_string())
