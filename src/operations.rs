@@ -334,11 +334,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         header: MessageHeader::PUB,
         body: payload.clone()
     };
-
-    let broker_addr = Arc::new(Mutex::new(Addr{
-        host: inputs.host.clone(),
-        port: inputs.port
-    }));
     
     // enter tcp or api integration
     match com{
@@ -487,7 +482,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
 
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-                let _broker_addr_value = Arc::clone(&broker_addr);
                 if inputs.tls {
                     let tls_clone = tls.clone().unwrap();
                     Box::pin(async move {
@@ -637,10 +631,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         ping: inputs.ping
     });
 
-    let broker_addr = Arc::new(Mutex::new(Addr{
-        host: inputs.host.clone(),
-        port: inputs.port
-    }));
+
 
     let msg = & Message{
         header: MessageHeader::CLAIM,
