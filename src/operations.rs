@@ -32,7 +32,6 @@ use std::future::Future;
 use tokio_rustls::TlsAcceptor;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
-use rustls::pki_types::ServerName;
 use lazy_static::lazy_static;
 
 
@@ -388,15 +387,9 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             // start tls configuration
             let tls : Option<rustls::ClientConfig>;
             let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap(); // Use the url crate to parse the URL
-            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap(); // Use the url crate to parse the URL
             let tls_acceptor = if inputs.tls {
                 trace!("entering tls config");
                 let server_config = tls_config().await.unwrap();
-                let root_path = match env::var("ROOT_PATH") {
-                    Ok(path) => Some(path),
-                    Err(_) => None
-                };
-                let root_store = load_ca(root_path).await.unwrap();
                 let root_path = match env::var("ROOT_PATH") {
                     Ok(path) => Some(path),
                     Err(_) => None
@@ -641,7 +634,10 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         ping: inputs.ping
     });
 
-
+    let broker_addr = Arc::new(Mutex::new(Addr{
+        host: inputs.host.clone(),
+        port: inputs.port
+    }));
 
     let msg = & Message{
         header: MessageHeader::CLAIM,
@@ -747,11 +743,6 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap(); // Use the url crate to parse the URL
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
-                let root_path = match env::var("ROOT_PATH") {
-                    Ok(path) => Some(path),
-                    Err(_) => None
-                };
-                let root_store = load_ca(root_path).await.unwrap();
                 let root_path = match env::var("ROOT_PATH") {
                     Ok(path) => Some(path),
                     Err(_) => None
