@@ -7,6 +7,8 @@ use hyper_util::rt::TokioExecutor;
 use hyper_util::client::legacy::Client;
 use http_body_util::Full;
 use hyper::body::Bytes;
+use rustls_native_certs::load_native_certs;
+use base64::{engine::general_purpose, Engine as _};
 
 
 #[allow(unused_imports)]
@@ -49,9 +51,16 @@ pub async fn load_ca(root_ca: Option<String>) -> Result<RootCertStore, std::io::
             root_store
         }
         None => {
-            let certs = load_certs().await.unwrap();
+            // let certs = load_certs().await.unwrap();
             let mut root_store = RootCertStore::empty();
-            root_store.add_parsable_certificates(certs);
+            // root_store.add_parsable_certificates(certs);
+            // root_store
+            let certs = load_native_certs().unwrap(); // This returns Vec<CertificateDer>
+
+            for cert in certs {
+                root_store.add(cert).unwrap(); // Add each certificate to the root store
+            }
+        
             root_store
         },
     };
@@ -85,9 +94,18 @@ pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
 pub async fn setup_https_client(root_ca: Option<String>) -> Client<HttpsConnector<HttpConnector>, Full<Bytes>> {
     // Wait for the connector to be configured
     let https_connector = match root_ca {
-        Some(path) => {
-            info!("{:?}", path);
-            let root_store = load_ca(Some(path)).await.unwrap();
+        Some(certs) => {
+            let decoded_certs: Vec<Vec<u8>> = certs
+            .lines()
+            .map(|line| general_purpose::STANDARD.decode(line).unwrap())
+            .collect();
+
+            // Add certificates to the RootCertStore
+            let mut root_store = RootCertStore::empty();
+            for cert in decoded_certs {
+                let der_cert = CertificateDer::from(cert); // Convert Vec<u8> to CertificateDer
+                root_store.add_parsable_certificates([der_cert]);
+            }
             let tls = ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
