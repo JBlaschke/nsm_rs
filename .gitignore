@@ -4,4 +4,6 @@ clusterrolebinding.yaml
 role.yaml
 rolebinding.yaml
 view-events-role.yaml
-view-events-rolebinding.yaml
+view-events-rolebinding.yam
+server.csr
+server.keyl

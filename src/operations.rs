@@ -324,11 +324,12 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         key: inputs.key,
         id: 0,
         service_id: 0,
-        root_ca: certs,
+        root_ca: certs.clone(),
         ping: inputs.ping
 
     });
     let host = only_or_error(& ipstr);
+    let host_clone = host.clone();
 
     let msg = & Message{
         header: MessageHeader::PUB,
@@ -432,11 +433,9 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             loop {
                 sleep(Duration::from_millis(1000)).await;
                 trace!("sending request to {}", parsed_url.host_str().unwrap());
-                trace!("sending request to {}", parsed_url.host_str().unwrap());
                 let req = if inputs.tls {
                     Request::builder()
                     .method(Method::POST)
-                    .uri(format!("https://{}/request_handler", parsed_url.host_str().unwrap()))
                     .uri(format!("https://{}/request_handler", parsed_url.host_str().unwrap()))
                     .header(hyper::header::CONTENT_TYPE, "application/json")
                     .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
@@ -445,7 +444,6 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 else {
                     Request::builder()
                     .method(Method::POST)
-                    .uri(format!("http://{}/request_handler", parsed_url.host_str().unwrap()))
                     .uri(format!("http://{}/request_handler", parsed_url.host_str().unwrap()))
                     .header(hyper::header::CONTENT_TYPE, "application/json")
                     .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
@@ -482,21 +480,40 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                     },
                 }
             }
-
+            let broker_addr = Arc::new(Mutex::new(Addr{
+                host: parsed_url.clone().host_str().unwrap().to_string().clone(),
+                port: 0,
+            }));
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+                let broker_addr_value = Arc::clone(&broker_addr);
                 if inputs.tls {
                     let tls_clone = tls.clone().unwrap();
-                    Box::pin(async move {
-                        heartbeat_handler_helper(None, Some(req), None, None, Some(tls_clone)).await
-                    }) as std::pin::Pin<Box<dyn Future<Output = 
-                    Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                    // check for one- or two-sided heartbeat
+                    if inputs.ping {
+                        Box::pin(async move {
+                            ping_heartbeat(None, Some(& broker_addr_value), Some(tls_clone)).await
+                        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                    }
+                    else {
+                        Box::pin(async move {
+                            heartbeat_handler_helper(None, Some(req), None, None, Some(tls_clone)).await
+                        }) as std::pin::Pin<Box<dyn Future<Output = 
+                        Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                    }
                 }
                 else {
-                    Box::pin(async move {
-                        heartbeat_handler_helper(None, Some(req), None, None, None).await
-                    }) as std::pin::Pin<Box<dyn Future<Output = 
-                    Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                    if inputs.ping {
+                        Box::pin(async move {
+                            ping_heartbeat(None, Some(& broker_addr_value), None).await
+                        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                    }
+                    else {
+                        Box::pin(async move {
+                            heartbeat_handler_helper(None, Some(req), None, None, None).await
+                        }) as std::pin::Pin<Box<dyn Future<Output = 
+                        Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                    }
                 }
             }));
 
@@ -534,6 +551,58 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                     api_server(req, loc_handler).await
                 }
             });
+
+            // send request to start one-sided heartbeat 
+            if inputs.ping {
+                tokio::spawn(async move {
+                    let client = setup_https_client(certs.clone()).await;
+                    let mut read_fail = 0;
+                    loop {
+                        sleep(Duration::from_millis(1000)).await;
+                        trace!("sending request to {}:{}", host_clone, inputs.bind_port);
+        
+                        let req = if inputs.tls {
+                            Request::builder()
+                            .method(Method::GET)
+                            .uri(format!("https://{}:{}/heartbeat_handler", host_clone, inputs.bind_port))
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from("".to_string())))
+                            .unwrap()
+                        }
+                        else {
+                            Request::builder()
+                            .method(Method::GET)
+                            .uri(format!("http://{}:{}/heartbeat_handler", host_clone, inputs.bind_port))
+                            .header(hyper::header::CONTENT_TYPE, "application/json")
+                            .body(Full::new(Bytes::from("".to_string())))
+                            .unwrap()
+                        };
+        
+                        let result = timeout(timeout_duration, client.request(req)).await;
+        
+                        // check for successful connection to a published service
+                        match result {
+                            Ok(Ok(resp)) => {
+                                trace!("Received ping response: {:?}", resp);
+                                break;
+                            }
+                            Ok(Err(_e)) => {
+                                read_fail += 1;
+                                if read_fail > 5 {
+                                    panic!("Failed to send request to listener")
+                                }
+                            },
+                            Err(_) => {
+                                read_fail += 1;
+                                if read_fail > 5 {
+                                    panic!("Requests to listener timed out")
+                                }
+                            },
+                        }
+                    }
+                });
+            }
+
             // infinitely listen for requests
             loop {
                 let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
@@ -619,6 +688,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
     };
 
     let host = only_or_error(& ipstr);
+    let host_clone = host.clone();
 
     // define payload with metadata to send to broker
     let payload = serialize(& Payload {
@@ -633,11 +703,6 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
         root_ca: certs.clone(),
         ping: inputs.ping
     });
-
-    let broker_addr = Arc::new(Mutex::new(Addr{
-        host: inputs.host.clone(),
-        port: inputs.port
-    }));
 
     let msg = & Message{
         header: MessageHeader::CLAIM,
@@ -714,6 +779,12 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     ));
                 }
             }
+
+            let broker_addr = Arc::new(Mutex::new(Addr{
+                host: inputs.host.clone(),
+                port: inputs.port
+            }));
+
             let payload_clone = Arc::clone(&service_payload);
             let broker_clone = Arc::clone(&broker_addr);
 
@@ -835,7 +906,10 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     },
                 }
             }
-            
+            let broker_addr = Arc::new(Mutex::new(Addr{
+                host: parsed_url.clone().host_str().unwrap().to_string().clone(),
+                port: 0,
+            }));            
             // define closure to start heartbeats
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let service_payload_value = Arc::clone(&service_payload);
@@ -846,7 +920,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     // check for one- or two-sided heartbeat
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(&service_payload_value, Some(&broker_addr_value), Some(tls_clone)).await
+                            ping_heartbeat(Some(&service_payload_value), Some(&broker_addr_value), Some(tls_clone)).await
                         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                     }
                     else {
@@ -860,7 +934,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     // check for one- or two-sided heartbeat
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(&service_payload_value, Some(&broker_addr_value), None).await
+                            ping_heartbeat(Some(&service_payload_value), Some(&broker_addr_value), None).await
                         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                     }
                     else {
@@ -911,16 +985,15 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
             // send request to start one-sided heartbeat 
             if inputs.ping {
                 tokio::spawn(async move {
-                    let client = setup_https_client(certs.clone()).await;
                     let mut read_fail = 0;
                     loop {
                         sleep(Duration::from_millis(1000)).await;
-                        trace!("sending request to {}:{}", inputs.host, inputs.bind_port);
+                        trace!("sending request to {}:{}", host_clone, inputs.bind_port);
         
                         let req = if inputs.tls {
                             Request::builder()
                             .method(Method::GET)
-                            .uri(format!("https://{}:{}/heartbeat_handler", inputs.host, inputs.bind_port))
+                            .uri(format!("https://{}:{}/heartbeat_handler", host_clone, inputs.bind_port))
                             .header(hyper::header::CONTENT_TYPE, "application/json")
                             .body(Full::new(Bytes::from("".to_string())))
                             .unwrap()
@@ -928,7 +1001,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                         else {
                             Request::builder()
                             .method(Method::GET)
-                            .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.bind_port))
+                            .uri(format!("http://{}:{}/heartbeat_handler", host_clone, inputs.bind_port))
                             .header(hyper::header::CONTENT_TYPE, "application/json")
                             .body(Full::new(Bytes::from("".to_string())))
                             .unwrap()

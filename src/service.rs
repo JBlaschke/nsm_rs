@@ -950,7 +950,7 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
 
     let empty_addr = Arc::new(Mutex::new(Addr{
         host: "".to_string(),
-        port: 0
+        port: 0,
     }));
     // client uses listener's address to send msg, service does not need addr
     let addr = addr.unwrap_or(&empty_addr);
@@ -1002,7 +1002,7 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
 }
 
 /// heartbeat handler for one-sided heartbeats
-pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>, 
+pub async fn ping_heartbeat(payload: Option<&Arc<Mutex<String>>>, 
     address: Option<&Arc<Mutex<Addr>>>, tls: Option<ClientConfig>)
     -> Result<Response<Full<Bytes>>, std::io::Error> {
     trace!("entering ping heartbeat");
@@ -1011,11 +1011,11 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
 
     // retrieve service's payload from client or set an empty message body
     let _binding = Arc::new(Mutex::new("".to_string()));
-    let payload_loc = payload.lock().await.clone();
+    let payload_loc = payload.unwrap().lock().await.clone();
 
     let empty_addr = Arc::new(Mutex::new(Addr{
         host: "".to_string(),
-        port: 0
+        port: 0,
     }));
     // client uses listener's address to send msg, service does not need addr
     let addr = address.unwrap_or(&empty_addr);
@@ -1068,7 +1068,7 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
                     Some(_t) => {
                         Request::builder()
                         .method(Method::POST)
-                        .uri(format!("https://{}:{}/request_handler", addr_loc.host, addr_loc.port))
+                        .uri(format!("https://{}/request_handler", addr_loc.host))
                         .header(hyper::header::CONTENT_TYPE, "application/json")
                         .body(Full::new(Bytes::from(msg.clone())))
                         .unwrap()
@@ -1076,7 +1076,7 @@ pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>,
                     None => {
                         Request::builder()
                         .method(Method::POST)
-                        .uri(format!("http://{}:{}/request_handler", addr_loc.host, addr_loc.port))
+                        .uri(format!("http://{}/request_handler", addr_loc.host))
                         .header(hyper::header::CONTENT_TYPE, "application/json")
                         .body(Full::new(Bytes::from(msg.clone())))
                         .unwrap()
@@ -1247,7 +1247,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                         Some(_t) => {
                             Request::builder()
                             .method(Method::POST)
-                            .uri(format!("https://{}:{}/request_handler", addr.host, addr.port))
+                            .uri(format!("https://{}/request_handler", addr.host))
                             .header(hyper::header::CONTENT_TYPE, "application/json")
                             .body(Full::new(Bytes::from(msg.clone())))
                             .unwrap()
@@ -1255,7 +1255,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                         None => {
                             Request::builder()
                             .method(Method::POST)
-                            .uri(format!("http://{}:{}/request_handler", addr.host, addr.port))
+                            .uri(format!("http://{}/request_handler", addr.host))
                             .header(hyper::header::CONTENT_TYPE, "application/json")
                             .body(Full::new(Bytes::from(msg.clone())))
                             .unwrap()

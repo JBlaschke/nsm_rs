@@ -104,7 +104,8 @@ pub async fn setup_https_client(root_ca: Option<String>) -> Client<HttpsConnecto
             let mut root_store = RootCertStore::empty();
             for cert in decoded_certs {
                 let der_cert = CertificateDer::from(cert); // Convert Vec<u8> to CertificateDer
-                root_store.add_parsable_certificates([der_cert]);
+                root_store
+                .add_parsable_certificates([der_cert]);
             }
             let tls = ClientConfig::builder()
                 .with_root_certificates(root_store)
