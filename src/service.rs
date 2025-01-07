@@ -56,8 +56,10 @@ pub struct Payload {
 pub struct MsgBody{
     /// message to send to service
     pub msg: String,
-    /// identifies unique service
+    /// identifies unique connection
     pub id: u64,
+    /// identifies unique connection
+    pub service_id: u64
 }
 
 // Initialize the global message with default values
@@ -366,32 +368,28 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
             // send/receive heartbeat for popped item
             let response = hb.monitor().await;
             // check status of heartbeat
-            let fail_id: i64 = if hb.id != hb.service_id {
-                match response {
-                    Ok(resp) => {
-                        let status = resp.status();
-                        if status == StatusCode::ACCEPTED {
-                            trace!("ping is alive");
-                            0
-                        }
-                        else if status != StatusCode::OK {
-                            trace!("monitor status not ok");
-                            hb.service_id as i64
-                        }
-                        else {
-                            trace!("monitor status is ok");
-                            0
-                        }
+            let fail_id: i64 = match response {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status == StatusCode::ACCEPTED {
+                        trace!("ping is alive");
+                        0
                     }
-                    Err(e) => {
-                        trace!("Error occurred in monitor: {}", e);
+                    else if status != StatusCode::OK {
+                        trace!("monitor status not ok");
                         hb.service_id as i64
                     }
+                    else {
+                        trace!("monitor status is ok");
+                        0
+                    }
                 }
-            }
-            else{
-                0
+                Err(e) => {
+                    trace!("Error occurred in monitor: {}", e);
+                    hb.service_id as i64
+                }
             };
+
             // check heartbeat metadata to see if entity should be added back to event queue 
             // or if client should claim a new service
             let mut data = data_clone.lock().await;
@@ -445,7 +443,7 @@ pub async fn event_monitor(state: Arc<(Mutex<State>, Notify)>) -> Result<Respons
 }
 
 /// Keep track of all connected clients/services, holds event loop and threadpool
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct State {
     /// hashmap - key: key, value: clients/services payloads
     pub clients: HashMap<u64, Vec<Payload>>,
@@ -730,7 +728,7 @@ pub async fn request_handler(
                     // send acknowledgment of successful request
                     let json = serialize_message( & Message {
                         header: MessageHeader::ACK,
-                        body: "".to_string()
+                        body: state_loc.seq.to_string() // address extracted in main to print to client
                     });
                     response = Response::builder()
                         .status(StatusCode::OK)
@@ -897,7 +895,7 @@ pub async fn request_handler(
                     trace!("searching deque {:?}", deque);
                     // only alter a client's heartbeat
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
-                        if e.service_id == hb_body.id && e.id != hb_body.id {
+                        if e.service_id == hb_body.service_id && e.id == hb_body.id {
                             trace!("found id");
                             Some(e)
                         } else {
@@ -1002,16 +1000,14 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
 }
 
 /// heartbeat handler for one-sided heartbeats
-pub async fn ping_heartbeat(payload: Option<&Arc<Mutex<String>>>, 
+pub async fn ping_heartbeat(payload: &Arc<Mutex<String>>, 
     address: Option<&Arc<Mutex<Addr>>>, tls: Option<ClientConfig>)
     -> Result<Response<Full<Bytes>>, std::io::Error> {
-    trace!("entering ping heartbeat");
     sleep(Duration::from_millis(2000)).await;
     // let mut response = Response::new(Full::default());
 
     // retrieve service's payload from client or set an empty message body
-    let _binding = Arc::new(Mutex::new("".to_string()));
-    let payload_loc = payload.unwrap().lock().await.clone();
+    let payload_loc = payload.lock().await.clone();
 
     let empty_addr = Arc::new(Mutex::new(Addr{
         host: "".to_string(),
@@ -1021,10 +1017,14 @@ pub async fn ping_heartbeat(payload: Option<&Arc<Mutex<String>>>,
     let addr = address.unwrap_or(&empty_addr);
     let addr_loc = addr.lock().await.clone();
 
+    trace!("sending ping to {:?}", addr_loc.clone());
+
     // use service id to identify client
     let mut service_id = 0;
+    let mut id = 0;
     if *payload_loc != "".to_string() {
         service_id = deserialize(&payload_loc).service_id;
+        id = deserialize(&payload_loc).id;
     }
     let timeout_duration = Duration::from_secs(10); // Set timeout to 10 seconds
 
@@ -1049,7 +1049,8 @@ pub async fn ping_heartbeat(payload: Option<&Arc<Mutex<String>>>,
 
     let msg_body = MsgBody{
         msg: "".to_string(),
-        id: service_id
+        id,
+        service_id
     };
 
     let msg = serialize_message( & Message{
@@ -1198,7 +1199,8 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                 let stream_mut = Arc::new(Mutex::new(listen_stream));
                 let msg_body = MsgBody{
                     msg: message.body.clone(),
-                    id: service_id
+                    id: 0,
+                    service_id
                 };
                 // relay message from send_msg() to broker
                 let _ack = send(& stream_mut, & Message{
@@ -1230,7 +1232,8 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
 
                 let msg_body = MsgBody{
                     msg: message.body.clone(),
-                    id: service_id
+                    id: 0,
+                    service_id
                 };
             
                 let msg = serialize_message( & Message{

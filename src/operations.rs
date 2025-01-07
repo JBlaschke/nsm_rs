@@ -3,7 +3,7 @@ use crate::network::{get_local_ips, get_matching_ipstr};
 use crate::connection::{ComType, Message, MessageHeader, Addr, api_server, tcp_server,
     serialize_message, deserialize_message, send, connect, collect_request, stream_read};
 
-use crate::service::{Payload, State, serialize, request_handler,
+use crate::service::{Payload, State, serialize, deserialize, request_handler,
      heartbeat_handler_helper, ping_heartbeat, event_monitor};
 
 use crate::utils::{only_or_error, epoch};
@@ -315,7 +315,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
     };
 
     // define payload with metadata
-    let payload = serialize(& Payload {
+    let mut payload = serialize(& Payload {
         service_addr: ipstr.clone(),
         service_port: inputs.service_port,
         service_claim: 0,
@@ -328,6 +328,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         ping: inputs.ping
 
     });
+
     let host = only_or_error(& ipstr);
     let host_clone = host.clone();
 
@@ -459,6 +460,11 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                         match m.header {
                             MessageHeader::ACK => {
                                 info!("Server acknowledged PUB.");
+                                trace!("payload - {:?}", m.body.clone());
+                                let mut deser_payload = deserialize(&payload.clone());
+                                deser_payload.id = m.body.parse().unwrap();
+                                deser_payload.service_id = m.body.parse().unwrap();
+                                payload = serialize(&deser_payload);
                                 break;
                             }
                             _ => {
@@ -487,12 +493,13 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let broker_addr_value = Arc::clone(&broker_addr);
+                let payload_clone = Arc::clone(&Arc::new(Mutex::new(payload.clone())));
                 if inputs.tls {
                     let tls_clone = tls.clone().unwrap();
                     // check for one- or two-sided heartbeat
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(None, Some(& broker_addr_value), Some(tls_clone)).await
+                            ping_heartbeat(&payload_clone, Some(& broker_addr_value), Some(tls_clone)).await
                         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                     }
                     else {
@@ -505,7 +512,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 else {
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(None, Some(& broker_addr_value), None).await
+                            ping_heartbeat(&payload_clone, Some(& broker_addr_value), None).await
                         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                     }
                     else {
@@ -517,26 +524,28 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 }
             }));
 
-            // Spawn a thread to monitor the heartbeat
-            let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(&GLOBAL_LAST_HEARTBEAT);
-            tokio::spawn(async move {
-                sleep(Duration::from_millis(5000)).await;
-                loop {
-                    sleep(Duration::from_millis(500)).await;
-                    let elapsed = {
-                        let timer_loc = last_heartbeat_clone.lock().await;
-                        if let Some(time) = *timer_loc {
-                            time.elapsed()
-                        } else {
-                            continue;
+            if !inputs.ping {
+                // Spawn a thread to monitor the heartbeat
+                let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(&GLOBAL_LAST_HEARTBEAT);
+                tokio::spawn(async move {
+                    sleep(Duration::from_millis(5000)).await;
+                    loop {
+                        sleep(Duration::from_millis(500)).await;
+                        let elapsed = {
+                            let timer_loc = last_heartbeat_clone.lock().await;
+                            if let Some(time) = *timer_loc {
+                                time.elapsed()
+                            } else {
+                                continue;
+                            }
+                        };
+                        if elapsed > Duration::from_secs(10) {
+                            trace!("No heartbeat received for 10 seconds, exiting...");
+                            std::process::exit(0);
                         }
-                    };
-                    if elapsed > Duration::from_secs(10) {
-                        trace!("No heartbeat received for 10 seconds, exiting...");
-                        std::process::exit(0);
                     }
-                }
-            });
+                });
+            }
 
             let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
             info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
@@ -589,13 +598,13 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                             Ok(Err(_e)) => {
                                 read_fail += 1;
                                 if read_fail > 5 {
-                                    panic!("Failed to send request to listener")
+                                    panic!("Failed to send request to published client")
                                 }
                             },
                             Err(_) => {
                                 read_fail += 1;
                                 if read_fail > 5 {
-                                    panic!("Requests to listener timed out")
+                                    panic!("Requests to publish timed out")
                                 }
                             },
                         }
@@ -822,8 +831,8 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
-                let _server_name = ServerName::try_from(inputs.host.clone())
-                    .map_err(|_| format!("Invalid server DNS name: {}", inputs.host.clone())).unwrap();
+                let _server_name = ServerName::try_from(parsed_url.host_str().unwrap())
+                    .map_err(|_| format!("Invalid server DNS name: {}", parsed_url.host_str().unwrap())).unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -920,7 +929,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     // check for one- or two-sided heartbeat
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(Some(&service_payload_value), Some(&broker_addr_value), Some(tls_clone)).await
+                            ping_heartbeat(&service_payload_value, Some(&broker_addr_value), Some(tls_clone)).await
                         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                     }
                     else {
@@ -934,7 +943,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> Result<Response<Full<Bytes>>,
                     // check for one- or two-sided heartbeat
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(Some(&service_payload_value), Some(&broker_addr_value), None).await
+                            ping_heartbeat(&service_payload_value, Some(&broker_addr_value), None).await
                         }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
                     }
                     else {
