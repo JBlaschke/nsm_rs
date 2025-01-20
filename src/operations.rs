@@ -13,22 +13,25 @@ use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, Se
 use crate::tls::{tls_config, load_ca, setup_https_client};
 
 use std::{env, fs};
-use base64::{engine::general_purpose, Engine as _};
 use std::sync::Arc;
-use tokio::sync::Notify;
 use std::net::SocketAddr;
-use hyper::http::{Method, Request, Response};
+use std::future::Future;
+use std::pin::Pin;
+use std::marker::Send;
+use std::io::Error;
+use base64::{engine::general_purpose, Engine as _};
 use http_body_util::Full;
+use hyper::http::{Method, Request, Response};
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::client::legacy::Client;
 use hyper_rustls::HttpsConnectorBuilder;
+use tokio::sync::Notify;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio::sync::Mutex;
-use std::future::Future;
 use tokio_rustls::TlsAcceptor;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
@@ -130,7 +133,10 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
 /// # Listen
 /// Inititate broker with tcp or api communication
-pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>>, std::io::Error> {
+pub async fn listen(
+        inputs: Listen, com: ComType
+    ) -> Result<Response<Full<Bytes>>, std::io::Error> {
+
     trace!("Setting up listener...");
     let ips = get_local_ips().await;
 
@@ -149,18 +155,22 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
     // initiate state 
     let state = Arc::new((Mutex::new(State::new(None)), Notify::new()));
     let state_clone = Arc::clone(& state);
-   
+
     // enter tcp or api integration
     match com{
         ComType::TCP => {
             let state_clones = Arc::clone(& state_clone);
 
-            // define handler closure to start request_handler within the tcp server function
+            // define handler closure to start request_handler within the tcp
+            // server function
             let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
                 let state_clone_inner = Arc::clone(& state_clones);
                 Box::pin(async move {
                     request_handler(& state_clone_inner, stream, None).await
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }) as std::pin::Pin<Box<
+                    dyn Future<Output = Result<Response<Full<Bytes>>,
+                    std::io::Error>> + std::marker::Send
+                >>
             };
 
             let addr = Addr {
@@ -168,9 +178,10 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
                 port: inputs.bind_port
             };
 
-            info!("Starting listener started on: {}:{}", & addr.host, addr.port);
+            info!("Starting listener started on: {}:{}", &addr.host, addr.port);
 
-            // thread handles incoming tcp connections and adds them to State and event queue
+            // thread handles incoming tcp connections and adds them to State
+            // and event queue
             let _thread_handler = tokio::spawn(async move {
                 let _ = tcp_server(& addr, handler).await;
             });
@@ -206,15 +217,21 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
                 };
             });
 
-            // define handler closure to start request_handler within the api server function
+            // define handler closure to start request_handler within the api
+            // server function
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let state_clone = Arc::clone(& state);
                 Box::pin(async move {
                     request_handler(& state_clone, None, Some(req)).await
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }) as std::pin::Pin<Box<
+                    dyn Future<Output = Result<Response<Full<Bytes>>,
+                    std::io::Error>> + std::marker::Send
+                >>
             }));
 
-            let server_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+            let server_addr: SocketAddr = format!(
+                "{}:{}", host.to_string(), inputs.bind_port
+            ).parse().unwrap();
             
             // bind to host address to listen for requests
             let incoming = TcpListener::bind(&server_addr).await.unwrap();
@@ -235,11 +252,11 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
                 let service_clone = service.clone();
                 let tls_acceptor = if inputs.tls {
                     tls_acceptor.clone()
-                }
-                else {
+                } else {
                     None
                 };
-                // thread handles incoming connections and adds them to State and event queue
+                // thread handles incoming connections and adds them to State
+                // and event queue
                 tokio::task::spawn(async move {
                     // check for tls
                     match tls_acceptor {
@@ -277,7 +294,9 @@ pub async fn listen(inputs: Listen, com: ComType) -> Result<Response<Full<Bytes>
 
 /// # Publish
 /// Connect to broker and publish address for data connection.
-pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Bytes>>, std::io::Error> {
+pub async fn publish(
+        inputs: Publish, com: ComType
+    ) -> Result<Response<Full<Bytes>>, Error> {
 
     let ips = get_local_ips().await;
     let (ipstr, all_ipstr) = if inputs.print_v4 {(
@@ -297,7 +316,9 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             match fs::File::open(path) {
                 Ok(file) => {
                     let mut reader = std::io::BufReader::new(file);
-                    let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>().unwrap();
+                    let certs = rustls_pemfile::certs(
+                        &mut reader
+                    ).collect::<Result<Vec<_>, _>>().unwrap();
                     // Serialize the certificates as base64-encoded strings
                     Some(certs
                         .into_iter()
@@ -375,7 +396,9 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
             let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
                 Box::pin(async move {
                     return heartbeat_handler_helper(stream, None, None, None, None).await
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }) as Pin<Box<
+                    dyn Future<Output=Result<Response<Full<Bytes>>, Error>> + Send
+                >>
             };
 
             let addr = Addr {
@@ -388,7 +411,8 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
         ComType::API => {
             // start tls configuration
             let tls : Option<rustls::ClientConfig>;
-            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap(); // Use the url crate to parse the URL
+            // Use the url crate to parse the URL
+            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap();
             let tls_acceptor = if inputs.tls {
                 trace!("entering tls config");
                 let server_config = tls_config().await.unwrap();
@@ -400,8 +424,14 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 tls = Some(ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth());
-                let _server_name = ServerName::try_from(parsed_url.host_str().unwrap())
-                    .map_err(|_| format!("Invalid server DNS name: {}", parsed_url.host_str().unwrap())).unwrap();
+                let _server_name = ServerName::try_from(
+                    parsed_url.host_str().unwrap()
+                ).map_err(|_|
+                    format!(
+                        "Invalid server DNS name: {}",
+                        parsed_url.host_str().unwrap()
+                    )
+                ).unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
             }
             else {
@@ -430,28 +460,22 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
 
             let mut read_fail = 0;
             let timeout_duration = Duration::from_millis(6000);
+            let request_target = String::from(
+                parsed_url.join("request_handler").unwrap()
+            );
             // retry sending requests to broker to add itself to event queue and state
             loop {
                 sleep(Duration::from_millis(1000)).await;
-                trace!("sending request to {}", parsed_url.host_str().unwrap());
-                let req = if inputs.tls {
-                    Request::builder()
+                trace!("Sending request to {:?}", &request_target);
+                let req = Request::builder()
                     .method(Method::POST)
-                    .uri(format!("https://{}/request_handler", parsed_url.host_str().unwrap()))
+                    .uri(&request_target)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
                     .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
-                    .unwrap()
-                }
-                else {
-                    Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("http://{}/request_handler", parsed_url.host_str().unwrap()))
-                    .header(hyper::header::CONTENT_TYPE, "application/json")
-                    .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
-                    .unwrap()
-                };
+                    .unwrap();
 
                 let result = timeout(timeout_duration, client.request(req)).await;
+                println!("{:?}", result);
                 // wait for response from broker
                 match result {
                     Ok(Ok(mut resp)) => {
@@ -486,9 +510,10 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                     },
                 }
             }
+            // TODO: Tidy up!!!
             let broker_addr = Arc::new(Mutex::new(Addr{
                 host: parsed_url.clone().host_str().unwrap().to_string().clone(),
-                port: 0,
+                port: inputs.port,
             }));
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
@@ -499,34 +524,54 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                     // check for one- or two-sided heartbeat
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(&payload_clone, Some(& broker_addr_value), Some(tls_clone)).await
-                        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                            ping_heartbeat(
+                                &payload_clone,
+                                Some(&broker_addr_value),
+                                Some(tls_clone)
+                            ).await
+                        }) as Pin<Box<
+                            dyn Future<Output=Result<Response<Full<Bytes>>,Error>> + Send
+                        >>
                     }
                     else {
                         Box::pin(async move {
-                            heartbeat_handler_helper(None, Some(req), None, None, Some(tls_clone)).await
-                        }) as std::pin::Pin<Box<dyn Future<Output = 
-                        Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                            heartbeat_handler_helper(
+                                None, Some(req), None, None, Some(tls_clone)
+                            ).await
+                        }) as Pin<Box<
+                            dyn Future<Output=Result<Response<Full<Bytes>>,Error>> + Send
+                        >>
                     }
                 }
                 else {
                     if inputs.ping {
                         Box::pin(async move {
-                            ping_heartbeat(&payload_clone, Some(& broker_addr_value), None).await
-                        }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                            ping_heartbeat(
+                                &payload_clone,
+                                Some(&broker_addr_value),
+                                None
+                            ).await
+                        }) as Pin<Box<
+                            dyn Future<Output=Result<Response<Full<Bytes>>,Error>> + Send
+                        >>
                     }
                     else {
                         Box::pin(async move {
-                            heartbeat_handler_helper(None, Some(req), None, None, None).await
-                        }) as std::pin::Pin<Box<dyn Future<Output = 
-                        Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                            heartbeat_handler_helper(
+                                None, Some(req), None, None, None
+                            ).await
+                        }) as Pin<Box<
+                            dyn Future<Output=Result<Response<Full<Bytes>>,Error>> + Send
+                        >>
                     }
                 }
             }));
 
             if !inputs.ping {
                 // Spawn a thread to monitor the heartbeat
-                let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(&GLOBAL_LAST_HEARTBEAT);
+                let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(
+                    &GLOBAL_LAST_HEARTBEAT
+                );
                 tokio::spawn(async move {
                     sleep(Duration::from_millis(5000)).await;
                     loop {
@@ -541,13 +586,17 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                         };
                         if elapsed > Duration::from_secs(10) {
                             trace!("No heartbeat received for 10 seconds, exiting...");
-                            std::process::exit(0);
+                            std::process::exit(0); // TODO: Don't exist proc insitu
                         }
                     }
                 });
             }
 
-            let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+            // TODO: Probably don't need that for one-sided mode
+            let handler_addr: SocketAddr = format!(
+                "{}:{}", host.to_string(), inputs.bind_port
+            ).parse().unwrap();
+
             info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
             // bind to address to send/receive heartbeats to/from broker
             let incoming = TcpListener::bind(&handler_addr).await.unwrap();
@@ -561,6 +610,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 }
             });
 
+            // TODO: Do we need this?
             // send request to start one-sided heartbeat 
             if inputs.ping {
                 tokio::spawn(async move {
@@ -568,12 +618,15 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                     let mut read_fail = 0;
                     loop {
                         sleep(Duration::from_millis(1000)).await;
-                        trace!("sending request to {}:{}", host_clone, inputs.bind_port);
-        
+                        trace!("Sending request to {}:{}", host_clone, inputs.bind_port);
+
                         let req = if inputs.tls {
                             Request::builder()
                             .method(Method::GET)
-                            .uri(format!("https://{}:{}/heartbeat_handler", host_clone, inputs.bind_port))
+                            .uri(format!(
+                                    "https://{}:{}/heartbeat_handler",
+                                    host_clone, inputs.bind_port
+                            ))
                             .header(hyper::header::CONTENT_TYPE, "application/json")
                             .body(Full::new(Bytes::from("".to_string())))
                             .unwrap()
@@ -581,14 +634,17 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                         else {
                             Request::builder()
                             .method(Method::GET)
-                            .uri(format!("http://{}:{}/heartbeat_handler", host_clone, inputs.bind_port))
+                            .uri(format!(
+                                    "http://{}:{}/heartbeat_handler",
+                                    host_clone, inputs.bind_port
+                            ))
                             .header(hyper::header::CONTENT_TYPE, "application/json")
                             .body(Full::new(Bytes::from("".to_string())))
                             .unwrap()
                         };
-        
+
                         let result = timeout(timeout_duration, client.request(req)).await;
-        
+
                         // check for successful connection to a published service
                         match result {
                             Ok(Ok(resp)) => {
@@ -612,6 +668,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> Result<Response<Full<Byte
                 });
             }
 
+            // TODO: Do we still need this?
             // infinitely listen for requests
             loop {
                 let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();

@@ -1,16 +1,19 @@
 /// Handles incoming connections and sending/receiving messages
 
 use std::fmt;
+use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+use std::marker::Send;
+use std::io::Error;
 use serde::{Serialize, Deserialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::sync::Arc;
 use tokio::time::{timeout, Instant, Duration};
-use hyper::http::{Method, Request, Response, StatusCode};
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Bytes, Incoming, Buf};
 use tokio::net::{TcpStream, TcpListener};
 use tokio::sync::Mutex;
-use std::future::Future;
+use hyper::http::{Method, Request, Response, StatusCode};
+use hyper::body::{Bytes, Incoming, Buf};
+use http_body_util::{BodyExt, Full};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
@@ -169,21 +172,25 @@ pub async fn receive(stream: & Arc<Mutex<TcpStream>>) -> Result<Message, std::io
 }
 
 /// Reformat a request body into a string
-pub async fn collect_request(request: &mut Incoming) -> Result<Message, std::io::Error>{
+pub async fn collect_request(request: &mut Incoming) -> Result<Message, Error> {
     let whole_body = request.collect().await.unwrap().aggregate();
-    let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
+    let data: serde_json::Value = serde_json::from_reader(
+        whole_body.reader()
+    ).unwrap();
     let json = serde_json::to_string(&data).unwrap();
     let message = deserialize_message(& json);
     Ok(message)
 }
 
-/// Binds to stream and listens for incoming connections, then handles connection using specified handler
+
+/// Binds to stream and listens for incoming connections, then handles
+/// connection using specified handler
 pub async fn api_server(
-    request: Request<Incoming>, 
-    mut handler: impl FnMut(Request<Incoming>)
-     -> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, 
-     std::io::Error>> + std::marker::Send>> + std::marker::Send + 'static + Clone
-) -> Result<Response<Full<Bytes>>, std::io::Error> {
+        request: Request<Incoming>, 
+        mut handler: impl FnMut(Request<Incoming>) -> Pin<Box<
+                dyn Future<Output=Result<Response<Full<Bytes>>, Error>> + Send
+            >> + Send + 'static + Clone
+    ) -> Result<Response<Full<Bytes>>, Error> {
 
     let method = request.method().clone();
     let path = request.uri().path().to_string();
@@ -208,13 +215,15 @@ pub async fn api_server(
     }
 }
 
-/// Binds to stream and listens for incoming connections, then handles connection using specified handler
+/// Binds to stream and listens for incoming connections, then handles
+/// connection using specified handler
 pub async fn tcp_server(
-    addr: &Addr, 
-    mut handler: impl FnMut(Option<Arc<Mutex<TcpStream>>>)
-    -> std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>>
-     + std::marker::Send>> + std::marker::Send + 'static + Clone
-) -> Result<(), std::io::Error> {
+        addr: &Addr, 
+        mut handler: impl FnMut(Option<Arc<Mutex<TcpStream>>>) -> Pin<Box<
+                dyn Future<Output = Result<Response<Full<Bytes>>, Error>> + Send
+            >> + Send + 'static + Clone
+    ) -> Result<(), std::io::Error> {
+
     trace!("Starting server process on: {:?}", addr);
 
     let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port)).await.unwrap();

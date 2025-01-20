@@ -113,10 +113,8 @@ async fn main() -> std::io::Result<()> {
         let incoming = TcpListener::bind(&addr).await?;
         loop {
             let (stream, _) = incoming.accept().await?;
-    
             tokio::task::spawn(async move {
                 let service = service_fn(move |req| handle_requests(req));
-    
                 if let Err(err) = Builder::new(TokioExecutor::new())
                 .serve_connection(TokioIo::new(stream), service)
                 .await {
@@ -129,7 +127,10 @@ async fn main() -> std::io::Result<()> {
     // return Ok(());
 }
 
-async fn handle_requests(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+async fn handle_requests(
+        request: Request<Incoming>
+    )->Result<Response<Full<Bytes>>, hyper::Error> {
+
     let method = request.method().clone();
     let path = request.uri().path().to_string();
     let mut response = Response::new(Full::default());
