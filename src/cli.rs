@@ -16,7 +16,15 @@ pub fn init() -> ArgMatches {
             .help("Operation to be performed")
             .num_args(1)
             .required(false)
-            .value_parser(["list_interfaces", "list_ips", "listen", "claim", "publish", "collect", "send"])
+            .value_parser([
+                "list_interfaces",
+                "list_ips",
+                "listen",
+                "claim",
+                "publish",
+                "collect",
+                "send"
+            ])
         )
         .arg(
             Arg::new("interface_name")
@@ -179,6 +187,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
     let operation = args.get_one::<String>("operation").unwrap();
 
     match operation.as_str() {
+
         "list_interfaces" => {
             return CLIOperation::ListInterfaces(
                 ListInterfaces{
@@ -188,10 +197,11 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 }
             )
         }
+
         "list_ips" => {
-            // assert!(args.contains_id("interface_name"));
-            let name = args.get_one::<String>("interface_name");
+            let name            = args.get_one::<String>("interface_name");
             let starting_octets = args.get_one::<String>("ip_start");
+
             return CLIOperation::ListIPs(
                 ListIPs{
                     verbose: verbose,
@@ -202,13 +212,15 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 }
             )
         }
+
         "listen" => {
-            // assert!(args.contains_id("interface_name"));
             assert!(args.contains_id("bind_port"));
-            let port = * args.get_one::<i32>("bind_port").unwrap();
-            let name =   args.get_one::<String>("interface_name");
-            let starting_octets = args.get_one::<String>("ip_start");
-            let root_ca = args.get_one::<String>("root_ca");
+
+            let port            = * args.get_one::<i32>("bind_port").unwrap();
+            let name            =   args.get_one::<String>("interface_name");
+            let starting_octets =   args.get_one::<String>("ip_start");
+            let root_ca         =   args.get_one::<String>("root_ca");
+
             return CLIOperation::Listen(
                 Listen{
                     print_v4: print_v4,
@@ -221,20 +233,22 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 }
             )
         }
+
         "claim" => {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
-            // assert!(args.contains_id("interface_name"));
             assert!(args.contains_id("bind_port"));
             assert!(args.contains_id("key"));
-            let host =   args.get_one::<String>("host").unwrap();
-            let port = * args.get_one::<i32>("port").unwrap();
-            let key  = * args.get_one::<u64>("key").unwrap();
-            let name = args.get_one::<String>("interface_name");
+
+            let host            =   args.get_one::<String>("host").unwrap();
+            let port            = * args.get_one::<i32>("port").unwrap();
+            let key             = * args.get_one::<u64>("key").unwrap();
+            let name            =   args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
-            let root_ca = args.get_one::<String>("root_ca");
-            let ping = * args.get_one::<bool>("ping").unwrap();
+            let root_ca         =   args.get_one::<String>("root_ca");
+            let ping            = * args.get_one::<bool>("ping").unwrap();
+
             return CLIOperation::Claim(
                 Claim{
                     print_v4: print_v4,
@@ -251,22 +265,24 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 }
             )
         }
+
         "publish" => {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
-            // assert!(args.contains_id("interface_name"));
             assert!(args.contains_id("bind_port"));
             assert!(args.contains_id("service_port"));
             assert!(args.contains_id("key"));
-            let host =   args.get_one::<String>("host").unwrap();
-            let port = * args.get_one::<i32>("port").unwrap();
-            let key  = * args.get_one::<u64>("key").unwrap();
-            let name = args.get_one::<String>("interface_name");
+
+            let host            =   args.get_one::<String>("host").unwrap();
+            let port            = * args.get_one::<i32>("port").unwrap();
+            let key             = * args.get_one::<u64>("key").unwrap();
+            let name            =   args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
             let bind_port       = * args.get_one::<i32>("bind_port").unwrap();
             let service_port    = * args.get_one::<i32>("service_port").unwrap();
-            let root_ca = args.get_one::<String>("root_ca");
-            let ping = * args.get_one::<bool>("ping").unwrap();
+            let root_ca         =   args.get_one::<String>("root_ca");
+            let ping            = * args.get_one::<bool>("ping").unwrap();
+
             return CLIOperation::Publish(
                 Publish {
                     print_v4: print_v4,
@@ -284,16 +300,18 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 }
             )
         }
+
         "collect" => {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
-            // assert!(args.contains_id("interface_name"));
-            let host =   args.get_one::<String>("host").unwrap();
-            let port = * args.get_one::<i32>("port").unwrap();
-            let name = args.get_one::<String>("interface_name");
+
+            let host            =   args.get_one::<String>("host").unwrap();
+            let port            = * args.get_one::<i32>("port").unwrap();
+            let name            =   args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
-            let key  = * args.get_one::<u64>("key").unwrap();
-            let root_ca = args.get_one::<String>("root_ca");
+            let key             = * args.get_one::<u64>("key").unwrap();
+            let root_ca         =   args.get_one::<String>("root_ca");
+
             return CLIOperation::Collect(
                 Collect{
                     print_v4: print_v4,
@@ -308,18 +326,20 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 }
             )
         }
+
         "send" => {
             assert!(args.contains_id("host"));
             assert!(args.contains_id("port"));
-            // assert!(args.contains_id("interface_name"));
             assert!(args.contains_id("key"));
-            let host =   args.get_one::<String>("host").unwrap();
-            let port = * args.get_one::<i32>("port").unwrap();
-            let key  = * args.get_one::<u64>("key").unwrap();
-            let name = args.get_one::<String>("interface_name");
+
+            let host            =   args.get_one::<String>("host").unwrap();
+            let port            = * args.get_one::<i32>("port").unwrap();
+            let key             = * args.get_one::<u64>("key").unwrap();
+            let name            =   args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
-            let msg = args.get_one::<String>("msg").unwrap();
-            let root_ca = args.get_one::<String>("root_ca");
+            let msg             =   args.get_one::<String>("msg").unwrap();
+            let root_ca         =   args.get_one::<String>("root_ca");
+
             return CLIOperation::SendMSG(
                 SendMSG {
                     print_v4: print_v4,
@@ -335,8 +355,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 }
             )
         }
-        &_ => panic!()
+
+        _ => panic!()
     }
-
-
 }

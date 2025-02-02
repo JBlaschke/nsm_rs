@@ -153,7 +153,7 @@ pub struct Publish {
 ///
 /// ## Example 
 /// Run from command line:
-/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation collect       ```
+/// ``` $ ./target/debug/nsm -n en0 --ip-version 4 --operation collect ```
 ///
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Collect {
