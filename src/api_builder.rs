@@ -1,7 +1,7 @@
 use crate::operations::{
     get_interfaces, list_ips, claim, publish, collect, send_msg
 };
-use crate::models::{ListInterfaces, ListIPs, Claim, Publish, Collect, SendMSG};
+use crate::models::{ListIPs, Claim, Publish, Collect, SendMSG};
 use crate::connection::ComType;
 
 use std::collections::HashMap;
