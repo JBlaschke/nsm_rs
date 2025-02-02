@@ -1,36 +1,44 @@
-use crate::operations::{list_interfaces, list_ips, claim, publish, collect, send_msg};
-
+use crate::operations::{
+    get_interfaces, list_ips, claim, publish, collect, send_msg
+};
 use crate::models::{ListInterfaces, ListIPs, Claim, Publish, Collect, SendMSG};
-
 use crate::connection::ComType;
 
+use std::collections::HashMap;
+use hyper::body::{Bytes, Incoming, Buf};
 use hyper::http::{Request, Response};
 use http_body_util::{BodyExt, Full};
-use hyper::body::{Bytes, Incoming, Buf};
-use std::collections::HashMap;
-use url::Url;
+use url::{form_urlencoded, Url};
+use serde_json;
 
+#[allow(unused_imports)]
+use log::{debug, error, info, trace, warn};
 
+type HyperResult = Result<Response<Full<Bytes>>, hyper::Error>;
 
-pub async fn handle_list_interfaces(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+pub async fn handle_list_interfaces(request: Request<Incoming>) -> HyperResult {
+    trace!("Entering handle_list_interfaces with request {:?}", request);
     let mut response = Response::new(Full::default());
 
-    let url_str = format!("http://localhost{}", request.uri().to_string());
-    let parsed_url = Url::parse(&url_str).unwrap();
+    let params: HashMap<String, String> = request.uri().query().map(|v| {
+        form_urlencoded::parse(v.as_bytes())
+            .into_owned()
+            .collect()
+    }).unwrap_or_else(HashMap::new);
 
-    // Extract query parameters into a HashMap
-    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+    let get_v4 = params.get("v4").map_or(true, |v| v == "true");
+    let get_v6 = params.get("v6").map_or(false, |v| v == "true");
+    let (ipv4_names, ipv6_names) = get_interfaces(get_v4, get_v6).await;
+    let mut response_data: HashMap<&str, Vec<String>> = HashMap::new();
+    if get_v4 { response_data.insert("ipv4_interfaces", ipv4_names); }
+    if get_v6 { response_data.insert("ipv6_interfaces", ipv6_names); }
 
-    let _ = match list_interfaces(ListInterfaces {
-        verbose: query_pairs.get("verbose").map_or(false, |v| v == "true"),
-        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-    }).await {
-        Ok(_output) => {
-            *response.body_mut() = Full::from("Successful request to list_interfaces")
-        },
+    match serde_json::to_string(&response_data)  {
+        Ok(output) => {*response.body_mut() = Full::from(output)},
         Err(e) => {
-            *response.body_mut() = Full::from(format!("Error processing request: {}", e))
+            *response.body_mut() = Full::from(
+                format!("Error processing request: {}", e)
+            )
         }
     };
     Ok(response)

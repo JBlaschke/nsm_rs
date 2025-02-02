@@ -23,7 +23,7 @@ use crate::operations::GLOBAL_LAST_HEARTBEAT;
 /// Store host and port for new connections
 #[derive(Debug, Clone)]
 pub struct Addr {
-    /// IP Address
+    /// Address
     pub host: String,
     /// Port number
     pub port: i32

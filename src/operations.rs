@@ -1,15 +1,17 @@
 use crate::network::{get_local_ips, get_matching_ipstr};
-
-use crate::connection::{ComType, Message, MessageHeader, Addr, api_server, tcp_server,
-    serialize_message, deserialize_message, send, connect, collect_request, stream_read};
-
-use crate::service::{Payload, State, serialize, deserialize, request_handler,
-     heartbeat_handler_helper, ping_heartbeat, event_monitor};
-
+use crate::connection::{
+    ComType, Message, MessageHeader, Addr, api_server, tcp_server,
+    serialize_message, deserialize_message, send, connect, collect_request,
+    stream_read
+};
+use crate::service::{
+    Payload, State, serialize, deserialize, request_handler,
+    heartbeat_handler_helper, ping_heartbeat, event_monitor
+};
 use crate::utils::{only_or_error, epoch};
-
-use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG};
-
+use crate::models::{
+    ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG
+};
 use crate::tls::{tls_config, load_ca, setup_https_client};
 
 use std::{env, fs};
@@ -43,47 +45,67 @@ type HttpResult = Result<Response<Full<Bytes>>, Error>;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
+type Sem = Arc<Mutex<Option<Instant>>>;
+
 lazy_static! {
-    pub static ref GLOBAL_LAST_HEARTBEAT: Arc<Mutex<Option<Instant>>>= Arc::new(Mutex::new(None));
+    pub static ref GLOBAL_LAST_HEARTBEAT: Sem = Arc::new(Mutex::new(None));
+}
+
+pub async fn get_interfaces(v4:bool, v6:bool) -> (Vec<String>, Vec<String>) {
+    let ips = get_local_ips().await;
+
+    let mut ipv4_names = Vec::new();
+    let mut ipv6_names = Vec::new();
+
+    if v4 {
+        for ip in ips.ipv4_addrs {
+            let name: & String = & ip.name.unwrap_or_default();
+            if ! ipv4_names.contains(name) {
+                ipv4_names.push(name.to_string());
+            }
+        }
+    }
+
+    if v6 {
+        for ip in ips.ipv6_addrs {
+            let name: & String = & ip.name.unwrap_or_default();
+            if ! ipv6_names.contains(name) {
+                ipv6_names.push(name.to_string());
+            }
+        }
+    }
+
+    return (ipv4_names, ipv6_names)
 }
 
 /// # ListInterfaces
 /// Lists available interfaces on device
 pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
-    let ips = get_local_ips().await;
-
     if inputs.print_v4 {info!("Listing Matching IPv4 Interfaces");}
     if inputs.print_v6 {info!("Listing Matching IPv6 Interfaces");}
 
-    let mut ipv4_names = Vec::new();
-    let mut ipv6_names = Vec::new();
+    let (ipv4_names, ipv6_names) = get_interfaces(
+        inputs.print_v4, inputs.print_v6
+    ).await;
 
     if inputs.print_v4 {
         if inputs.verbose {println!("IPv4 Interfaces:");}
-        for ip in ips.ipv4_addrs {
-            let name: & String = & ip.name.unwrap_or_default();
-            if ! ipv4_names.contains(name) {
-                if inputs.verbose {
-                    println!(" - {}", name);
-                } else {
-                    println!("{}", name);
-                }
-                ipv4_names.push(name.to_string());
+        for name in ipv4_names {
+            if inputs.verbose {
+                println!(" - {}", name);
+            } else {
+                println!("{}", name);
             }
         }
     }
 
     if inputs.print_v6 {
         if inputs.verbose {println!("IPv6 Interfaces:");}
-        for ip in ips.ipv6_addrs {
-            let name: & String = & ip.name.unwrap_or_default();
-            if ! ipv6_names.contains(name) {
-                if inputs.verbose {
-                    println!(" - {}", name);
-                } else {
-                    println!("{}", name);
-                }
-                ipv6_names.push(name.to_string());
+        for name in ipv6_names {
+            if inputs.verbose {
+                println!(" - {}", name);
+            } else {
+                println!("{}", name);
             }
         }
     }
@@ -96,7 +118,6 @@ pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
 /// Lists available IP addresses on interface
 /// specify version 4 or 6 to filter to one address
 pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
-
     let ips = get_local_ips().await;
     
     if inputs.print_v4 {info!("Listing Matching IPv4 Addresses");}

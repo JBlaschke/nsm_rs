@@ -52,14 +52,14 @@ async fn main() -> std::io::Result<()> {
 
     let matches = init();
 
+    let logging_env = Env::default()
+        .filter_or("NSM_LOG_LEVEL", "warn")
+        .write_style_or("NSM_LOG_STYLE", "always");
+    env_logger::init_from_env(logging_env);
+
     if matches.contains_id("operation") {
         //cli entry
         let args = parse(& matches);
-
-        let logging_env = Env::default()
-            .filter_or("NSM_LOG_LEVEL", "warn")
-            .write_style_or("NSM_LOG_STYLE", "always");
-        env_logger::init_from_env(logging_env);
 
         info!("Started NERSC Service MESH");
         trace!("Input args: {:?}", args);
@@ -108,7 +108,7 @@ async fn main() -> std::io::Result<()> {
     }
     else {
         // api entry
-        println!("Starting service on 0.0.0.0.1:8080");
+        info!("Starting service on 0.0.0.0.1:8080");
         let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
         let incoming = TcpListener::bind(&addr).await?;
         loop {
@@ -123,8 +123,6 @@ async fn main() -> std::io::Result<()> {
             });
         }
     }
-
-    // return Ok(());
 }
 
 async fn handle_requests(
