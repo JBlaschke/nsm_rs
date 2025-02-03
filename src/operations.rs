@@ -111,12 +111,11 @@ pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
     }
 
     Ok(())
-
 }
 
 /// #List IPs
-/// Lists available IP addresses on interface
-/// specify version 4 or 6 to filter to one address
+/// Lists available IP addresses on interface specify version 4 or 6 to filter
+/// to one address
 pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
     let ips = get_local_ips().await;
     
@@ -124,7 +123,7 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
     if inputs.print_v6 {info!("Listing Matching IPv6 Addresses");}
     if inputs.print_v4 {
         let ipstr = get_matching_ipstr(
-            & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
+            &ips.ipv4_addrs, &inputs.name, &inputs.starting_octets
         ).await;
         if inputs.verbose {println!("IPv4 Addresses for {:?}:", inputs.name);}
         for ip in ipstr {
@@ -138,7 +137,7 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
     if inputs.print_v6 {
         let ipstr = get_matching_ipstr(
-            & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
+            &ips.ipv6_addrs, &inputs.name, &inputs.starting_octets
         ).await;
         if inputs.verbose {println!("IPv6 Addresses for {:?}:", inputs.name);}
         for ip in ipstr {
@@ -151,7 +150,6 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
     }
 
     Ok(())
-
 }
 
 /// # Listen

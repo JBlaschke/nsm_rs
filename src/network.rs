@@ -63,7 +63,8 @@ pub async fn get_local_ips() -> LocalIpAddresses {
     }
 }
 
-/// Used with ip-start in Listen, if several IP addresses of same version available 
+/// Used with ip-start in Listen, if several IP addresses of same version
+/// available 
 pub async fn ipstr_starts_with(
     ip: & IpAddr, starting_octets: & Option<String>
 ) -> bool {

@@ -1,12 +1,11 @@
-use crate::operations::{
-    get_interfaces, list_ips, claim, publish, collect, send_msg
-};
-use crate::models::{ListIPs, Claim, Publish, Collect, SendMSG};
+use crate::operations::{get_interfaces, claim, publish, collect, send_msg};
+use crate::models::{Claim, Publish, Collect, SendMSG};
+use crate::network::{get_local_ips, get_matching_ipstr};
 use crate::connection::ComType;
 
 use std::collections::HashMap;
 use hyper::body::{Bytes, Incoming, Buf};
-use hyper::http::{Request, Response};
+use hyper::http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 use url::{form_urlencoded, Url};
 use serde_json;
@@ -17,7 +16,7 @@ use log::{debug, error, info, trace, warn};
 type HyperResult = Result<Response<Full<Bytes>>, hyper::Error>;
 
 pub async fn handle_list_interfaces(request: Request<Incoming>) -> HyperResult {
-    trace!("Entering handle_list_interfaces with request {:?}", request);
+    info!("Entering handle_list_interfaces with request: {:?}", request);
     let mut response = Response::new(Full::default());
 
     let params: HashMap<String, String> = request.uri().query().map(|v| {
@@ -33,50 +32,76 @@ pub async fn handle_list_interfaces(request: Request<Incoming>) -> HyperResult {
     if get_v4 { response_data.insert("ipv4_interfaces", ipv4_names); }
     if get_v6 { response_data.insert("ipv6_interfaces", ipv6_names); }
 
+    trace!("Responding with data: {:?}", response_data);
+
     match serde_json::to_string(&response_data)  {
-        Ok(output) => {*response.body_mut() = Full::from(output)},
+        Ok(output) => {
+            *response.status_mut() = StatusCode::OK;
+            *response.body_mut()   = Full::from(output);
+        },
         Err(e) => {
+            *response.status_mut() = StatusCode::BAD_REQUEST;
             *response.body_mut() = Full::from(
                 format!("Error processing request: {}", e)
-            )
+            );
         }
     };
+
     Ok(response)
 }
 
-pub async fn handle_list_ips(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+pub async fn handle_list_ips(request: Request<Incoming>) -> HyperResult {
+    info!("Entering handle_list_interfaces with request {:?}", request);
     let mut response = Response::new(Full::default());
 
-    let url_str = format!("http://localhost{}", request.uri().to_string());
-    let parsed_url = Url::parse(&url_str).unwrap();
+    let params: HashMap<String, String> = request.uri().query().map(|v| {
+        form_urlencoded::parse(v.as_bytes())
+            .into_owned()
+            .collect()
+    }).unwrap_or_else(HashMap::new);
 
-    // Extract query parameters into a HashMap
-    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
-    println!("{:?}", query_pairs);
-
-    let name = match query_pairs.get("name") {
+    let get_v4 = params.get("get_v4").map_or(true, |v| v == "true");
+    let get_v6 = params.get("get_v6").map_or(false, |v| v == "true");
+    let starting_octets = params.get("starting_octets").map(String::from);
+    let name = match params.get("name") {
         Some(n) => Some(n.to_string()),
         None => {
-            // *response.body_mut() = Full::from("Error: 'name' parameter is required.");
-            // return Ok(response);
-            None
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            *response.body_mut() = Full::from(
+                "Error: 'name' parameter is required."
+            );
+            return Ok(response);
         }
     };
 
-    let _ = match list_ips(ListIPs {
-        verbose: query_pairs.get("verbose").map_or(false, |v| v == "true"),
-        print_v4: query_pairs.get("print_v4").map_or(true, |v| v == "true"),
-        print_v6: query_pairs.get("print_v6").map_or(false, |v| v == "true"),
-        name,
-        starting_octets: query_pairs.get("starting_octets").cloned(),
-    }).await {
-        Ok(_output) => {
-            *response.body_mut() = Full::from("Successful request to list_interfaces")
+    let ips = get_local_ips().await;
+    let mut response_data: HashMap<&str, Vec<String>> = HashMap::new();
+    if get_v4 {
+        response_data.insert("ipv4_addresses",
+            get_matching_ipstr(&ips.ipv4_addrs, &name, &starting_octets).await
+        );
+    }
+    if get_v6 {
+        response_data.insert("ipv6_addresses",
+            get_matching_ipstr(&ips.ipv6_addrs, &name, &starting_octets).await
+        );
+    }
+
+    trace!("Responding with data: {:?}", response_data);
+
+    match serde_json::to_string(&response_data)  {
+        Ok(output) => {
+            *response.status_mut() = StatusCode::OK;
+            *response.body_mut()   = Full::from(output);
         },
         Err(e) => {
-            *response.body_mut() = Full::from(format!("Error processing request: {}", e))
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            *response.body_mut() = Full::from(
+                format!("Error processing request: {}", e)
+            );
         }
     };
+
     Ok(response)
 }
 
