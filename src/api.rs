@@ -9,6 +9,7 @@ mod service;
 mod utils;
 mod models; 
 mod tls;
+mod mode_tcp;
 
 mod connection;
 use connection::ComType;

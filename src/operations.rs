@@ -14,6 +14,8 @@ use crate::models::{
 };
 use crate::tls::{tls_config, load_ca, setup_https_client};
 
+use crate::mode_tcp;
+
 use std::{env, fs};
 use std::sync::Arc;
 use std::net::SocketAddr;
@@ -154,11 +156,8 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
 /// # Listen
 /// Inititate broker with tcp or api communication
-pub async fn listen(
-        inputs: Listen, com: ComType
-    ) -> Result<Response<Full<Bytes>>, std::io::Error> {
-
-    trace!("Setting up listener...");
+pub async fn listen(inputs: Listen, com: ComType) -> HttpResult {
+    info!("Entering listener with input: {:?}; and comm: {:?}", inputs, com);
     let ips = get_local_ips().await;
 
     // identify local ip address
@@ -180,43 +179,7 @@ pub async fn listen(
     // enter tcp or api integration
     match com{
         ComType::TCP => {
-            let state_clones = Arc::clone(& state_clone);
-
-            // define handler closure to start request_handler within the tcp
-            // server function
-            let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
-                let state_clone_inner = Arc::clone(& state_clones);
-                Box::pin(async move {
-                    request_handler(& state_clone_inner, stream, None).await
-                }) as std::pin::Pin<Box<
-                    dyn Future<Output = Result<Response<Full<Bytes>>,
-                    std::io::Error>> + std::marker::Send
-                >>
-            };
-
-            let addr = Addr {
-                host: host.to_string(),
-                port: inputs.bind_port
-            };
-
-            info!("Starting listener started on: {}:{}", &addr.host, addr.port);
-
-            // thread handles incoming tcp connections and adds them to State
-            // and event queue
-            let _thread_handler = tokio::spawn(async move {
-                let _ = tcp_server(& addr, handler).await;
-            });
-
-            let state_clone_cl = Arc::clone(& state_clone);
-
-            // send State into event monitor to handle heartbeat queue
-            let event_loop = tokio::spawn(async move {
-                let _ = match event_monitor(state_clone_cl).await{
-                    Ok(_resp) => trace!("exited event monitor"),
-                    Err(_) => trace!("event monitor error")
-                };
-            });
-            let _ = event_loop.await;
+            mode_tcp::operation::listen(state_clone);
         },
         ComType::API => {
             // initiate tls configuration

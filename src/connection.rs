@@ -30,6 +30,7 @@ pub struct Addr {
 }
 
 /// Specify tcp or api communication
+#[derive(Debug, Clone)]
 pub enum ComType {
     TCP,
     API

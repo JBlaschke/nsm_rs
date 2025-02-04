@@ -105,7 +105,7 @@ pub async fn handle_list_ips(request: Request<Incoming>) -> HyperResult {
     Ok(response)
 }
 
-pub async fn handle_publish(mut request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {    
+pub async fn handle_publish(mut request: Request<Incoming>) -> HyperResult {    
     let mut response = Response::new(Full::default());
     let whole_body = request.body_mut().collect().await.unwrap().aggregate();
     let data: serde_json::Value = serde_json::from_reader(whole_body.reader()).unwrap();
