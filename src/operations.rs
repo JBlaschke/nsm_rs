@@ -42,12 +42,12 @@ use rustls::pki_types::ServerName;
 use lazy_static::lazy_static;
 
 
-type HttpResult = Result<Response<Full<Bytes>>, Error>;
-
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-type Sem = Arc<Mutex<Option<Instant>>>;
+type HttpResult = Result<Response<Full<Bytes>>, Error>;
+type Sem        = Arc<Mutex<Option<Instant>>>;
+type AMState    = Arc<(Mutex<State>, Notify)>;
 
 lazy_static! {
     pub static ref GLOBAL_LAST_HEARTBEAT: Sem = Arc::new(Mutex::new(None));
@@ -170,16 +170,18 @@ pub async fn listen(inputs: Listen, com: ComType) -> HttpResult {
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
         ).await
     };
-    let host = only_or_error(& ipstr);
+    let host: &String = only_or_error(& ipstr);
 
     // initiate state 
-    let state = Arc::new((Mutex::new(State::new(None)), Notify::new()));
+    let state: AMState = Arc::new((Mutex::new(State::new(None)), Notify::new()));
     let state_clone = Arc::clone(& state);
 
     // enter tcp or api integration
     match com{
         ComType::TCP => {
-            mode_tcp::operation::listen(state_clone);
+            mode_tcp::operation::listen(
+                state_clone, host, inputs.bind_port
+            ).await;
         },
         ComType::API => {
             // initiate tls configuration
