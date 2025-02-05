@@ -41,13 +41,13 @@ use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
 use lazy_static::lazy_static;
 
-
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-type HttpResult = Result<Response<Full<Bytes>>, Error>;
-type Sem        = Arc<Mutex<Option<Instant>>>;
-type AMState    = Arc<(Mutex<State>, Notify)>;
+
+pub type HttpResult = Result<Response<Full<Bytes>>, Error>;
+pub type Sem        = Arc<Mutex<Option<Instant>>>;
+pub type AMState    = Arc<(Mutex<State>, Notify)>;
 
 lazy_static! {
     pub static ref GLOBAL_LAST_HEARTBEAT: Sem = Arc::new(Mutex::new(None));
@@ -179,7 +179,7 @@ pub async fn listen(inputs: Listen, com: ComType) -> HttpResult {
     // enter tcp or api integration
     match com{
         ComType::TCP => {
-            mode_tcp::operation::listen(
+            mode_tcp::operations::listen(
                 state_clone, host, inputs.bind_port
             ).await;
         },
