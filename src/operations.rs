@@ -253,7 +253,7 @@ pub async fn publish(
 
     });
 
-    let host = only_or_error(& ipstr);
+    let host = only_or_error(&ipstr);
     let host_clone = host.clone();
 
     let msg = & Message{
@@ -265,8 +265,9 @@ pub async fn publish(
     match com{
         ComType::TCP => {
             // connect to broker
-            let stream = match connect(& Addr{
-                host: inputs.host, port: inputs.port}).await{
+            let stream = match connect(
+                &Addr::new(&inputs.host, inputs.port)
+            ).await {
                     Ok(s) => s,
                     Err(_e) => {
                         return Err(std::io::Error::new(
@@ -304,10 +305,7 @@ pub async fn publish(
                 >>
             };
 
-            let addr = Addr {
-                host: host.to_string(),
-                port: inputs.bind_port
-            };
+            let addr = Addr::new(&host, inputs.bind_port);
             // send/receive heartbeats to/from broker
             let _ = tcp_server(& addr, handler).await;
         },
@@ -414,10 +412,10 @@ pub async fn publish(
                 }
             }
             // TODO: Tidy up!!!
-            let broker_addr = Arc::new(Mutex::new(Addr{
-                host: parsed_url.clone().host_str().unwrap().to_string().clone(),
-                port: inputs.port
-            }));
+            let broker_addr = Arc::new(Mutex::new(Addr::new(
+                &parsed_url.clone().host_str().unwrap().to_string(),
+                inputs.port
+            )));
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let broker_addr_value = Arc::clone(&broker_addr);
@@ -684,10 +682,9 @@ pub async fn claim(
     match com {
         ComType::TCP => {
             // connect to broker
-            let stream = match connect(& Addr{
-                host: inputs.host.clone(),
-                port: inputs.port
-            }).await{
+            let stream = match connect(& Addr::new(
+                    &inputs.host.clone(), inputs.port
+            )).await{
                     Ok(s) => s,
                     Err(_e) => {
                         return Err(std::io::Error::new(
@@ -747,10 +744,9 @@ pub async fn claim(
                 }
             }
 
-            let broker_addr = Arc::new(Mutex::new(Addr{
-                host: inputs.host.clone(),
-                port: inputs.port
-            }));
+            let broker_addr = Arc::new(Mutex::new(Addr::new(
+                &inputs.host.clone(), inputs.port
+            )));
 
             let payload_clone = Arc::clone(&service_payload);
             let broker_clone = Arc::clone(&broker_addr);
@@ -767,10 +763,7 @@ pub async fn claim(
                 }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             };
 
-            let addr = Addr {
-                host: host.to_string(),
-                port: inputs.bind_port
-            };
+            let addr = Addr::new(&host, inputs.bind_port);
 
             // send/receive heartbeats to/from broker
             let _ = tcp_server(& addr, handler).await;
@@ -873,10 +866,10 @@ pub async fn claim(
             }
 
             // TODO: Tidy up!!!
-            let broker_addr = Arc::new(Mutex::new(Addr{
-                host: parsed_url.clone().host_str().unwrap().to_string().clone(),
-                port: inputs.port
-            }));            
+            let broker_addr = Arc::new(Mutex::new(Addr::new(
+                &parsed_url.clone().host_str().unwrap().to_string(),
+                inputs.port
+            )));            
             // define closure to start heartbeats
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let service_payload_value = Arc::clone(&service_payload);
@@ -1087,10 +1080,7 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
     // enter tcp or api process
     match com {
         ComType::TCP => {
-            let addr = Addr {
-                host: inputs.host,
-                port: inputs.port
-            };
+            let addr = Addr::new(&inputs.host, inputs.port);
 
             // connect to published service or client, using bind ports
             let stream = match connect(& addr).await{
@@ -1217,10 +1207,7 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
     // start tcp or api process
     match com {
         ComType::TCP => {
-            let addr = Addr {
-                host: inputs.host,
-                port: inputs.port
-            };
+            let addr = Addr::new(&inputs.host, inputs.port);
             // connect to bind port of service or client
             let stream = match connect(& addr).await{
                 Ok(s) => s,

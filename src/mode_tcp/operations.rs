@@ -27,10 +27,7 @@ pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
         }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
     };
 
-    let addr = Addr {
-        host: host.to_string(),
-        port: bind_port
-    };
+    let addr = Addr::new(&host, bind_port);
 
     info!("Starting listener started on: {}:{}", &addr.host, addr.port);
 

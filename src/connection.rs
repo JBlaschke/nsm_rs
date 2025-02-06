@@ -1,5 +1,7 @@
 /// Handles incoming connections and sending/receiving messages
 
+use crate::operations::GLOBAL_LAST_HEARTBEAT;
+
 use std::fmt;
 use std::sync::Arc;
 use std::future::Future;
@@ -18,16 +20,38 @@ use http_body_util::{BodyExt, Full};
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-use crate::operations::GLOBAL_LAST_HEARTBEAT;
+
+/// Specify the transport layer used by address specifiers
+#[derive(Debug, Clone)]
+pub enum Transport {
+    SOCKET,
+    HTTP,
+    HTTPS
+}
+
 
 /// Store host and port for new connections
 #[derive(Debug, Clone)]
 pub struct Addr {
+    /// Transport
+    pub transport: Transport,
     /// Address
     pub host: String,
     /// Port number
     pub port: i32
 }
+
+
+impl Addr {
+    pub fn new(host: &String, port: i32) -> Self {
+        Self {
+            transport: Transport::SOCKET,
+            host: host.to_string(),
+            port: port
+        }
+    }
+}
+
 
 /// Specify tcp or api communication
 #[derive(Debug, Clone)]
