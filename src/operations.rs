@@ -5,8 +5,8 @@ use crate::connection::{
     stream_read
 };
 use crate::service::{
-    Payload, State, serialize, deserialize, request_handler,
-    heartbeat_handler_helper, ping_heartbeat, event_monitor
+    Payload, State, serialize, deserialize, heartbeat_handler_helper,
+    ping_heartbeat
 };
 use crate::utils::{only_or_error, epoch};
 use crate::models::{
@@ -14,6 +14,7 @@ use crate::models::{
 };
 use crate::tls::{tls_config, load_ca, setup_https_client};
 
+use crate::mode_api;
 use crate::mode_tcp;
 
 use std::{env, fs};
@@ -173,105 +174,21 @@ pub async fn listen(inputs: Listen, com: ComType) -> HttpResult {
     let host: &String = only_or_error(& ipstr);
 
     // initiate state 
-    let state: AMState = Arc::new((Mutex::new(State::new(None)), Notify::new()));
-    let state_clone = Arc::clone(& state);
+    let state: AMState = Arc::new(
+        (Mutex::new(State::new(None)), Notify::new())
+    );
 
     // enter tcp or api integration
     match com{
         ComType::TCP => {
             mode_tcp::operations::listen(
-                state_clone, host, inputs.bind_port
+                Arc::clone(&state), host, inputs.bind_port
             ).await;
         },
         ComType::API => {
-            // initiate tls configuration
-            let tls_acceptor : Option<TlsAcceptor> = if inputs.tls {
-                let server_config = tls_config().await.unwrap();
-                Some(TlsAcceptor::from(Arc::new(server_config)))
-            }
-            else {
-                None
-            };
-
-            let state_clone = Arc::clone(& state);
-
-            // send State into event monitor to handle heartbeat queue
-            let _event_loop = tokio::spawn(async move {
-                let _ = match event_monitor(state_clone).await{
-                    Ok(_resp) => trace!("exited event monitor"),
-                    Err(_) => trace!("event monitor error")
-                };
-            });
-
-            // define handler closure to start request_handler within the api
-            // server function
-            let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-                let state_clone = Arc::clone(& state);
-                Box::pin(async move {
-                    request_handler(& state_clone, None, Some(req)).await
-                }) as std::pin::Pin<Box<
-                    dyn Future<Output = Result<Response<Full<Bytes>>,
-                    std::io::Error>> + std::marker::Send
-                >>
-            }));
-
-            let server_addr: SocketAddr = format!(
-                "{}:{}", host.to_string(), inputs.bind_port
-            ).parse().unwrap();
-            
-            // bind to host address to listen for requests
-            let incoming = TcpListener::bind(&server_addr).await.unwrap();
-            info!("Listening on: {}:{}", host.to_string(), inputs.bind_port);
-
-            // define api service closure to route incoming requests
-            let service = service_fn(move |req: Request<Incoming>| {
-                let handler_clone = Arc::clone(&handler);
-                async move {
-                    let loc_handler = handler_clone.lock().await.clone();
-                    api_server(req, loc_handler).await
-                }
-            });
-
-            // infinitely listen for requests
-            loop {
-                let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
-                let service_clone = service.clone();
-                let tls_acceptor = if inputs.tls {
-                    tls_acceptor.clone()
-                } else {
-                    None
-                };
-                // thread handles incoming connections and adds them to State
-                // and event queue
-                tokio::task::spawn(async move {
-                    // check for tls
-                    match tls_acceptor {
-                        Some(tls_acc) => {
-                            match tls_acc.accept(tcp_stream).await {
-                                Ok(tls_stream) => {
-                                    if let Err(err) = Builder::new(TokioExecutor::new())
-                                    .serve_connection(TokioIo::new(tls_stream), service_clone)
-                                    .await {
-                                        error!("Failed to serve connection: {:?}", err);
-                                    }
-                                },
-                                Err(err) => {
-                                    eprintln!("failed to perform tls handshake: {err:#}");
-                                    return;
-                                }
-                            }
-                        },
-                        None => {
-                            if let Err(err) = Builder::new(TokioExecutor::new())
-                            .serve_connection(TokioIo::new(tcp_stream), service_clone)
-                            .await {
-                                error!("Failed to serve connection: {:?}", err);
-                            }
-                        }
-                    };
-                });
-            }
-            // let _ = event_loop.await;
+            mode_api::operations::listen(
+                Arc::clone(&state), host, inputs.bind_port, inputs.tls
+            ).await;
         }
     };
     

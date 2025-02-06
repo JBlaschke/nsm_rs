@@ -716,6 +716,9 @@ pub fn deserialize(payload: & String) -> Payload {
     serde_json::from_str(payload).unwrap()
 }
 
+// TODO: use temples rather than matching input args to discriminate between the
+// http and tcp paths.
+
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
 pub async fn request_handler(

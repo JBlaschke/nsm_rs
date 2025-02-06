@@ -15,7 +15,7 @@ use log::{debug, error, info, trace, warn};
 pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
     trace!("Entering TCP listen for host: {:?}:{:?}", host, bind_port);
 
-    let state_cl_req = Arc::clone(& state);
+    let state_cl_req = Arc::clone(&state);
 
     // define handler closure to start request_handler within the tcp server
     // function. Note: this should will return an HTTP response provided the
@@ -23,7 +23,7 @@ pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
     let handler = move |stream: Option<Arc<Mutex<TcpStream>>>| {
         let state_clone_inner = Arc::clone(&state_cl_req);
         Box::pin(async move {
-            request_handler(& state_clone_inner, stream, None).await
+            request_handler(&state_clone_inner, stream, None).await
         }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
     };
 
