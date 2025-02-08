@@ -13,7 +13,9 @@ use log::{debug, error, info, trace, warn};
 
 
 pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
-    trace!("Entering TCP listen for host: {:?}:{:?}", host, bind_port);
+    let addr = Addr::new(&host, bind_port);
+
+    trace!("Entering TCP listen for host: {}", addr);
 
     let state_cl_req = Arc::clone(&state);
 
@@ -27,9 +29,7 @@ pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
         }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
     };
 
-    let addr = Addr::new(&host, bind_port);
-
-    info!("Starting listener started on: {}:{}", &addr.host, addr.port);
+    info!("Starting listener on: {}", addr);
 
     // thread handles incoming tcp connections and adds them to State
     // and event queue

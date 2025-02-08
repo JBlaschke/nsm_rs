@@ -53,6 +53,71 @@ impl Addr {
 }
 
 
+// also implements ToString
+impl fmt::Display for Addr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.transport {
+            Transport::SOCKET => write!(f, "{}:{}", self.host, self.port),
+            Transport::HTTP => write!(f, "http://{}:{}", self.host, self.port),
+            Transport::HTTPS => write!(f, "https://{}:{}", self.host, self.port)
+        }
+    }
+}
+
+
+/// Error to indicate that a string representation of an address could not be
+/// parsed -- namely because the address string does not follow the pattern:
+/// <IP>:<Port> or http://<Name>:<Port> or https://<Name>:<Port> -- Port MUST be
+/// specified
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseAddrError;
+
+
+impl std::str::FromStr for Addr {
+    type Err = ParseAddrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Determin the transport type and number of leadign characters by the
+        // presence of a "https://" or "http://"
+        let (transport, nchars) = if s.starts_with("http://") {
+            (Transport::HTTP, 7)
+        } else if s.starts_with("https://") {
+            (Transport::HTTPS, 8)
+        } else {
+            (Transport::SOCKET, 0)
+        };
+
+        // remove the leading characters from name string
+        let mut chars = s.chars();
+        for _ in 1..=nchars {chars.next();}
+        if s.ends_with("/") { chars.next_back(); } // remove possible trailing /
+        let spec:Vec<&str> = chars.as_str().split(":").collect();
+
+        // get port (last element in split), and ensure that it's an i32
+        let port: i32 = match spec.last().ok_or(ParseAddrError)?.parse::<i32>(){
+            Ok(i) => i,
+            Err(_) => {
+                return Err(ParseAddrError);
+            }
+        };
+
+        // get remaining elements in the spec (splitted vector) -- and re-join
+        // them with ":" -- eg. if an IPv6 address is specified then it can
+        // contain ":", which would have been removed by the split
+        let host: String = spec[..spec.len()-1]
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<String>>()
+            .join(":");
+
+        // ensure that the host does not have any remaining /
+        if host.contains("/") { return Err(ParseAddrError); }
+
+        Ok(Addr{transport: transport, host: host, port:port})
+    }
+}
+
+
 /// Specify tcp or api communication
 #[derive(Debug, Clone)]
 pub enum ComType {
