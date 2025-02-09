@@ -716,6 +716,9 @@ pub fn deserialize(payload: & String) -> Payload {
     serde_json::from_str(payload).unwrap()
 }
 
+// TODO: use temples rather than matching input args to discriminate between the
+// http and tcp paths.
+
 /// Broker handles incoming connections, adds entity to its State struct,
 /// connects client to available services, and notifies event loop of new Events
 pub async fn request_handler(
@@ -985,10 +988,7 @@ pub async fn heartbeat_handler_helper(stream: Option<Arc<Mutex<TcpStream>>>,
     let payload = payload.unwrap_or(&binding);
     let payload_clone = payload.lock().await.clone();
 
-    let empty_addr = Arc::new(Mutex::new(Addr{
-        host: "".to_string(),
-        port: 0,
-    }));
+    let empty_addr = Arc::new(Mutex::new(Addr::new(&"".to_string(), 0)));
     // client uses listener's address to send msg, service does not need addr
     let addr = addr.unwrap_or(&empty_addr);
     let addr_clone = addr.lock().await.clone();
@@ -1051,10 +1051,7 @@ pub async fn ping_heartbeat(
     // retrieve service's payload from client or set an empty message body
     let payload_loc = payload.lock().await.clone();
 
-    let empty_addr = Arc::new(Mutex::new(Addr{
-        host: "".to_string(),
-        port: 0,
-    }));
+    let empty_addr = Arc::new(Mutex::new(Addr::new(&"".to_string(),0)));
     // client uses listener's address to send msg, service does not need addr
     let addr = address.unwrap_or(&empty_addr);
     let addr_loc = addr.lock().await.clone();

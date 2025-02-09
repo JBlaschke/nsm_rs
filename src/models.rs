@@ -1,3 +1,5 @@
+use crate::connection::Addr;
+
 use serde::{Serialize, Deserialize};
 
 /// Lists available interfaces on device
@@ -85,9 +87,7 @@ pub struct Claim {
     /// connection to version 6 address
     pub print_v6: bool,
     /// broker's local IP address
-    pub host: String,
-    /// same as Listen's bind_port, notify of new connection
-    pub port: i32,
+    pub host: Addr,
     /// name of interface
     pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
@@ -126,9 +126,7 @@ pub struct Publish {
     /// connection to version 6 address
     pub print_v6: bool,
     /// broker's local IP address
-    pub host: String,
-    /// same as Listen's bind_port, notify of new connection
-    pub port: i32,
+    pub host: Addr,
     /// name of interface
     pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
@@ -162,9 +160,7 @@ pub struct Collect {
     /// connection to version 6 address
     pub print_v6: bool,
     /// claim's local ip address
-    pub host: String,
-    /// same as Listen's bind_port, notify of new connection
-    pub port: i32,
+    pub host: Addr,
     /// name of interface
     pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available
@@ -192,9 +188,7 @@ pub struct SendMSG {
     /// connection to version 6 address
     pub print_v6: bool,
     /// broker's local IP address
-    pub host: String,
-    /// same as Listen's bind_port, notify of new connection
-    pub port: i32,
+    pub host: Addr,
     /// name of interface
     pub name: Option<String>,
     /// filter IP addresses to 1 output when more than 1 available

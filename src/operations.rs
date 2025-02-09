@@ -5,14 +5,17 @@ use crate::connection::{
     stream_read
 };
 use crate::service::{
-    Payload, State, serialize, deserialize, request_handler,
-    heartbeat_handler_helper, ping_heartbeat, event_monitor
+    Payload, State, serialize, deserialize, heartbeat_handler_helper,
+    ping_heartbeat
 };
 use crate::utils::{only_or_error, epoch};
 use crate::models::{
     ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG
 };
 use crate::tls::{tls_config, load_ca, setup_https_client};
+
+use crate::mode_api;
+use crate::mode_tcp;
 
 use std::{env, fs};
 use std::sync::Arc;
@@ -39,13 +42,13 @@ use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
 use lazy_static::lazy_static;
 
-
-type HttpResult = Result<Response<Full<Bytes>>, Error>;
-
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-type Sem = Arc<Mutex<Option<Instant>>>;
+
+pub type HttpResult = Result<Response<Full<Bytes>>, Error>;
+pub type Sem        = Arc<Mutex<Option<Instant>>>;
+pub type AMState    = Arc<(Mutex<State>, Notify)>;
 
 lazy_static! {
     pub static ref GLOBAL_LAST_HEARTBEAT: Sem = Arc::new(Mutex::new(None));
@@ -154,11 +157,8 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
 
 /// # Listen
 /// Inititate broker with tcp or api communication
-pub async fn listen(
-        inputs: Listen, com: ComType
-    ) -> Result<Response<Full<Bytes>>, std::io::Error> {
-
-    trace!("Setting up listener...");
+pub async fn listen(inputs: Listen, com: ComType) -> HttpResult {
+    info!("Entering listener with input: {:?}; and comm: {:?}", inputs, com);
     let ips = get_local_ips().await;
 
     // identify local ip address
@@ -171,142 +171,24 @@ pub async fn listen(
             & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
         ).await
     };
-    let host = only_or_error(& ipstr);
+    let host: &String = only_or_error(& ipstr);
 
     // initiate state 
-    let state = Arc::new((Mutex::new(State::new(None)), Notify::new()));
-    let state_clone = Arc::clone(& state);
+    let state: AMState = Arc::new(
+        (Mutex::new(State::new(None)), Notify::new())
+    );
 
     // enter tcp or api integration
     match com{
         ComType::TCP => {
-            let state_clones = Arc::clone(& state_clone);
-
-            // define handler closure to start request_handler within the tcp
-            // server function
-            let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
-                let state_clone_inner = Arc::clone(& state_clones);
-                Box::pin(async move {
-                    request_handler(& state_clone_inner, stream, None).await
-                }) as std::pin::Pin<Box<
-                    dyn Future<Output = Result<Response<Full<Bytes>>,
-                    std::io::Error>> + std::marker::Send
-                >>
-            };
-
-            let addr = Addr {
-                host: host.to_string(),
-                port: inputs.bind_port
-            };
-
-            info!("Starting listener started on: {}:{}", &addr.host, addr.port);
-
-            // thread handles incoming tcp connections and adds them to State
-            // and event queue
-            let _thread_handler = tokio::spawn(async move {
-                let _ = tcp_server(& addr, handler).await;
-            });
-
-            let state_clone_cl = Arc::clone(& state_clone);
-
-            // send State into event monitor to handle heartbeat queue
-            let event_loop = tokio::spawn(async move {
-                let _ = match event_monitor(state_clone_cl).await{
-                    Ok(_resp) => trace!("exited event monitor"),
-                    Err(_) => trace!("event monitor error")
-                };
-            });
-            let _ = event_loop.await;
+            mode_tcp::operations::listen(
+                Arc::clone(&state), host, inputs.bind_port
+            ).await;
         },
         ComType::API => {
-            // initiate tls configuration
-            let tls_acceptor : Option<TlsAcceptor> = if inputs.tls {
-                let server_config = tls_config().await.unwrap();
-                Some(TlsAcceptor::from(Arc::new(server_config)))
-            }
-            else {
-                None
-            };
-
-            let state_clone = Arc::clone(& state);
-
-            // send State into event monitor to handle heartbeat queue
-            let _event_loop = tokio::spawn(async move {
-                let _ = match event_monitor(state_clone).await{
-                    Ok(_resp) => trace!("exited event monitor"),
-                    Err(_) => trace!("event monitor error")
-                };
-            });
-
-            // define handler closure to start request_handler within the api
-            // server function
-            let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-                let state_clone = Arc::clone(& state);
-                Box::pin(async move {
-                    request_handler(& state_clone, None, Some(req)).await
-                }) as std::pin::Pin<Box<
-                    dyn Future<Output = Result<Response<Full<Bytes>>,
-                    std::io::Error>> + std::marker::Send
-                >>
-            }));
-
-            let server_addr: SocketAddr = format!(
-                "{}:{}", host.to_string(), inputs.bind_port
-            ).parse().unwrap();
-            
-            // bind to host address to listen for requests
-            let incoming = TcpListener::bind(&server_addr).await.unwrap();
-            info!("Listening on: {}:{}", host.to_string(), inputs.bind_port);
-
-            // define api service closure to route incoming requests
-            let service = service_fn(move |req: Request<Incoming>| {
-                let handler_clone = Arc::clone(&handler);
-                async move {
-                    let loc_handler = handler_clone.lock().await.clone();
-                    api_server(req, loc_handler).await
-                }
-            });
-
-            // infinitely listen for requests
-            loop {
-                let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
-                let service_clone = service.clone();
-                let tls_acceptor = if inputs.tls {
-                    tls_acceptor.clone()
-                } else {
-                    None
-                };
-                // thread handles incoming connections and adds them to State
-                // and event queue
-                tokio::task::spawn(async move {
-                    // check for tls
-                    match tls_acceptor {
-                        Some(tls_acc) => {
-                            match tls_acc.accept(tcp_stream).await {
-                                Ok(tls_stream) => {
-                                    if let Err(err) = Builder::new(TokioExecutor::new())
-                                    .serve_connection(TokioIo::new(tls_stream), service_clone)
-                                    .await {
-                                        error!("Failed to serve connection: {:?}", err);
-                                    }
-                                },
-                                Err(err) => {
-                                    eprintln!("failed to perform tls handshake: {err:#}");
-                                    return;
-                                }
-                            }
-                        },
-                        None => {
-                            if let Err(err) = Builder::new(TokioExecutor::new())
-                            .serve_connection(TokioIo::new(tcp_stream), service_clone)
-                            .await {
-                                error!("Failed to serve connection: {:?}", err);
-                            }
-                        }
-                    };
-                });
-            }
-            // let _ = event_loop.await;
+            mode_api::operations::listen(
+                Arc::clone(&state), host, inputs.bind_port, inputs.tls
+            ).await;
         }
     };
     
@@ -371,7 +253,7 @@ pub async fn publish(
 
     });
 
-    let host = only_or_error(& ipstr);
+    let host = only_or_error(&ipstr);
     let host_clone = host.clone();
 
     let msg = & Message{
@@ -383,13 +265,14 @@ pub async fn publish(
     match com{
         ComType::TCP => {
             // connect to broker
-            let stream = match connect(& Addr{
-                host: inputs.host, port: inputs.port}).await{
-                    Ok(s) => s,
-                    Err(_e) => {
-                        return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
-                        }
+            let stream = match connect(&inputs.host).await {
+                Ok(s) => s,
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Connection unsuccessful"
+                    ));
+                }
             };
             let stream_mut = Arc::new(Mutex::new(stream));
             // send broker identification and add itself to event queue and state
@@ -422,10 +305,7 @@ pub async fn publish(
                 >>
             };
 
-            let addr = Addr {
-                host: host.to_string(),
-                port: inputs.bind_port
-            };
+            let addr = Addr::new(&host, inputs.bind_port);
             // send/receive heartbeats to/from broker
             let _ = tcp_server(& addr, handler).await;
         },
@@ -433,7 +313,7 @@ pub async fn publish(
             // start tls configuration
             let tls : Option<rustls::ClientConfig>;
             // Use the url crate to parse the URL
-            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap();
+            let parsed_url = url::Url::parse(&inputs.host.to_string()).unwrap();
             let tls_acceptor = if inputs.tls {
                 trace!("entering tls config");
                 let server_config = tls_config().await.unwrap();
@@ -531,11 +411,12 @@ pub async fn publish(
                     },
                 }
             }
-            // TODO: Tidy up!!!
-            let broker_addr = Arc::new(Mutex::new(Addr{
-                host: parsed_url.clone().host_str().unwrap().to_string().clone(),
-                port: inputs.port
-            }));
+            // // TODO: Tidy up!!!
+            // let broker_addr = Arc::new(Mutex::new(Addr::new(
+            //     &parsed_url.clone().host_str().unwrap().to_string(),
+            //     inputs.port
+            // )));
+            let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let broker_addr_value = Arc::clone(&broker_addr);
@@ -778,7 +659,8 @@ pub async fn claim(
     // define payload with metadata to send to broker
     let payload = serialize(& Payload {
         service_addr: ipstr.clone(),
-        service_port: inputs.port,
+        // service_port: inputs.port,
+        service_port: -1,  // TODO: check that this works
         service_claim: epoch(),
         interface_addr: Vec::new(),
         bind_port: inputs.bind_port,
@@ -802,15 +684,14 @@ pub async fn claim(
     match com {
         ComType::TCP => {
             // connect to broker
-            let stream = match connect(& Addr{
-                host: inputs.host.clone(),
-                port: inputs.port
-            }).await{
-                    Ok(s) => s,
-                    Err(_e) => {
-                        return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,"Connection unsuccessful. Try another key"));
-                        }
+            let stream = match connect(&inputs.host).await{
+                Ok(s) => s,
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Connection unsuccessful. Try another key"
+                    ));
+                }
             };
             let stream_mut = Arc::new(Mutex::new(stream));
             // send message to broker with metadata to add to event queue and state
@@ -865,10 +746,10 @@ pub async fn claim(
                 }
             }
 
-            let broker_addr = Arc::new(Mutex::new(Addr{
-                host: inputs.host.clone(),
-                port: inputs.port
-            }));
+            // let broker_addr = Arc::new(Mutex::new(Addr::new(
+            //     &inputs.host.clone(), inputs.port
+            // )));
+            let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
 
             let payload_clone = Arc::clone(&service_payload);
             let broker_clone = Arc::clone(&broker_addr);
@@ -885,10 +766,7 @@ pub async fn claim(
                 }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
             };
 
-            let addr = Addr {
-                host: host.to_string(),
-                port: inputs.bind_port
-            };
+            let addr = Addr::new(&host, inputs.bind_port);
 
             // send/receive heartbeats to/from broker
             let _ = tcp_server(& addr, handler).await;
@@ -896,7 +774,7 @@ pub async fn claim(
         ComType::API => {
             // initialize tls configuration
             let tls : Option<rustls::ClientConfig>;
-            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap();
+            let parsed_url = url::Url::parse(&inputs.host.to_string()).unwrap();
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
                 let root_path = match env::var("ROOT_PATH") {
@@ -990,11 +868,12 @@ pub async fn claim(
                 }
             }
 
-            // TODO: Tidy up!!!
-            let broker_addr = Arc::new(Mutex::new(Addr{
-                host: parsed_url.clone().host_str().unwrap().to_string().clone(),
-                port: inputs.port
-            }));            
+            // // TODO: Tidy up!!!
+            // let broker_addr = Arc::new(Mutex::new(Addr::new(
+            //     &parsed_url.clone().host_str().unwrap().to_string(),
+            //     inputs.port
+            // )));
+            let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
             // define closure to start heartbeats
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let service_payload_value = Arc::clone(&service_payload);
@@ -1205,20 +1084,19 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
     // enter tcp or api process
     match com {
         ComType::TCP => {
-            let addr = Addr {
-                host: inputs.host,
-                port: inputs.port
-            };
+            // let addr = Addr::new(&inputs.host, inputs.port);
 
             // connect to published service or client, using bind ports
-            let stream = match connect(& addr).await{
+            let stream = match connect(&inputs.host).await{
                 Ok(s) => s,
                 Err(_e) => {
                     return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
-                    }
+                        std::io::ErrorKind::InvalidInput,
+                        "Connection unsuccessful"
+                    ));
+                }
             };        
-            trace!("Connection to {:?} successful", addr);
+            trace!("Connection to {:?} successful", inputs.host);
 
             let stream_mut = Arc::new(Mutex::new(stream));
 
@@ -1275,7 +1153,10 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             let req = if inputs.tls {
                 Request::builder()
                 .method(Method::GET)
-                .uri(format!("https://{}:{}/heartbeat_handler", inputs.host, inputs.port))
+                .uri(format!(
+                    "https://{}:{}/heartbeat_handler",
+                    inputs.host.host, inputs.host.port
+                )) // TODO: tidy up
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                 .unwrap()
@@ -1283,7 +1164,10 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             else {
                 Request::builder()
                 .method(Method::GET)
-                .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
+                .uri(format!(
+                    "http://{}:{}/heartbeat_handler",
+                    inputs.host.host, inputs.host.port
+                )) // TODO: tidy up
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                 .unwrap()
@@ -1291,7 +1175,7 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
         
             let result = timeout(timeout_duration, client.request(req)).await;
         
-            trace!("sending request to {}:{}", inputs.host, inputs.port);
+            trace!("sending request to {}", inputs.host);
         
             // check valid response and return message to terminal
             match result {
@@ -1335,12 +1219,9 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
     // start tcp or api process
     match com {
         ComType::TCP => {
-            let addr = Addr {
-                host: inputs.host,
-                port: inputs.port
-            };
+            // let addr = Addr::new(&inputs.host, inputs.port);
             // connect to bind port of service or client
-            let stream = match connect(& addr).await{
+            let stream = match connect(&inputs.host).await{
                 Ok(s) => s,
                 Err(_e) => {
                     return Err(std::io::Error::new(
@@ -1392,11 +1273,14 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
             };
             let timeout_duration = Duration::from_millis(6000);
             // send request to client with message in the body
-            trace!("sending request to {}:{}", inputs.host, inputs.port);
+            trace!("sending request to {}", inputs.host);
             let req = if inputs.tls {
                 Request::builder()
                 .method(Method::POST)
-                .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
+                .uri(format!(
+                    "https://{}:{}/request_handler",
+                    inputs.host.host, inputs.host.port
+                )) // TODO: tidy up
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                 .unwrap()
@@ -1404,7 +1288,10 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
             else {
                 Request::builder()
                 .method(Method::POST)
-                .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+                .uri(format!(
+                    "http://{}:{}/request_handler",
+                    inputs.host.host, inputs.host.port
+                )) // TODO: tidy up
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                 .unwrap()

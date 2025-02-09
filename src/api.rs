@@ -4,11 +4,14 @@
 //! A "connection broker" with a fixed address passes the address of a service cluster
 //! for compute nodes to connect to and run a job.
 
+// TODO: this should be organized better
 mod network;
 mod service;
 mod utils;
 mod models; 
 mod tls;
+mod mode_api;
+mod mode_tcp;
 
 mod connection;
 use connection::ComType;
