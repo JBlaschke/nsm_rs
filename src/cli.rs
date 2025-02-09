@@ -108,6 +108,15 @@ pub fn init() -> ArgMatches {
             .required(false)
         )
         .arg(
+            Arg::new("tls")
+            .long("tls")
+            .value_name("SET TLS")
+            .help("Use TLS to encrypt traffic")
+            .num_args(0)
+            .action(clap::ArgAction::SetTrue)
+            .required(false)
+        )     
+        .arg(
             Arg::new("root_ca")
             .long("root_ca")
             .value_name("CA")
@@ -164,6 +173,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
         print_v4 = true;
         print_v6 = true;
     }
+    // TODO: TLS option only available for the listen operation => Tidy up
     let tls = * args.get_one::<bool>("tls").unwrap();
 
     let operation = args.get_one::<String>("operation").unwrap();
