@@ -1,6 +1,11 @@
-use crate::models::{ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG};
+use crate::connection::Addr;
+use crate::models::{
+    ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG
+};
 
+use std::str::FromStr;
 use clap::{Arg, Command, ArgAction, ArgMatches};
+
 
 /// Parse through command line entry to define variables and initiate functions
 pub fn init() -> ArgMatches {
@@ -10,12 +15,10 @@ pub fn init() -> ArgMatches {
         .about("Manages services meshes with an eye towards HPC")
         .arg(
             Arg::new("operation")
-            .short('o')
-            .long("operation")
             .value_name("OPERATION")
             .help("Operation to be performed")
-            .num_args(1)
-            .required(false)
+            .index(1)
+            .required(true)
             .value_parser([
                 "list_interfaces",
                 "list_ips",
@@ -25,6 +28,13 @@ pub fn init() -> ArgMatches {
                 "collect",
                 "send"
             ])
+        )
+        .arg(
+            Arg::new("host")
+            .value_name("HOST")
+            .help("Host with which to transact")
+            .index(2)
+            .required(false)
         )
         .arg(
             Arg::new("interface_name")
@@ -81,23 +91,6 @@ pub fn init() -> ArgMatches {
             .action(ArgAction::SetTrue)
         )
         .arg(
-            Arg::new("host")
-            .long("host")
-            .value_name("HOST")
-            .help("Host to use during transaction")
-            .num_args(1)
-            .required(false)
-        )
-        .arg(
-            Arg::new("port")
-            .long("port")
-            .value_name("PORT")
-            .help("Port to use during transaction")
-            .num_args(1)
-            .required(false)
-            .value_parser(clap::value_parser!(i32))
-        )
-        .arg(
             Arg::new("key")
             .long("key")
             .value_name("KEY")
@@ -114,15 +107,6 @@ pub fn init() -> ArgMatches {
             .num_args(1)
             .required(false)
         )
-        .arg(
-            Arg::new("tls")
-            .long("tls")
-            .value_name("SET TLS")
-            .help("Use TLS to encrypt traffic")
-            .num_args(0)
-            .action(clap::ArgAction::SetTrue)
-            .required(false)
-        )        
         .arg(
             Arg::new("root_ca")
             .long("root_ca")
@@ -174,9 +158,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
         match * ip_version.unwrap() {
             4 => print_v4 = true,
             6 => print_v6 = true,
-            _ => panic!(
-                "Please specify IP version 4 or 6, or ommit `--ip-version` for both."
-            )
+            _ => panic!("Only IP versions 4 and 6 supported")
         }
     } else {
         print_v4 = true;
@@ -236,12 +218,12 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
 
         "claim" => {
             assert!(args.contains_id("host"));
-            assert!(args.contains_id("port"));
             assert!(args.contains_id("bind_port"));
             assert!(args.contains_id("key"));
 
-            let host            =   args.get_one::<String>("host").unwrap();
-            let port            = * args.get_one::<i32>("port").unwrap();
+            let host = Addr::from_str(
+                args.get_one::<String>("host").unwrap()
+            ).unwrap();
             let key             = * args.get_one::<u64>("key").unwrap();
             let name            =   args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
@@ -253,8 +235,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 Claim{
                     print_v4: print_v4,
                     print_v6: print_v6,
-                    host: host.to_string(),
-                    port: port,
+                    host: host,
                     name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
@@ -268,13 +249,13 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
 
         "publish" => {
             assert!(args.contains_id("host"));
-            assert!(args.contains_id("port"));
             assert!(args.contains_id("bind_port"));
             assert!(args.contains_id("service_port"));
             assert!(args.contains_id("key"));
 
-            let host            =   args.get_one::<String>("host").unwrap();
-            let port            = * args.get_one::<i32>("port").unwrap();
+            let host = Addr::from_str(
+                args.get_one::<String>("host").unwrap()
+            ).unwrap();
             let key             = * args.get_one::<u64>("key").unwrap();
             let name            =   args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
@@ -287,8 +268,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 Publish {
                     print_v4: print_v4,
                     print_v6: print_v6,
-                    host: host.to_string(),
-                    port: port,
+                    host: host,
                     name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     bind_port: bind_port,
@@ -303,10 +283,10 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
 
         "collect" => {
             assert!(args.contains_id("host"));
-            assert!(args.contains_id("port"));
 
-            let host            =   args.get_one::<String>("host").unwrap();
-            let port            = * args.get_one::<i32>("port").unwrap();
+            let host = Addr::from_str(
+                args.get_one::<String>("host").unwrap()
+            ).unwrap();
             let name            =   args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
             let key             = * args.get_one::<u64>("key").unwrap();
@@ -316,8 +296,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 Collect{
                     print_v4: print_v4,
                     print_v6: print_v6,
-                    host: host.to_string(),
-                    port: port,
+                    host: host,
                     name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     key: key,
@@ -329,11 +308,11 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
 
         "send" => {
             assert!(args.contains_id("host"));
-            assert!(args.contains_id("port"));
             assert!(args.contains_id("key"));
 
-            let host            =   args.get_one::<String>("host").unwrap();
-            let port            = * args.get_one::<i32>("port").unwrap();
+            let host = Addr::from_str(
+                args.get_one::<String>("host").unwrap()
+            ).unwrap();
             let key             = * args.get_one::<u64>("key").unwrap();
             let name            =   args.get_one::<String>("interface_name");
             let starting_octets =   args.get_one::<String>("ip_start");
@@ -344,8 +323,7 @@ pub fn parse(args: & ArgMatches) -> CLIOperation {
                 SendMSG {
                     print_v4: print_v4,
                     print_v6: print_v6,
-                    host: host.to_string(),
-                    port: port,
+                    host: host,
                     name: name.cloned(),
                     starting_octets: starting_octets.cloned(),
                     msg: msg.to_string(),

@@ -265,14 +265,14 @@ pub async fn publish(
     match com{
         ComType::TCP => {
             // connect to broker
-            let stream = match connect(
-                &Addr::new(&inputs.host, inputs.port)
-            ).await {
-                    Ok(s) => s,
-                    Err(_e) => {
-                        return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
-                        }
+            let stream = match connect(&inputs.host).await {
+                Ok(s) => s,
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Connection unsuccessful"
+                    ));
+                }
             };
             let stream_mut = Arc::new(Mutex::new(stream));
             // send broker identification and add itself to event queue and state
@@ -313,7 +313,9 @@ pub async fn publish(
             // start tls configuration
             let tls : Option<rustls::ClientConfig>;
             // Use the url crate to parse the URL
-            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap();
+            let parsed_url = url::Url::parse(
+                &inputs.host.host.clone()
+            ).unwrap();
             let tls_acceptor = if inputs.tls {
                 trace!("entering tls config");
                 let server_config = tls_config().await.unwrap();
@@ -411,11 +413,12 @@ pub async fn publish(
                     },
                 }
             }
-            // TODO: Tidy up!!!
-            let broker_addr = Arc::new(Mutex::new(Addr::new(
-                &parsed_url.clone().host_str().unwrap().to_string(),
-                inputs.port
-            )));
+            // // TODO: Tidy up!!!
+            // let broker_addr = Arc::new(Mutex::new(Addr::new(
+            //     &parsed_url.clone().host_str().unwrap().to_string(),
+            //     inputs.port
+            // )));
+            let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
             // define closure to send connections from server to heartbeat handler
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let broker_addr_value = Arc::clone(&broker_addr);
@@ -658,7 +661,8 @@ pub async fn claim(
     // define payload with metadata to send to broker
     let payload = serialize(& Payload {
         service_addr: ipstr.clone(),
-        service_port: inputs.port,
+        // service_port: inputs.port,
+        service_port: -1,  // TODO: check that this works
         service_claim: epoch(),
         interface_addr: Vec::new(),
         bind_port: inputs.bind_port,
@@ -682,14 +686,14 @@ pub async fn claim(
     match com {
         ComType::TCP => {
             // connect to broker
-            let stream = match connect(& Addr::new(
-                    &inputs.host.clone(), inputs.port
-            )).await{
-                    Ok(s) => s,
-                    Err(_e) => {
-                        return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,"Connection unsuccessful. Try another key"));
-                        }
+            let stream = match connect(&inputs.host).await{
+                Ok(s) => s,
+                Err(_e) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Connection unsuccessful. Try another key"
+                    ));
+                }
             };
             let stream_mut = Arc::new(Mutex::new(stream));
             // send message to broker with metadata to add to event queue and state
@@ -744,9 +748,10 @@ pub async fn claim(
                 }
             }
 
-            let broker_addr = Arc::new(Mutex::new(Addr::new(
-                &inputs.host.clone(), inputs.port
-            )));
+            // let broker_addr = Arc::new(Mutex::new(Addr::new(
+            //     &inputs.host.clone(), inputs.port
+            // )));
+            let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
 
             let payload_clone = Arc::clone(&service_payload);
             let broker_clone = Arc::clone(&broker_addr);
@@ -771,7 +776,9 @@ pub async fn claim(
         ComType::API => {
             // initialize tls configuration
             let tls : Option<rustls::ClientConfig>;
-            let parsed_url = url::Url::parse(&inputs.host.clone()).unwrap();
+            let parsed_url = url::Url::parse(
+                &inputs.host.host.clone()
+            ).unwrap();
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
                 let root_path = match env::var("ROOT_PATH") {
@@ -865,11 +872,12 @@ pub async fn claim(
                 }
             }
 
-            // TODO: Tidy up!!!
-            let broker_addr = Arc::new(Mutex::new(Addr::new(
-                &parsed_url.clone().host_str().unwrap().to_string(),
-                inputs.port
-            )));            
+            // // TODO: Tidy up!!!
+            // let broker_addr = Arc::new(Mutex::new(Addr::new(
+            //     &parsed_url.clone().host_str().unwrap().to_string(),
+            //     inputs.port
+            // )));
+            let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
             // define closure to start heartbeats
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
                 let service_payload_value = Arc::clone(&service_payload);
@@ -1080,17 +1088,19 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
     // enter tcp or api process
     match com {
         ComType::TCP => {
-            let addr = Addr::new(&inputs.host, inputs.port);
+            // let addr = Addr::new(&inputs.host, inputs.port);
 
             // connect to published service or client, using bind ports
-            let stream = match connect(& addr).await{
+            let stream = match connect(&inputs.host).await{
                 Ok(s) => s,
                 Err(_e) => {
                     return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,"Connection unsuccessful"));
-                    }
+                        std::io::ErrorKind::InvalidInput,
+                        "Connection unsuccessful"
+                    ));
+                }
             };        
-            trace!("Connection to {:?} successful", addr);
+            trace!("Connection to {:?} successful", inputs.host);
 
             let stream_mut = Arc::new(Mutex::new(stream));
 
@@ -1147,7 +1157,10 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             let req = if inputs.tls {
                 Request::builder()
                 .method(Method::GET)
-                .uri(format!("https://{}:{}/heartbeat_handler", inputs.host, inputs.port))
+                .uri(format!(
+                    "https://{}:{}/heartbeat_handler",
+                    inputs.host.host, inputs.host.port
+                )) // TODO: tidy up
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                 .unwrap()
@@ -1155,7 +1168,10 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
             else {
                 Request::builder()
                 .method(Method::GET)
-                .uri(format!("http://{}:{}/heartbeat_handler", inputs.host, inputs.port))
+                .uri(format!(
+                    "http://{}:{}/heartbeat_handler",
+                    inputs.host.host, inputs.host.port
+                )) // TODO: tidy up
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                 .unwrap()
@@ -1163,7 +1179,7 @@ pub async fn collect(inputs: Collect, com: ComType) -> Result<(), std::io::Error
         
             let result = timeout(timeout_duration, client.request(req)).await;
         
-            trace!("sending request to {}:{}", inputs.host, inputs.port);
+            trace!("sending request to {}", inputs.host);
         
             // check valid response and return message to terminal
             match result {
@@ -1207,9 +1223,9 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
     // start tcp or api process
     match com {
         ComType::TCP => {
-            let addr = Addr::new(&inputs.host, inputs.port);
+            // let addr = Addr::new(&inputs.host, inputs.port);
             // connect to bind port of service or client
-            let stream = match connect(& addr).await{
+            let stream = match connect(&inputs.host).await{
                 Ok(s) => s,
                 Err(_e) => {
                     return Err(std::io::Error::new(
@@ -1261,11 +1277,14 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
             };
             let timeout_duration = Duration::from_millis(6000);
             // send request to client with message in the body
-            trace!("sending request to {}:{}", inputs.host, inputs.port);
+            trace!("sending request to {}", inputs.host);
             let req = if inputs.tls {
                 Request::builder()
                 .method(Method::POST)
-                .uri(format!("https://{}:{}/request_handler", inputs.host, inputs.port))
+                .uri(format!(
+                    "https://{}:{}/request_handler",
+                    inputs.host.host, inputs.host.port
+                )) // TODO: tidy up
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                 .unwrap()
@@ -1273,7 +1292,10 @@ pub async fn send_msg(inputs: SendMSG, com: ComType) -> Result<(), std::io::Erro
             else {
                 Request::builder()
                 .method(Method::POST)
-                .uri(format!("http://{}:{}/request_handler", inputs.host, inputs.port))
+                .uri(format!(
+                    "http://{}:{}/request_handler",
+                    inputs.host.host, inputs.host.port
+                )) // TODO: tidy up
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
                 .unwrap()

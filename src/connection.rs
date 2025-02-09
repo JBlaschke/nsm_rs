@@ -22,7 +22,7 @@ use log::{debug, error, info, trace, warn};
 
 
 /// Specify the transport layer used by address specifiers
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum Transport {
     SOCKET,
     HTTP,
@@ -31,7 +31,7 @@ pub enum Transport {
 
 
 /// Store host and port for new connections
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Addr {
     /// Transport
     pub transport: Transport,
