@@ -15,7 +15,7 @@ use log::{debug, error, info, trace, warn};
 pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
     let addr = Addr::new(&host, bind_port);
 
-    trace!("Entering TCP listen for host: {}", addr);
+    trace!("Starting TCP listen for host: {}", addr);
 
     let state_cl_req = Arc::clone(&state);
 
@@ -34,7 +34,7 @@ pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
     // thread handles incoming tcp connections and adds them to State
     // and event queue
     let _thread_handler = tokio::spawn(async move {
-        let _ = tcp_server(& addr, handler).await;
+        let _ = tcp_server(&addr, handler).await;
     });
 
     let state_cl_event = Arc::clone(&state);
@@ -47,4 +47,57 @@ pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
         };
     });
     let _ = event_loop.await;
+}
+
+
+pub async fn publish(state: AMState, host: &String, bind_port: i32) -> () {
+    //let addr = Addr::new(&host, inputs.bind_port);
+
+    //trace!("ing TCP listen for host: {}", addr);
+
+    //// connect to broker
+    //let stream = match connect(&inputs.host).await {
+    //    Ok(s) => s,
+    //    Err(_e) => {
+    //        return Err(std::io::Error::new(
+    //            std::io::ErrorKind::InvalidInput,
+    //            "Connection unsuccessful"
+    //        ));
+    //    }
+    //};
+    //let stream_mut = Arc::new(Mutex::new(stream));
+    //// send broker identification and add itself to event queue and
+    //// state
+    //let ack = send(&stream_mut, msg).await;
+
+    //// check for successful connection
+    //match ack {
+    //    Ok(m) => {
+    //        trace!("Received response: {:?}", m);
+    //        match m.header {
+    //            MessageHeader::ACK => {
+    //                info!("Server acknowledged PUB.")
+    //            }
+    //            _ => {
+    //                warn!("Server responds with unexpected message: {:?}", m)
+    //            }
+    //        }
+    //    }
+    //    Err(e) => {
+    //        error!("Encountered error: {:?}", e);
+    //    }
+    //}
+
+    //// define closure to send connections from server to heartbeat handler
+    //let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
+    //    Box::pin(async move {
+    //        return heartbeat_handler_helper(stream, None, None, None, None).await
+    //    }) as Pin<Box<
+    //        dyn Future<Output=Result<Response<Full<Bytes>>, Error>> + Send
+    //    >>
+    //};
+
+    //// send/receive heartbeats to/from broker
+    //let _ = tcp_server(& addr, handler).await;
+    ()
 }

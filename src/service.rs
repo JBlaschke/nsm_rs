@@ -931,7 +931,6 @@ pub async fn request_handler(
             // reset last heartbeat timer for ping heartbeats
             while counter < 50 {
                 {
-
                     let state_loc = lock.lock().await;
                     let mut deque = state_loc.deque.lock().await;
                     trace!("searching deque {:?}", deque);
@@ -1186,7 +1185,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
     request: &mut Option<Request<Incoming>>, payload: &String,
      addr: Addr, tls: Option<ClientConfig>)
     -> Result<Response<Full<Bytes>>, std::io::Error> {
-    trace!("Starting heartbeat handler");
+    trace!("Starting heartbeat handler on {}", addr);
 
     // enter tcp or api mode
     // receive message from broker
@@ -1200,19 +1199,19 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                 },
                 Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
                     trace!("ConnectionReset error");
-                    std::process::exit(0);
+                    std::process::exit(0); // TODO: Don't exist proc insitu
                 }
                 Err(ref err) if err.kind() == std::io::ErrorKind::ConnectionAborted => {
                     trace!("ConnectionAborted error");
-                    std::process::exit(0);
+                    std::process::exit(0); // TODO: Don't exist proc insitu
                 }
                 Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
                     trace!("TimeOut error");
-                    std::process::exit(0);
+                    std::process::exit(0); // TODO: Don't exist proc insitu
                 }
                 Err(_err) => {
                     trace!("Unknown error reading from stream");
-                    std::process::exit(0);
+                    std::process::exit(0); // TODO: Don't exist proc insitu
                 }
             }
         },
@@ -1238,7 +1237,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
         match (stream, &mut *request) {
             (Some(_s), None) => {
                 // create new connection to broker
-                let listen_stream = match connect(& addr).await{
+                let listen_stream = match connect(&addr).await{
                     Ok(s) => s,
                     Err(_e) => {
                         return Err(std::io::Error::new(

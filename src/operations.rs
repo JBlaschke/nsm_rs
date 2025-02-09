@@ -50,9 +50,11 @@ pub type HttpResult = Result<Response<Full<Bytes>>, Error>;
 pub type Sem        = Arc<Mutex<Option<Instant>>>;
 pub type AMState    = Arc<(Mutex<State>, Notify)>;
 
+
 lazy_static! {
     pub static ref GLOBAL_LAST_HEARTBEAT: Sem = Arc::new(Mutex::new(None));
 }
+
 
 pub async fn get_interfaces(v4:bool, v6:bool) -> (Vec<String>, Vec<String>) {
     let ips = get_local_ips().await;
@@ -80,6 +82,7 @@ pub async fn get_interfaces(v4:bool, v6:bool) -> (Vec<String>, Vec<String>) {
 
     return (ipv4_names, ipv6_names)
 }
+
 
 /// # ListInterfaces
 /// Lists available interfaces on device
@@ -115,6 +118,7 @@ pub async fn list_interfaces(inputs: ListInterfaces) -> std::io::Result<()> {
 
     Ok(())
 }
+
 
 /// #List IPs
 /// Lists available IP addresses on interface specify version 4 or 6 to filter
@@ -155,23 +159,28 @@ pub async fn list_ips(inputs: ListIPs) -> std::io::Result<()> {
     Ok(())
 }
 
+
 /// # Listen
 /// Inititate broker with tcp or api communication
 pub async fn listen(inputs: Listen, com: ComType) -> HttpResult {
-    info!("Entering listener with input: {:?}; and comm: {:?}", inputs, com);
+    info!(
+        "Starting 'listen' operation with input: {:?}; and comm: {:?}",
+        inputs, com
+    );
+
     let ips = get_local_ips().await;
 
     // identify local ip address
     let ipstr = if inputs.print_v4 {
         get_matching_ipstr(
-            & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
+            &ips.ipv4_addrs, &inputs.name, &inputs.starting_octets
         ).await
     } else {
         get_matching_ipstr(
-            & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
+            &ips.ipv6_addrs, &inputs.name, &inputs.starting_octets
         ).await
     };
-    let host: &String = only_or_error(& ipstr);
+    let host: &String = only_or_error(&ipstr);
 
     // initiate state 
     let state: AMState = Arc::new(
@@ -195,51 +204,49 @@ pub async fn listen(inputs: Listen, com: ComType) -> HttpResult {
     Ok(Response::new(Full::default()))
 }
 
+
 /// # Publish
 /// Connect to broker and publish address for data connection.
-pub async fn publish(
-        inputs: Publish, com: ComType
-    ) -> Result<Response<Full<Bytes>>, Error> {
+pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
+    info!(
+        "Starting publish operation with input: {:?}; and comm: {:?}",
+        inputs, com
+    );
 
     let ips = get_local_ips().await;
     let (ipstr, all_ipstr) = if inputs.print_v4 {(
         get_matching_ipstr(
-            & ips.ipv4_addrs, & inputs.name, & inputs.starting_octets
+            &ips.ipv4_addrs, &inputs.name, &inputs.starting_octets
         ).await,
-        get_matching_ipstr(& ips.ipv4_addrs, & inputs.name, & None).await
+        get_matching_ipstr(&ips.ipv4_addrs, &inputs.name, &None).await
     )} else {(
         get_matching_ipstr(
-            & ips.ipv6_addrs, & inputs.name, & inputs.starting_octets
+            &ips.ipv6_addrs, &inputs.name, &inputs.starting_octets
         ).await,
-        get_matching_ipstr(& ips.ipv6_addrs, & inputs.name, & None).await
+        get_matching_ipstr(&ips.ipv6_addrs, &inputs.name, &None).await
     )};
 
     let certs = match inputs.root_ca.as_ref() {
         Some(path) => {
-            match fs::File::open(path) {
-                Ok(file) => {
-                    let mut reader = std::io::BufReader::new(file);
-                    let certs = rustls_pemfile::certs(
-                        &mut reader
-                    ).collect::<Result<Vec<_>, _>>().unwrap();
-                    // Serialize the certificates as base64-encoded strings
-                    Some(certs
-                        .into_iter()
-                        .map(|cert| general_purpose::STANDARD.encode(cert))
-                        .collect::<Vec<_>>()
-                        .join("\n"))
-                }, // Successfully opened the file
-                Err(e) => {
-                    eprintln!("Failed to open root CA file: {}", e);
-                    None
-                }
-            }
-        }
+            let file = fs::File::open(path)?;
+            let mut reader = std::io::BufReader::new(file);
+            let certs = rustls_pemfile::certs(
+                &mut reader
+            ).collect::<Result<Vec<_>, _>>()?;
+            // Serialize the certificates as base64-encoded strings
+            Some(
+                certs
+                .into_iter()
+                .map(|cert| general_purpose::STANDARD.encode(cert))
+                .collect::<Vec<_>>()
+                .join("\n")
+            )
+        },
         None => None,
     };
 
     // define payload with metadata
-    let mut payload = serialize(& Payload {
+    let mut payload = serialize(&Payload {
         service_addr: ipstr.clone(),
         service_port: inputs.service_port,
         service_claim: 0,
@@ -250,7 +257,6 @@ pub async fn publish(
         service_id: 0,
         root_ca: certs.clone(),
         ping: inputs.ping
-
     });
 
     let host = only_or_error(&ipstr);
@@ -275,8 +281,9 @@ pub async fn publish(
                 }
             };
             let stream_mut = Arc::new(Mutex::new(stream));
-            // send broker identification and add itself to event queue and state
-            let ack = send(& stream_mut, msg).await;
+            // send broker identification and add itself to event queue and
+            // state
+            let ack = send(&stream_mut, msg).await;
 
             // check for successful connection
             match ack {
@@ -307,7 +314,7 @@ pub async fn publish(
 
             let addr = Addr::new(&host, inputs.bind_port);
             // send/receive heartbeats to/from broker
-            let _ = tcp_server(& addr, handler).await;
+            let _ = tcp_server(&addr, handler).await;
         },
         ComType::API => {
             // start tls configuration

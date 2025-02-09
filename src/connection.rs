@@ -316,7 +316,10 @@ pub async fn tcp_server(
 
     trace!("Starting server process on: {:?}", addr);
 
-    let listener = TcpListener::bind(format!("{}:{}", addr.host, addr.port)).await.unwrap();
+    let listener = TcpListener::bind(
+        format!("{}:{}", addr.host, addr.port)
+    ).await.unwrap();
+
     trace!("Bind to {:?} successful", addr);
 
     loop {
