@@ -313,9 +313,7 @@ pub async fn publish(
             // start tls configuration
             let tls : Option<rustls::ClientConfig>;
             // Use the url crate to parse the URL
-            let parsed_url = url::Url::parse(
-                &inputs.host.host.clone()
-            ).unwrap();
+            let parsed_url = url::Url::parse(&inputs.host.to_string()).unwrap();
             let tls_acceptor = if inputs.tls {
                 trace!("entering tls config");
                 let server_config = tls_config().await.unwrap();
@@ -776,9 +774,7 @@ pub async fn claim(
         ComType::API => {
             // initialize tls configuration
             let tls : Option<rustls::ClientConfig>;
-            let parsed_url = url::Url::parse(
-                &inputs.host.host.clone()
-            ).unwrap();
+            let parsed_url = url::Url::parse(&inputs.host.to_string()).unwrap();
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
                 let root_path = match env::var("ROOT_PATH") {
