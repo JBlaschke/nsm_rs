@@ -264,9 +264,19 @@ pub async fn receive(stream: & Arc<Mutex<TcpStream>>) -> Result<Message, std::io
 /// Reformat a request body into a string
 pub async fn collect_request(request: &mut Incoming) -> Result<Message, Error> {
     let whole_body = request.collect().await.unwrap().aggregate();
-    let data: serde_json::Value = serde_json::from_reader(
+
+    let data: serde_json::Value = match serde_json::from_reader(
         whole_body.reader()
-    ).unwrap();
+    ) {
+        Ok(data) => {
+            println!("Received: {}", data);
+            data
+        },
+        Err(e) => {
+            println!("Cannot interpret: {}", e);
+            return Err(e.into())
+        }
+    };
     let json = serde_json::to_string(&data).unwrap();
     let message = deserialize_message(& json);
     Ok(message)

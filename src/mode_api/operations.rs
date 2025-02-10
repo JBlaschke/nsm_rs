@@ -21,6 +21,7 @@ use tokio_rustls::TlsAcceptor;
 use log::{debug, error, info, trace, warn};
 
 
+// TODO: Use Addr
 pub async fn listen(
         state: AMState, host: &String, bind_port: i32, tls: bool
     ) -> () {
@@ -46,6 +47,7 @@ pub async fn listen(
 
     let state_cl_req = Arc::clone(&state);
 
+    // TODO: too many moves?
     // define handler closure to start request_handler within the api
     // server function
     let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
@@ -96,7 +98,7 @@ pub async fn listen(
                             }
                         },
                         Err(err) => {
-                            eprintln!("failed to perform tls handshake: {err:#}");
+                            eprintln!("Failed to perform tls handshake: {err:#}");
                             return;
                         }
                     }

@@ -508,9 +508,10 @@ impl State {
         }
     }
 
-    /// adds new services/clients to State struct and creates Event object to add to event loop 
+    /// adds new services/clients to State struct and creates Event object to
+    /// add to event loop 
     pub async fn add(&mut self, mut p: Payload, service_id: u64, com: ComType) -> Result<Heartbeat, std::io::Error>{
-        let ipstr = only_or_error(& p.service_addr);
+        let ipstr = only_or_error(&p.service_addr);
         let bind_address = format!("{}:{}", ipstr, p.bind_port);
 
         let (stream, client) = match com {
@@ -703,7 +704,6 @@ impl State {
             }
         }
     }
-
 }
 
 /// Serialize Payload struct into JSON String
@@ -918,10 +918,9 @@ pub async fn request_handler(
             if counter == 10 {
                 warn!("Could not find matching service");
             }
-
-        }
+        },
         MessageHeader::HB => {
-            let hb_body: MsgBody = serde_json::from_str(& message.body).unwrap();
+            let hb_body: MsgBody = serde_json::from_str(&message.body).unwrap();
             trace!("Processing ping heartbeat: {:?}", hb_body);
 
             let (lock, _notify) = &**state;
@@ -1055,7 +1054,7 @@ pub async fn ping_heartbeat(
     let addr = address.unwrap_or(&empty_addr);
     let addr_loc = addr.lock().await.clone();
 
-    trace!("Sending ping to {:?}", addr_loc.clone());
+    info!("Initiated service sending pings to {:?}", addr_loc.clone());
 
     // use service id to identify client
     let mut service_id = 0;
@@ -1366,8 +1365,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             },
             _ => panic!("Unexpected state: no stream or request.")
         }
-    }
-    else if matches!(message.header, MessageHeader::COL) {
+    } else if matches!(message.header, MessageHeader::COL) {
         // payload is empty for services, retrieve and send msg waiting in global variable
         if *payload == "".to_string(){
             // send msg back
@@ -1420,11 +1418,10 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
             };
         }
         trace!("Heartbeat handler has returned request");
-    }
-    else if matches!(message.header, MessageHeader::HB){
-        let msg_body: MsgBody = serde_json::from_str(& message.body.clone()).unwrap();
+    } else if matches!(message.header, MessageHeader::HB) {
+        let msg_body: MsgBody = serde_json::from_str(&message.body.clone()).unwrap();
         // default HB/MSG response to send what was received
-        if msg_body.msg.is_empty(){
+        if msg_body.msg.is_empty() {
             let _ = match (&stream, &mut *request) {
                     // return acknowledgment heartbeat
                     (Some(s), None) => {
@@ -1446,8 +1443,7 @@ pub async fn heartbeat_handler(stream: &Option<Arc<Mutex<TcpStream>>>,
                 }, 
                 _ => panic!("Unexpected state: no stream or request.")
             };
-        }
-        else{
+        } else {
             // store msg received from listener into global msg variable
             let mut msg = GLOBAL_MSGBODY.lock().await;
             *msg = serde_json::from_str(& message.body).unwrap();
