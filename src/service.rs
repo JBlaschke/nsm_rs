@@ -563,10 +563,9 @@ impl State {
                         trace!("searching for item {:?}", deque_loc);
                         if let Some(hb) = deque_loc.iter_mut().find_map(|e| {
                             if e.id == item.id {
-                                trace!("found id");
+                                trace!("During 'add': found id {}", e.id);
                                 Some(e)
                             } else {
-                                trace!("id not found");
                                 counter+=1;
                                 None
                             }
@@ -584,11 +583,16 @@ impl State {
                                 let immutable_hb: &Heartbeat = hb;
                                 return Ok(immutable_hb.clone());
                             }
+                        } else {
+                            debug!(
+                                "During 'add': could not find service {}", 
+                                item.id
+                            );
                         }
                     }
                 }
                 if counter == 10 {
-                    warn!("Could not find matching service");
+                    warn!("'add' giving up after {} attempts", counter);
                 }
             }
         }
@@ -885,10 +889,9 @@ pub async fn request_handler(
                     trace!("deque status {:?}", deque);
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
                         if e.id == msg_body.id {
-                            trace!("found id");
+                            trace!("During 'MSG': found id {}", e.id);
                             Some(e)
                         } else {
-                            trace!("id not found");
                             None
                         }
                     }) {
@@ -908,15 +911,18 @@ pub async fn request_handler(
                             _ => {}
                         }
                         break;
-                    }
-                    else{
+                    } else {
+                        debug!(
+                            "During 'MSG': could not find service {}",
+                            msg_body.id
+                        );
                         counter += 1;
                     }
                 }
                 sleep(Duration::from_millis(300)).await;
             }
-            if counter == 10 {
-                warn!("Could not find matching service");
+            if counter == 50 {
+                warn!("'MSG' giving up after {} attempts", counter);
             }
         },
         MessageHeader::HB => {
@@ -936,10 +942,17 @@ pub async fn request_handler(
                     // only alter a client's heartbeat
                     if let Some(hb) = deque.iter_mut().find_map(|e| {
                         if e.service_id == hb_body.service_id && e.id == hb_body.id {
-                            trace!("found id");
+                            trace!(
+                                "During 'HB': found service ({}, {})",
+                                e.service_id, e.id
+                            );
                             Some(e)
                         } else {
-                            trace!("id not found");
+                            trace!(
+                                "During 'HB': id {} != {}, {} != {}",
+                                e.service_id, hb_body.service_id,
+                                e.id, hb_body.id
+                            );
                             None
                         }
                     }) {
@@ -960,15 +973,18 @@ pub async fn request_handler(
                             _ => {}
                         }
                         break;
-                    }
-                    else{
+                    } else{
+                        trace!(
+                            "During 'HB': could not find service({}, {})",
+                            hb_body.service_id, hb_body.id
+                        );
                         counter += 1;
                     }
                 }
                 sleep(Duration::from_millis(702)).await;
             }
-            if counter == 10 {
-                warn!("Could not find matching service");
+            if counter == 50 {
+                warn!("'HB' giving up after {} attempts", counter);
             }
         }
         _ => {panic!("This should not be reached!");}
@@ -1147,17 +1163,17 @@ pub async fn ping_heartbeat(
                         }
                         break;
                     }
-                    Ok(Err(_e)) => {
+                    Ok(Err(e)) => {
                         read_fail += 1;
-                        warn!("Failed to send request to listener");
+                        warn!("Failed to send request to listener: {}", e);
                         if read_fail > 10 {
                             warn!("Shutting down pings");
                             std::process::exit(0); // TODO: Don't exist proc insitu
                         }
                     }
-                    Err(_e) => {
+                    Err(e) => {
                         read_fail += 1;
-                        warn!("Failed to send request to listener");
+                        warn!("Failed to send request to listener: {}", e);
                         if read_fail > 10 {
                             warn!("Request timed out");
                             std::process::exit(0); // TODO: Don't exist proc insitu

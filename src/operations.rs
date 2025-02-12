@@ -26,7 +26,7 @@ use std::marker::Send;
 use std::io::Error;
 use base64::{engine::general_purpose, Engine as _};
 use http_body_util::Full;
-use hyper::http::{Method, Request, Response};
+use hyper::http::{Method, Request, Response, StatusCode};
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -230,13 +230,11 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
         Some(path) => {
             let file = fs::File::open(path)?;
             let mut reader = std::io::BufReader::new(file);
-            let certs = rustls_pemfile::certs(
-                &mut reader
-            ).collect::<Result<Vec<_>, _>>()?;
+            let certs = rustls_pemfile::certs(&mut reader)
+                        .collect::<Result<Vec<_>, _>>()?;
             // Serialize the certificates as base64-encoded strings
             Some(
-                certs
-                .into_iter()
+                certs.into_iter()
                 .map(|cert| general_purpose::STANDARD.encode(cert))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -306,10 +304,10 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
             // define closure to send connections from server to heartbeat handler
             let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
                 Box::pin(async move {
-                    return heartbeat_handler_helper(stream, None, None, None, None).await
-                }) as Pin<Box<
-                    dyn Future<Output=Result<Response<Full<Bytes>>, Error>> + Send
-                >>
+                    return heartbeat_handler_helper(
+                        stream, None, None, None, None
+                    ).await
+                }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
             };
 
             let addr = Addr::new(&host, inputs.bind_port);
@@ -318,7 +316,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
         },
         ComType::API => {
             // start tls configuration
-            let tls : Option<rustls::ClientConfig>;
+            let tls: Option<rustls::ClientConfig>;
             // Use the url crate to parse the URL
             let parsed_url = url::Url::parse(&inputs.host.to_string()).unwrap();
             let tls_acceptor = if inputs.tls {
@@ -341,8 +339,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
                     )
                 ).unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
-            }
-            else {
+            } else {
                 tls = None;
                 None
             };
@@ -379,7 +376,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
                     .method(Method::POST)
                     .uri(&request_target)
                     .header(hyper::header::CONTENT_TYPE, "application/json")
-                    .body(Full::new(Bytes::from(serialize_message(& msg.clone()))))
+                    .body(Full::new(Bytes::from(serialize_message(&msg.clone()))))
                     .unwrap();
 
                 let result = timeout(timeout_duration, client.request(req)).await;
@@ -421,46 +418,23 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
 
             // TODO: right now, this handler only sends pings -- also enable
             // other endpoints in the future.
-            let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
-            // define closure to send connections from server to heartbeat handler
-            let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-                let broker_addr_value = Arc::clone(&broker_addr);
-                let payload_clone = Arc::clone(&Arc::new(Mutex::new(payload.clone())));
-                if inputs.tls {
-                    let tls_clone = tls.clone().unwrap();
-                    // check for one- or two-sided heartbeat
-                    if inputs.ping {
-                        Box::pin(async move {
-                            ping_heartbeat(
-                                &payload_clone,
-                                Some(&broker_addr_value),
-                                Some(tls_clone)
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    } else {
-                        Box::pin(async move {
-                            heartbeat_handler_helper(
-                                None, Some(req), None, None, Some(tls_clone)
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    }
-                } else {
-                    if inputs.ping {
-                        Box::pin(async move {
-                            ping_heartbeat(
-                                &payload_clone,
-                                Some(&broker_addr_value),
-                                None
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    } else {
-                        Box::pin(async move {
-                            heartbeat_handler_helper(
-                                None, Some(req), None, None, None
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    }
-                }
+            let handler = Arc::new(Mutex::new(move |_req: Request<Incoming>| {
+                // TODO: We'll need to deal with the two-sided HTTP(S) heatbeat
+                // handoff -- I've left the old hearbeat handler code here for
+                // reference, but this needs to be upated to be able to handle
+                // multiple endpoints
+                // Box::pin(async move {
+                //     heartbeat_handler_helper(
+                //         None, Some(req), None, None, Some(tls_clone)
+                //     ).await
+                // }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
+                let mut response = Response::new(Full::default());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                *response.body_mut()   = Full::from("Not implemented");
+                // TODO: Replace this with real API server
+                Box::pin(async move {
+                    Ok(response)
+                }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
             }));
 
             if !inputs.ping {
@@ -505,77 +479,13 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
                 }
             });
 
-            // // TODO: Do we need this? -- Yes! This initiates the heartbeats =>
-            // // redesign to not rely on messages triggered via loopback
-            // // send request to start one-sided heartbeat 
-            // if inputs.ping {
-            //     tokio::spawn(async move {
-            //         let client = setup_https_client(certs.clone()).await;
-            //         let mut read_fail = 0;
-            //         loop {
-            //             sleep(Duration::from_millis(1000)).await;
-            //             trace!(
-            //                 "Sending one-sided heartbeat request to {}",
-            //                 inputs.host
-            //             );
-
-            //             let req = Request::builder()
-            //                 .method(Method::GET)
-            //                 .uri(format!("{}/heartbeat_handler", inputs.host))
-            //                 .header(hyper::header::CONTENT_TYPE, "application/json")
-            //                 .body(Full::new(Bytes::from("".to_string())))
-            //                 .unwrap(); // TODO: properly handle error
-
-            //             let result = timeout(timeout_duration, client.request(req)).await;
-
-            //             // check for successful connection to a published service
-            //             match result {
-            //                 Ok(Ok(resp)) => {
-            //                     trace!("Received ping response: {:?}", resp);
-            //                     break;
-            //                 }
-            //                 Ok(Err(_e)) => {
-            //                     read_fail += 1;
-            //                     if read_fail > 5 {
-            //                         panic!("Failed to send request to published client")
-            //                     }
-            //                 },
-            //                 Err(_) => {
-            //                     read_fail += 1;
-            //                     if read_fail > 5 {
-            //                         panic!("Requests to publish timed out")
-            //                     }
-            //                 },
-            //             }
-            //         }
-            //     });
-            // }
             if inputs.ping {
-                let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
-                let broker_addr_value = Arc::clone(&broker_addr);
-                let payload_clone = Arc::clone(
-                    &Arc::new(Mutex::new(payload.clone()))
-                );
-                tokio::spawn(async move{
-                    if inputs.tls {
-                        let tls_clone = tls.clone().unwrap();
-                        // check for one- or two-sided heartbeat
-                        Box::pin(async move {
-                            ping_heartbeat(
-                                &payload_clone,
-                                Some(&broker_addr_value),
-                                Some(tls_clone)
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    } else {
-                        Box::pin(async move {
-                            ping_heartbeat(
-                                &payload_clone,
-                                Some(&broker_addr_value),
-                                None
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    }
+                tokio::spawn(async move {
+                    let _ = ping_heartbeat(
+                        &Arc::new(Mutex::new(payload.clone())),
+                        Some(&Arc::new(Mutex::new(inputs.host.clone()))),
+                        tls.clone()
+                    ).await;
                 });
             };
 
@@ -626,9 +536,7 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
 
 /// # Claim
 /// Connect to broker and discover available address for data connection.
-pub async fn claim(
-        inputs: Claim, com: ComType
-    ) -> Result<Response<Full<Bytes>>, std::io::Error> {
+pub async fn claim(inputs: Claim, com: ComType) -> HttpResult {
 
     let ips = get_local_ips().await;
 
@@ -646,23 +554,18 @@ pub async fn claim(
 
     let certs = match inputs.root_ca.as_ref() {
         Some(path) => {
-            match fs::File::open(path) {
-                Ok(file) => {
-                    let mut reader = std::io::BufReader::new(file);
-                    let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>().unwrap();
-                    // Serialize the certificates as base64-encoded strings
-                    Some(certs
-                        .into_iter()
-                        .map(|cert| general_purpose::STANDARD.encode(cert))
-                        .collect::<Vec<_>>()
-                        .join("\n"))
-                    }, // Successfully opened the file
-                Err(e) => {
-                    eprintln!("Failed to open root CA file: {}", e);
-                    None
-                }
-            }
-        }
+            let file = fs::File::open(path)?;
+            let mut reader = std::io::BufReader::new(file);
+            let certs = rustls_pemfile::certs(&mut reader)
+                        .collect::<Result<Vec<_>, _>>()?;
+            // Serialize the certificates as base64-encoded strings
+            Some(
+                certs.into_iter()
+                .map(|cert| general_purpose::STANDARD.encode(cert))
+                .collect::<Vec<_>>()
+                .join("\n")
+            )
+        },
         None => None,
     };
 
@@ -670,9 +573,9 @@ pub async fn claim(
     let host_clone = host.clone();
 
     // define payload with metadata to send to broker
-    let payload = serialize(& Payload {
+    let mut payload = serialize(& Payload {
         service_addr: ipstr.clone(),
-        service_port: -1,  // TODO: check that this works
+        service_port: -1,
         service_claim: epoch(),
         interface_addr: Vec::new(),
         bind_port: inputs.bind_port,
@@ -758,37 +661,32 @@ pub async fn claim(
                 }
             }
 
+            //TODO: let's clean up this pattern
             let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
-
-            let payload_clone = Arc::clone(&service_payload);
-            let broker_clone = Arc::clone(&broker_addr);
-
             // define closure to send incoming requests to heartbeat monitor
-            let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
-                let inner_payload = Arc::clone(&payload_clone);
-                let inner_broker = Arc::clone(&broker_clone);
+            let handler = move |stream: Option<Arc<Mutex<TcpStream>>>| {
+                let inner_payload = Arc::clone(&service_payload);
+                let inner_broker  = Arc::clone(&broker_addr);
                 // Shared state to track the last heartbeat time
                 Box::pin(async move {
-                    let payload_clone = Arc::clone(&inner_payload);
-                    let broker_clone = Arc::clone(&inner_broker);
                     heartbeat_handler_helper(
                         stream,
                         None,
-                        Some(&payload_clone),
-                        Some(&broker_clone),
+                        Some(&inner_payload.clone()),
+                        Some(&inner_broker.clone()),
                         None
                     ).await
-                }) as std::pin::Pin<Box<dyn Future<Output = Result<Response<Full<Bytes>>, std::io::Error>> + std::marker::Send>>
+                }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
             };
 
             let addr = Addr::new(&host, inputs.bind_port);
 
             // send/receive heartbeats to/from broker
-            let _ = tcp_server(& addr, handler).await;
+            let _ = tcp_server(&addr, handler).await;
         },
         ComType::API => {
             // initialize tls configuration
-            let tls : Option<rustls::ClientConfig>;
+            let tls: Option<rustls::ClientConfig>;
             let parsed_url = url::Url::parse(&inputs.host.to_string()).unwrap();
             let tls_acceptor = if inputs.tls {
                 let server_config = tls_config().await.unwrap();
@@ -806,8 +704,7 @@ pub async fn claim(
                         parsed_url.host_str().unwrap()
                     )).unwrap();
                 Some(TlsAcceptor::from(Arc::new(server_config)))
-            }
-            else {
+            } else {
                 tls = None;
                 None
             };
@@ -888,62 +785,37 @@ pub async fn claim(
             let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
             // define closure to start heartbeats
             let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
-                let service_payload_value = Arc::clone(&service_payload);
-                let broker_addr_value = Arc::clone(&broker_addr);
-                // check for tls config
-                if inputs.tls {
-                    let tls_clone = tls.clone().unwrap();
-                    // check for one- or two-sided heartbeat
-                    if inputs.ping {
-                        Box::pin(async move {
-                            ping_heartbeat(
-                                &service_payload_value,
-                                Some(&broker_addr_value),
-                                Some(tls_clone)
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    } else {
-                        Box::pin(async move {
-                            heartbeat_handler_helper(
-                                None,
-                                Some(req),
-                                Some(&service_payload_value),
-                                Some(&broker_addr_value),
-                                Some(tls_clone)
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    }
-                } else {
-                    // check for one- or two-sided heartbeat
-                    if inputs.ping {
-                        Box::pin(async move {
-                            ping_heartbeat(
-                                &service_payload_value,
-                                Some(&broker_addr_value),
-                                None
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    } else {
-                        Box::pin(async move {
-                            heartbeat_handler_helper(
-                                None,
-                                Some(req),
-                                Some(&service_payload_value),
-                                Some(&broker_addr_value),
-                                None
-                            ).await
-                        }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-                    }
-                }
+                // TODO: We'll need to deal with the two-sided HTTP(S) heatbeat
+                // handoff -- I've left the old hearbeat handler code here for
+                // reference, but this needs to be upated to be able to handle
+                // multiple endpoints
+                // heartbeat_handler_helper(
+                //     None,
+                //     Some(req),
+                //     Some(&service_payload_value),
+                //     Some(&broker_addr_value),
+                //     Some(tls_clone)
+                // ).await
+                let mut response = Response::new(Full::default());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                *response.body_mut()   = Full::from("Not implemented");
+                // TODO: Replace this with real API server
+                Box::pin(async move {
+                    Ok(response)
+                }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
             }));
 
-            let handler_addr: SocketAddr = format!("{}:{}", host.to_string(), inputs.bind_port).parse().unwrap();
+            let handler_addr: SocketAddr = format!(
+                "{}:{}", host.to_string(), inputs.bind_port
+            ).parse().unwrap();
 
             info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
 
             if !inputs.ping {
                 // Spawn a thread to monitor the heartbeat
-                let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(&GLOBAL_LAST_HEARTBEAT);
+                let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(
+                    &GLOBAL_LAST_HEARTBEAT
+                );
                 tokio::spawn(async move {
                     sleep(Duration::from_millis(5000)).await;
                     loop {
@@ -973,49 +845,16 @@ pub async fn claim(
                 }
             });
 
-            // TODO: Do we need this?
-            // send request to start one-sided heartbeat 
             if inputs.ping {
                 tokio::spawn(async move {
-                    let mut read_fail = 0;
-                    loop {
-                        sleep(Duration::from_millis(1000)).await;
-                        trace!(
-                            "Sending one-sided heartbeat request to {}",
-                            inputs.host
-                        );
-
-                        let req = Request::builder()
-                            .method(Method::GET)
-                            .uri(format!("{}/heartbeat_handler", inputs.host))
-                            .header(hyper::header::CONTENT_TYPE, "application/json")
-                            .body(Full::new(Bytes::from("".to_string())))
-                            .unwrap();
-
-                        let result = timeout(timeout_duration, client.request(req)).await;
-
-                        // check for successful connection to a published service
-                        match result {
-                            Ok(Ok(resp)) => {
-                                trace!("Received ping response: {:?}", resp);
-                                break;
-                            },
-                            Ok(Err(_e)) => {
-                                read_fail += 1;
-                                if read_fail > 5 {
-                                    panic!("Failed to send request to listener")
-                                }
-                            },
-                            Err(_) => {
-                                read_fail += 1;
-                                if read_fail > 5 {
-                                    panic!("Requests to listener timed out")
-                                }
-                            },
-                        }
-                    }
+                    let _ = ping_heartbeat(
+                        &service_payload, // &Arc::new(Mutex::new(payload.clone())),
+                        Some(&Arc::new(Mutex::new(inputs.host.clone()))),
+                        tls.clone()
+                    ).await;
                 });
-            }
+            };
+
             // infinitely wait for incoming requests
             loop {
                 let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();

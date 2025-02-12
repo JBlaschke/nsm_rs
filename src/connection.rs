@@ -268,14 +268,8 @@ pub async fn collect_request(request: &mut Incoming) -> Result<Message, Error> {
     let data: serde_json::Value = match serde_json::from_reader(
         whole_body.reader()
     ) {
-        Ok(data) => {
-            println!("Received: {}", data);
-            data
-        },
-        Err(e) => {
-            println!("Cannot interpret: {}", e);
-            return Err(e.into())
-        }
+        Ok(data) => data,
+        Err(e) => return Err(e.into())
     };
     let json = serde_json::to_string(&data).unwrap();
     let message = deserialize_message(& json);
