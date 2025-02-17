@@ -267,51 +267,11 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
     // enter tcp or api integration
     match com{
         ComType::TCP => {
-            // connect to broker
-            let stream = match connect(&inputs.host).await {
-                Ok(s) => s,
-                Err(_e) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Connection unsuccessful"
-                    ));
-                }
-            };
-            let stream_mut = Arc::new(Mutex::new(stream));
-            // send broker identification and add itself to event queue and
-            // state
-            let ack = send(&stream_mut, msg).await;
-
-            // check for successful connection
-            match ack {
-                Ok(m) => {
-                    trace!("Received response: {:?}", m);
-                    match m.header {
-                        MessageHeader::ACK => {
-                            info!("Server acknowledged PUB.")
-                        }
-                        _ => {
-                            warn!("Server responds with unexpected message: {:?}", m)
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Encountered error: {:?}", e);
-                }
-            }
-
-            // define closure to send connections from server to heartbeat handler
-            let handler =  move |stream: Option<Arc<Mutex<TcpStream>>>| {
-                Box::pin(async move {
-                    return heartbeat_handler_helper(
-                        stream, None, None, None, None
-                    ).await
-                }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
-            };
-
             let addr = Addr::new(&host, inputs.bind_port);
-            // send/receive heartbeats to/from broker
-            let _ = tcp_server(&addr, handler).await;
+            // TODO: handle errors
+            let _ = mode_tcp::operations::publish(
+                &msg, &inputs.host, &addr
+            ).await;
         },
         ComType::API => {
             // start tls configuration
