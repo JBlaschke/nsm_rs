@@ -12,7 +12,7 @@ use crate::utils::{only_or_error, epoch};
 use crate::models::{
     ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG
 };
-use crate::tls::{tls_config, load_ca, setup_https_client};
+use crate::tls::{tls_config, load_ca};
 
 use crate::mode_api;
 use crate::mode_tcp;
@@ -258,9 +258,8 @@ pub async fn publish(inputs: Publish, com: ComType) -> HttpResult {
     });
 
     let host = only_or_error(&ipstr);
-    let host_clone = host.clone();
 
-    let msg = & Message{
+    let msg = &Message{
         header: MessageHeader::PUB,
         body: payload.clone()
     };
@@ -569,11 +568,10 @@ pub async fn claim(inputs: Claim, com: ComType) -> HttpResult {
         None => None,
     };
 
-    let host = only_or_error(& ipstr);
-    let host_clone = host.clone();
+    let host = only_or_error(&ipstr);
 
     // define payload with metadata to send to broker
-    let mut payload = serialize(& Payload {
+    let payload = serialize(&Payload {
         service_addr: ipstr.clone(),
         service_port: -1,
         service_claim: epoch(),
@@ -782,9 +780,7 @@ pub async fn claim(inputs: Claim, com: ComType) -> HttpResult {
 
             // TODO: right now, this handler only sends pings -- also enable
             // other endpoints in the future.
-            let broker_addr = Arc::new(Mutex::new(inputs.host.clone()));
-            // define closure to start heartbeats
-            let handler = Arc::new(Mutex::new(move |req: Request<Incoming>| {
+            let handler = Arc::new(Mutex::new(move |_req: Request<Incoming>| {
                 // TODO: We'll need to deal with the two-sided HTTP(S) heatbeat
                 // handoff -- I've left the old hearbeat handler code here for
                 // reference, but this needs to be upated to be able to handle
