@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use log::{debug, error, info, trace, warn};
 
 
-// TODO: don't use host + ip => use Addr instead
+// TODO: don't use host + ip => use Addr instead; handle errors
 pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
     let addr = Addr::new(&host, bind_port);
 
