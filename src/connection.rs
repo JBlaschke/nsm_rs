@@ -50,6 +50,23 @@ impl Addr {
             port: port
         }
     }
+
+    pub fn to_socket_tuple(&self) -> Result<(&str, u16), std::io::Error> {
+        if self.transport == Transport::SOCKET {
+            match self.port.try_into() {
+                Ok(port) => Ok((&self.host, port)),
+                Err(_) => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "A u16 port is required"
+                ))
+            }
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "A SOCKET host is required"
+            ))
+        }
+    }
 }
 
 

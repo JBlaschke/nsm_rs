@@ -1,21 +1,29 @@
-use crate::connection::{Addr, Message, api_server};
-use crate::service::{request_handler, event_monitor};
-use crate::tls::{tls_config, tls_acceptor};
+use crate::connection::{
+    Addr, Message, MessageHeader, api_server, serialize_message,
+    collect_request
+};
+use crate::service::{
+    request_handler, event_monitor, serialize, deserialize, ping_heartbeat
+};
+use crate::tls::{tls_config, get_tls_acceptor};
 use crate::operations::{AMState, HttpResult};
+use crate::operations::GLOBAL_LAST_HEARTBEAT;
 
 use std::sync::Arc;
 use std::net::SocketAddr;
 use std::future::Future;
 use std::pin::Pin;
 use std::marker::Send;
+use std::error::Error;
 use rustls::ClientConfig;
-use hyper::http::Request; 
-use hyper::body::Incoming;
+use http_body_util::Full;
+use hyper::http::{Method, Request, Response, StatusCode};
+use hyper::body::{Body, Bytes, Incoming};
 use hyper::service::service_fn;
-use hyper_rustls::HttpsConnectorBuilder;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
-use hyper_util::client::legacy::Client; // TODO: can we do without legacy?
+use hyper_util::client::legacy::{connect::HttpConnector, Client}; // TODO: can we do without legacy?
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, timeout, Duration, Instant};
@@ -28,12 +36,13 @@ use log::{debug, error, info, trace, warn};
 // TODO: Use Addr; handle errors
 pub async fn listen(
         state: AMState, host: &String, bind_port: i32, tls: bool
-    ) -> () {
-    trace!("Entering HTTP listen for host: {:?}:{:?}", host, bind_port);
+    ) -> Result<(), Box<dyn Error>> {
+
+    trace!("Entering HTTP listen for host: {}:{}", host, bind_port);
 
     // initiate tls configuration
     let tls_acceptor: Option<TlsAcceptor> = if tls {
-        let server_config = tls_config().await.unwrap();
+        let server_config = tls_config().await?;
         Some(TlsAcceptor::from(Arc::new(server_config)))
     } else {
         None
@@ -61,12 +70,13 @@ pub async fn listen(
         }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
     }));
 
+    // TODO: use addr
     let server_addr: SocketAddr = format!(
         "{}:{}", host.to_string(), bind_port
-    ).parse().unwrap();
+    ).parse()?;
     
     // bind to host address to listen for requests
-    let incoming = TcpListener::bind(&server_addr).await.unwrap();
+    let incoming = TcpListener::bind(&server_addr).await?;
     info!("Listening on: {}:{}", host.to_string(), bind_port);
 
     // define api service closure to route incoming requests
@@ -119,94 +129,57 @@ pub async fn listen(
     }
 }
 
+type HttpClient<T> = Client<HttpsConnector<HttpConnector>, T>;
 
-pub fn https_connector(tls: Option<&ClientConfig>) -> () {
+// TODO: This could also be crate::tls::setup_https_client
+pub async fn get_https_connector<T: Body + Send>(
+        tls: Option<&ClientConfig>
+    ) -> Result<HttpClient<T>, std::io::Error> where <T as Body>::Data: Send {
 
     let https_connector = match tls {
         Some(tls_data) => {
             HttpsConnectorBuilder::new()
-            .with_tls_config()
+            .with_tls_config(tls_data.clone())
             .https_or_http()
             .enable_http1()
             .build()
         },
         None => {
             HttpsConnectorBuilder::new()
-            .with_native_roots().unwrap()
+            .with_native_roots()?
             .https_or_http()
             .enable_http1()
             .build()
         }
     };
 
-    Client::builder(TokioExecutor::new()).build(https_connector)
+    Ok(Client::builder(TokioExecutor::new()).build(https_connector))
 }
 
 
 // TODO: Infer TLS usage from Addr?
 pub async fn publish(
-        msg: &Message, host: &Addr, local: &Addr, use_tls: bool
-    ) -> () {
+        payload: &mut String, host: &Addr, local: &Addr, use_tls: bool,
+        ping: bool
+    ) -> Result<(), Box<dyn Error>> {
 
     trace!("Entering HTTP publish for host: {}", host);
 
+    let msg = &Message{
+        header: MessageHeader::PUB,
+        body: payload.clone()
+    };
 
-    // // start tls configuration
-    // let tls: Option<rustls::ClientConfig>;
-    // // Use the url crate to parse the URL
-    // let parsed_url = url::Url::parse(&inputs.host.to_string()).unwrap();
-    // let tls_acceptor = if inputs.tls {
-    //     trace!("entering tls config");
-    //     let server_config = tls_config().await.unwrap();
-    //     let root_path = match env::var("ROOT_PATH") {
-    //         Ok(path) => Some(path),
-    //         Err(_) => None
-    //     };
-    //     let root_store = load_ca(root_path).await.unwrap();
-    //     tls = Some(ClientConfig::builder()
-    //         .with_root_certificates(root_store)
-    //         .with_no_client_auth());
-    //     let _server_name = ServerName::try_from(
-    //         parsed_url.host_str().unwrap()
-    //     ).map_err(|_|
-    //         format!(
-    //             "Invalid server DNS name: {}",
-    //             parsed_url.host_str().unwrap()
-    //         )
-    //     ).unwrap();
-    //     Some(TlsAcceptor::from(Arc::new(server_config)))
-    // } else {
-    //     tls = None;
-    //     None
-    // };
-
+    // start tls configuration
     let (tls, tls_acceptor) = if use_tls {
-        tls_acceptor()?
+        Some(get_tls_acceptor().await?).unzip()
     } else {
         (None, None)
     };
 
     // connect to broker
-
-    // // Prepare the HTTPS connector
-    // let client = if inputs.tls {
-    //     let https_connector = HttpsConnectorBuilder::new()
-    //     .with_tls_config(tls.clone().unwrap())
-    //     .https_or_http()
-    //     .enable_http1()
-    //     .build();
-    //     Client::builder(TokioExecutor::new()).build(https_connector)
-    // } else {
-    //     let https_connector = HttpsConnectorBuilder::new()
-    //     .with_native_roots().unwrap()
-    //     .https_or_http()
-    //     .enable_http1()
-    //     .build();
-    //     Client::builder(TokioExecutor::new()).build(https_connector)
-    // };
-
-    let client = https_connector(tls);
-
+    let parsed_url = url::Url::parse(&host.to_string())?;
+    let client = get_https_connector(tls.as_ref()).await?;
     let mut read_fail = 0;
     let timeout_duration = Duration::from_millis(6000);
     let request_target = String::from(
@@ -237,7 +210,7 @@ pub async fn publish(
                         let mut deser_payload = deserialize(&payload.clone());
                         deser_payload.id = m.body.parse().unwrap();
                         deser_payload.service_id = m.body.parse().unwrap();
-                        payload = serialize(&deser_payload);
+                        *payload = serialize(&deser_payload);
                         break;
                     }
                     _ => {
@@ -281,7 +254,7 @@ pub async fn publish(
         }) as Pin<Box<dyn Future<Output=HttpResult> + Send>>
     }));
 
-    if !inputs.ping {
+    if !ping {
         // Spawn a thread to monitor the heartbeat
         let last_heartbeat_clone: Arc<Mutex<Option<Instant>>> = Arc::clone(
             &GLOBAL_LAST_HEARTBEAT
@@ -306,13 +279,11 @@ pub async fn publish(
         });
     }
 
-    let handler_addr: SocketAddr = format!(
-        "{}:{}", host.to_string(), inputs.bind_port
-    ).parse().unwrap();
+    // let handler_addr: SocketAddr = local.to_string().parse()?;
 
-    info!("Starting server on: {}:{}", host.to_string(), inputs.bind_port);
+    info!("Starting server on: {}", local);
     // bind to address to send/receive heartbeats to/from broker
-    let incoming = TcpListener::bind(&handler_addr).await.unwrap();
+    let incoming = TcpListener::bind(local.to_socket_tuple()?).await?;
 
     // define closure to listen for incoming requests
     let service = service_fn(move |req: Request<Incoming>| {
@@ -323,12 +294,12 @@ pub async fn publish(
         }
     });
 
-    if inputs.ping {
+    if ping {
+        let hb_payload = Arc::new(Mutex::new(payload.clone())); 
+        let hb_host    = Arc::new(Mutex::new(host.clone()   ));
         tokio::spawn(async move {
             let _ = ping_heartbeat(
-                &Arc::new(Mutex::new(payload.clone())),
-                Some(&Arc::new(Mutex::new(inputs.host.clone()))),
-                tls.clone()
+                &hb_payload, Some(&hb_host), tls.clone()
             ).await;
         });
     };
@@ -336,7 +307,7 @@ pub async fn publish(
     // infinitely listen for requests
     loop {
         let (tcp_stream, _remote_addr) = incoming.accept().await.unwrap();
-        let tls_acceptor = if inputs.tls {
+        let tls_acceptor = if use_tls {
             tls_acceptor.clone()
         } else {
             None

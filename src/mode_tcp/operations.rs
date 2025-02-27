@@ -55,10 +55,15 @@ pub async fn listen(state: AMState, host: &String, bind_port: i32) -> () {
 
 
 pub async fn publish(
-        msg: &Message, host: &Addr, local: &Addr
+        payload: &mut String, host: &Addr, local: &Addr
     ) -> Result<(), Error> {
 
     trace!("Starting TCP publish for host: {}", local);
+
+    let msg = &Message{
+        header: MessageHeader::PUB,
+        body: payload.clone()
+    };
 
     // connect to broker
     let stream = match connect(host).await {

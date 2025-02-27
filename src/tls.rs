@@ -99,6 +99,8 @@ pub async fn tls_config() -> Result<ServerConfig, std::io::Error>{
         Ok(server_config)
 }
 
+
+// TODO: reconsile with get_https_connector
 /// Define an async function for configuring the HTTPS client
 pub async fn setup_https_client(root_ca: Option<String>) -> Client<HttpsConnector<HttpConnector>, Full<Bytes>> {
     // Wait for the connector to be configured
@@ -139,7 +141,7 @@ pub async fn setup_https_client(root_ca: Option<String>) -> Client<HttpsConnecto
 }
 
 
-pub fn tls_acceptor() -> Result<(ClientConfig, TlsAcceptor), Error> {
+pub async fn get_tls_acceptor() -> Result<(ClientConfig, TlsAcceptor), Error> {
     trace!("Start Generating TLS Acceptor");
 
     let server_config = tls_config().await?;
@@ -154,12 +156,10 @@ pub fn tls_acceptor() -> Result<(ClientConfig, TlsAcceptor), Error> {
     let tls_config = ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
-    let tls_accptor = TlsAcceptor::from(Arc::new(server_config));
+    let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
 
     trace!(
-        "Done generating TLS Acceptor: ({:?}, {:?})", tls_config, tls_acceptor
+        "Done generating TLS Acceptor with config: {:?}", tls_config
     );
     Ok((tls_config, tls_acceptor))
 }
-
-
