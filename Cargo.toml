@@ -2,8 +2,11 @@
 name = "nsm"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "NERSC Service Mesh: an HPC-aware connection broker that pairs published services with claiming clients"
+repository = "https://github.com/JBlaschke/nsm_rs"
+readme = "README.md"
+keywords = ["hpc", "service-mesh", "broker", "networking"]
+categories = ["network-programming", "command-line-utilities"]
 
 [dependencies]
 clap = "4.5.4"
@@ -12,7 +15,6 @@ log = "0.4.21"
 pnet = "0.33.0"
 serde = {version = "1.0.159", features = ["derive"]}
 serde_json = "1.0.95"
-threadpool = "1.8"
 lazy_static = "1.4.0"
 tokio = { version = "1", features = ["full"] }
 hyper = "1.4.1"
@@ -20,7 +22,6 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 pki-types = { package = "rustls-pki-types", version = "1" }
 rustls-native-certs = "0.8"
-rustls-platform-verifier = { version = "0.3", optional = true }
 hyper-rustls = "0.27.3"
 rustls = { version = "0.23", default-features = false }
 tokio-rustls = { version = "0.26", default-features = false }
