@@ -1,28 +1,24 @@
-use rustls::crypto::CryptoProvider;
+#[cfg(any(windows, target_vendor = "apple"))]
 use std::sync::Arc;
 
 #[cfg(all(
     any(unix, target_arch = "wasm32"),
     not(target_os = "android"),
-    not(target_os = "macos"),
-    not(target_os = "ios"),
-    not(target_os = "tvos")
+    not(target_vendor = "apple"),
 ))]
 mod others;
 
 #[cfg(all(
     any(unix, target_arch = "wasm32"),
     not(target_os = "android"),
-    not(target_os = "macos"),
-    not(target_os = "ios"),
-    not(target_os = "tvos")
+    not(target_vendor = "apple"),
 ))]
 pub use others::Verifier;
 
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+#[cfg(target_vendor = "apple")]
 mod apple;
 
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+#[cfg(target_vendor = "apple")]
 pub use apple::Verifier;
 
 #[cfg(target_os = "android")]
@@ -67,7 +63,7 @@ fn log_server_cert(_end_entity: &rustls::pki_types::CertificateDer<'_>) {
 
 // Unknown certificate error shorthand. Used when we need to construct an "Other" certificate
 // error with a platform specific error message.
-#[cfg(any(windows, target_os = "macos", target_os = "ios", target_os = "tvos"))]
+#[cfg(any(windows, target_vendor = "apple"))]
 fn invalid_certificate(reason: impl Into<String>) -> rustls::Error {
     rustls::Error::InvalidCertificate(rustls::CertificateError::Other(rustls::OtherError(
         Arc::from(Box::from(reason.into())),
@@ -82,37 +78,9 @@ fn invalid_certificate(reason: impl Into<String>) -> rustls::Error {
 /// - id-kp-serverAuth
 // TODO: Chromium also allows for `OID_ANY_EKU` on Android.
 #[cfg(target_os = "windows")]
-// XXX: Windows requires that we NUL terminate EKU strings and we want to make sure that only the
-// data part of the `&str` pointer (using `.as_ptr()`), not all of its metadata.
-// This can be cleaned up when our MSRV is increased to 1.77 and C-string literals are available.
+// XXX: Windows requires that we NUL terminate EKU strings.
 // See https://github.com/rustls/rustls-platform-verifier/issues/126#issuecomment-2306232794.
-const ALLOWED_EKUS: &[*mut u8] = &["1.3.6.1.5.5.7.3.1\0".as_ptr() as *mut u8];
+const ALLOWED_EKUS: &[windows_sys::core::PCSTR] =
+    &[windows_sys::Win32::Security::Cryptography::szOID_PKIX_KP_SERVER_AUTH];
 #[cfg(target_os = "android")]
-pub const ALLOWED_EKUS: &[&str] = &["1.3.6.1.5.5.7.3.1"];
-
-impl Verifier {
-    /// Chainable setter to configure the [`CryptoProvider`] for this `Verifier`.
-    ///
-    /// This will be used instead of the rustls processs-default `CryptoProvider`, even if one has
-    /// been installed.
-    pub fn with_provider(mut self, crypto_provider: Arc<CryptoProvider>) -> Self {
-        self.set_provider(crypto_provider);
-        self
-    }
-
-    /// Configures the [`CryptoProvider`] for this `Verifier`.
-    ///
-    /// This will be used instead of the rustls processs-default `CryptoProvider`, even if one has
-    /// been installed.
-    pub fn set_provider(&mut self, crypto_provider: Arc<CryptoProvider>) {
-        self.crypto_provider = crypto_provider.into();
-    }
-
-    fn get_provider(&self) -> &Arc<CryptoProvider> {
-        self.crypto_provider.get_or_init(|| {
-            CryptoProvider::get_default()
-                .expect("rustls default CryptoProvider not set")
-                .clone()
-        })
-    }
-}
+pub const ALLOWED_EKUS: &[&std::ffi::CStr] = &[c"1.3.6.1.5.5.7.3.1"];

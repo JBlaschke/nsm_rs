@@ -29,6 +29,8 @@
 #include <openssl/sshkdf.h>
 #include <openssl/err.h>
 
+#include "../ml_dsa/ml_dsa.h"
+#include "../pqdsa/internal.h"
 #include "../../test/abi_test.h"
 #include "../../test/test_util.h"
 #include "../bn/internal.h"
@@ -2039,6 +2041,31 @@ TEST_P(HKDF_ServiceIndicatorTest, HKDFTest) {
   EXPECT_EQ(approved, test.expect_approved);
 }
 
+TEST(HKDF_ServiceIndicatorTest, NegativeTests) {
+  FIPSStatus status = AWSLC_APPROVED;
+
+  // Setting |out_len| to (256 * 254 + 1) implies n = 255 in |HKDF_expand|.
+  // This should cause a failure and no service indicator set to approved.
+  uint8_t output[sizeof(kHKDF_okm_tc1_sha256)];
+  CALL_SERVICE_AND_CHECK_APPROVED(
+    status, ASSERT_FALSE(HKDF(output, (256 * 254 + 1), EVP_sha256(),
+                               kHKDF_ikm_tc1, sizeof(kHKDF_ikm_tc1),
+                               kHKDF_salt_tc1, sizeof(kHKDF_salt_tc1),
+                               kHKDF_info_tc1, sizeof(kHKDF_info_tc1))));
+  EXPECT_EQ(status, AWSLC_NOT_APPROVED);
+
+  status = AWSLC_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(
+    status, ASSERT_FALSE(HKDF_expand(output, (256 * 254 + 1), EVP_sha256(),
+                               kHKDF_ikm_tc1, sizeof(kHKDF_ikm_tc1),
+                               kHKDF_info_tc1, sizeof(kHKDF_info_tc1))));
+  EXPECT_EQ(status, AWSLC_NOT_APPROVED);
+
+  // The above short-circuits fast in |HKDF_expand|. But currently, there is no
+  // way to force an error in the rest of the function logic when going through
+  // the public API.
+}
+
 class EVP_HKDF_ServiceIndicatorTest : public TestWithNoErrors<HKDFTestVector> {};
 
 INSTANTIATE_TEST_SUITE_P(All, EVP_HKDF_ServiceIndicatorTest,
@@ -3368,6 +3395,115 @@ TEST_P(KDF_ServiceIndicatorTest, TLSKDF) {
   EXPECT_EQ(Bytes(test.expected_output, sizeof(output)),
             Bytes(output, sizeof(output)));
   EXPECT_EQ(approved, test.expect_approved);
+}
+
+// TLS 1.3 KDF (HKDF-Expand-Label) is approved under SHA2-256 and SHA2-384, and
+// not approved for any other digest. Label / context contents do not affect
+// approval state for TLS 1.3.
+static const struct TLS13KDFTestVector {
+  const EVP_MD *(*func)();
+  const FIPSStatus expect_approved;
+} kTLS13KDFTestVectors[] = {
+    {EVP_sha1, AWSLC_NOT_APPROVED},
+    {EVP_sha224, AWSLC_NOT_APPROVED},
+    {EVP_sha256, AWSLC_APPROVED},
+    {EVP_sha384, AWSLC_APPROVED},
+    {EVP_sha512, AWSLC_NOT_APPROVED},
+};
+
+class TLS13KDF_ServiceIndicatorTest
+    : public TestWithNoErrors<TLS13KDFTestVector> {};
+
+INSTANTIATE_TEST_SUITE_P(All, TLS13KDF_ServiceIndicatorTest,
+                         testing::ValuesIn(kTLS13KDFTestVectors));
+
+TEST_P(TLS13KDF_ServiceIndicatorTest, HKDFExpandLabel) {
+  const TLS13KDFTestVector &test = GetParam();
+  const EVP_MD *digest = test.func();
+
+  static const uint8_t kLabel[] = "c e traffic";
+  // The HKDF-Expand-Label context is a transcript hash, so its length tracks
+  // the digest in use (e.g. 48 bytes for SHA-384, 32 for SHA-256). Size it from
+  // the digest rather than pinning it to 32 bytes so each parameterization
+  // mirrors a real caller.
+  uint8_t hash[EVP_MAX_MD_SIZE] = {0};
+  const size_t hash_len = EVP_MD_size(digest);
+  FIPSStatus approved = AWSLC_NOT_APPROVED;
+
+  uint8_t output[32];
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved,
+      ASSERT_TRUE(CRYPTO_tls13_hkdf_expand_label(
+          output, sizeof(output), digest, kTLSSecret, sizeof(kTLSSecret),
+          kLabel, sizeof(kLabel) - 1, hash, hash_len)));
+  EXPECT_EQ(approved, test.expect_approved);
+}
+
+static void CheckTLS13KDFRejectedNotApproved(
+    size_t out_len, const uint8_t *label, size_t label_len,
+    const uint8_t *hash, size_t hash_len, int expected_lib,
+    int expected_reason) {
+  uint8_t output[32] = {0};
+  int result = 1;
+  FIPSStatus approved = AWSLC_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved, result = CRYPTO_tls13_hkdf_expand_label(
+                    output, out_len, EVP_sha256(), kTLSSecret,
+                    sizeof(kTLSSecret), label, label_len, hash, hash_len));
+
+  EXPECT_FALSE(result);
+  EXPECT_EQ(approved, AWSLC_NOT_APPROVED);
+  uint32_t err = ERR_get_error();
+  EXPECT_TRUE(ErrorEquals(err, expected_lib, expected_reason))
+      << ERR_error_string(err, nullptr);
+  EXPECT_EQ(0u, ERR_get_error());
+}
+
+TEST(TLS13KDF_ServiceIndicatorNegativeTest, HKDFExpandLabelRejectsBounds) {
+  static const uint8_t kLabel[] = "c e traffic";
+  const size_t kOutputLen = 32;
+  uint8_t hash[EVP_MAX_MD_SIZE] = {0};
+
+  CheckTLS13KDFRejectedNotApproved(static_cast<size_t>(UINT16_MAX) + 1, kLabel,
+                                   sizeof(kLabel) - 1, hash,
+                                   EVP_MD_size(EVP_sha256()), ERR_LIB_CRYPTO,
+                                   ERR_R_OVERFLOW);
+
+  const std::vector<uint8_t> oversized_label(250);
+  CheckTLS13KDFRejectedNotApproved(
+      kOutputLen, oversized_label.data(), oversized_label.size(), hash,
+      EVP_MD_size(EVP_sha256()), ERR_LIB_CRYPTO, ERR_R_OVERFLOW);
+
+  const std::vector<uint8_t> oversized_hash(256);
+  CheckTLS13KDFRejectedNotApproved(kOutputLen, kLabel, sizeof(kLabel) - 1,
+                                   oversized_hash.data(),
+                                   oversized_hash.size(), ERR_LIB_CRYPTO,
+                                   ERR_R_OVERFLOW);
+
+  const size_t hkdf_expand_limit = 255 * EVP_MD_size(EVP_sha256());
+  std::vector<uint8_t> output(hkdf_expand_limit + 1);
+  int result = 1;
+  FIPSStatus approved = AWSLC_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved, result = CRYPTO_tls13_hkdf_expand_label(
+                    output.data(), output.size(), EVP_sha256(), kTLSSecret,
+                    sizeof(kTLSSecret), kLabel, sizeof(kLabel) - 1, hash,
+                    EVP_MD_size(EVP_sha256())));
+
+  EXPECT_FALSE(result);
+  EXPECT_EQ(approved, AWSLC_NOT_APPROVED);
+  uint32_t err = ERR_get_error();
+  EXPECT_TRUE(ErrorEquals(err, ERR_LIB_HKDF, HKDF_R_OUTPUT_TOO_LARGE))
+      << ERR_error_string(err, nullptr);
+  EXPECT_EQ(0u, ERR_get_error());
+
+  uint8_t approved_output[32];
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved, ASSERT_TRUE(CRYPTO_tls13_hkdf_expand_label(
+                    approved_output, sizeof(approved_output), EVP_sha256(),
+                    kTLSSecret, sizeof(kTLSSecret), kLabel, sizeof(kLabel) - 1,
+                    hash, EVP_MD_size(EVP_sha256()))));
+  EXPECT_EQ(approved, AWSLC_APPROVED);
 }
 
 // PBKDF2 test data from RFC 6070.
@@ -5200,6 +5336,15 @@ TEST(ServiceIndicatorTest, ED25519KeyGen) {
 TEST(ServiceIndicatorTest, ED25519SigGenVerify) {
   const uint8_t MESSAGE[15] = {'E', 'D', '2', '5', '5', '1', '9', ' ',
                                'M', 'E', 'S', 'S', 'A', 'G', 'E'};
+  const uint8_t CONTEXT[6] = {'A', 'W', 'S', '-', 'L', 'C'};
+  uint8_t digest[SHA512_DIGEST_LENGTH] = {
+      0xcf, 0x83, 0xe1, 0x35, 0x7e, 0xef, 0xb8, 0xbd, 0xf1, 0x54, 0x28,
+      0x50, 0xd6, 0x6d, 0x80, 0x07, 0xd6, 0x20, 0xe4, 0x05, 0x0b, 0x57,
+      0x15, 0xdc, 0x83, 0xf4, 0xa9, 0x21, 0xd3, 0x6c, 0xe9, 0xce, 0x47,
+      0xd0, 0xd1, 0x3c, 0x5d, 0x85, 0xf2, 0xb0, 0xff, 0x83, 0x18, 0xd2,
+      0x87, 0x7e, 0xec, 0x2f, 0x63, 0xb9, 0x31, 0xbd, 0x47, 0x41, 0x7a,
+      0x81, 0xa5, 0x38, 0x32, 0x7a, 0xf9, 0x27, 0xda, 0x3e};  // sha512 of empty
+                                                              // string
   uint8_t private_key[ED25519_PRIVATE_KEY_LEN] = {0};
   uint8_t public_key[ED25519_PUBLIC_KEY_LEN] = {0};
   uint8_t signature[ED25519_SIGNATURE_LEN] = {0};
@@ -5215,6 +5360,47 @@ TEST(ServiceIndicatorTest, ED25519SigGenVerify) {
   CALL_SERVICE_AND_CHECK_APPROVED(
       approved, ASSERT_TRUE(ED25519_verify(&MESSAGE[0], sizeof(MESSAGE),
                                            signature, public_key)));
+  ASSERT_EQ(AWSLC_APPROVED, approved);
+
+  approved = AWSLC_NOT_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved,
+      ASSERT_TRUE(ED25519ctx_sign(&signature[0], &MESSAGE[0], sizeof(MESSAGE),
+                                  private_key, &CONTEXT[0], sizeof(CONTEXT))));
+  ASSERT_EQ(AWSLC_NOT_APPROVED, approved);
+
+  approved = AWSLC_NOT_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved,
+      ASSERT_TRUE(ED25519ctx_verify(&MESSAGE[0], sizeof(MESSAGE), signature,
+                                    public_key, &CONTEXT[0], sizeof(CONTEXT))));
+  ASSERT_EQ(AWSLC_NOT_APPROVED, approved);
+
+  approved = AWSLC_NOT_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved,
+      ASSERT_TRUE(ED25519ph_sign(&signature[0], &MESSAGE[0], sizeof(MESSAGE),
+                                 private_key, &CONTEXT[0], sizeof(CONTEXT))));
+  ASSERT_EQ(AWSLC_APPROVED, approved);
+
+  approved = AWSLC_NOT_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved,
+      ASSERT_TRUE(ED25519ph_verify(&MESSAGE[0], sizeof(MESSAGE), signature,
+                                   public_key, &CONTEXT[0], sizeof(CONTEXT))));
+  ASSERT_EQ(AWSLC_APPROVED, approved);
+
+  approved = AWSLC_NOT_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(
+      approved,
+      ASSERT_TRUE(ED25519ph_sign_digest(&signature[0], digest,
+                                 private_key, &CONTEXT[0], sizeof(CONTEXT))));
+  ASSERT_EQ(AWSLC_APPROVED, approved);
+
+  approved = AWSLC_NOT_APPROVED;
+  CALL_SERVICE_AND_CHECK_APPROVED(approved, ASSERT_TRUE(ED25519ph_verify_digest(
+                                                digest, signature, public_key,
+                                                &CONTEXT[0], sizeof(CONTEXT))));
   ASSERT_EQ(AWSLC_APPROVED, approved);
 
   bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new_raw_private_key(
@@ -5242,11 +5428,133 @@ TEST(ServiceIndicatorTest, ED25519SigGenVerify) {
   ASSERT_EQ(AWSLC_APPROVED, approved);
 }
 
+TEST(ServiceIndicatorTest, MLDSAKeyGen) {
+  // Test EVP interface for each ML-DSA parameter set
+  for (int nid : {NID_MLDSA44, NID_MLDSA65, NID_MLDSA87}) {
+    bssl::UniquePtr<EVP_PKEY_CTX> ctx(
+        EVP_PKEY_CTX_new_id(EVP_PKEY_PQDSA, nullptr));
+    ASSERT_TRUE(EVP_PKEY_CTX_pqdsa_set_params(ctx.get(), nid));
+    ASSERT_TRUE(EVP_PKEY_keygen_init(ctx.get()));
+
+    FIPSStatus approved = AWSLC_NOT_APPROVED;
+    EVP_PKEY *raw = nullptr;
+    CALL_SERVICE_AND_CHECK_APPROVED(
+        approved, EVP_PKEY_keygen(ctx.get(), &raw));
+    bssl::UniquePtr<EVP_PKEY> pkey(raw);
+    ASSERT_EQ(AWSLC_APPROVED, approved);
+  }
+}
+
+TEST(ServiceIndicatorTest, MLDSASigGenVerify) {
+  const uint8_t MESSAGE[15] = {'M', 'L', '-', 'D', 'S', 'A', ' ',
+                               'M', 'E', 'S', 'S', 'A', 'G', 'E'};
+
+  // Test EVP interface for all ML-DSA parameter sets
+  for (int nid : {NID_MLDSA44, NID_MLDSA65, NID_MLDSA87}) {
+    bssl::UniquePtr<EVP_PKEY_CTX> ctx(
+        EVP_PKEY_CTX_new_id(EVP_PKEY_PQDSA, nullptr));
+    ASSERT_TRUE(EVP_PKEY_CTX_pqdsa_set_params(ctx.get(), nid));
+    ASSERT_TRUE(EVP_PKEY_keygen_init(ctx.get()));
+
+    EVP_PKEY *raw = nullptr;
+    ASSERT_TRUE(EVP_PKEY_keygen(ctx.get(), &raw));
+    bssl::UniquePtr<EVP_PKEY> pkey(raw);
+
+    // Test Method 1: EVP_DigestSign/EVP_DigestVerify (pure signatures)
+    {
+      bssl::UniquePtr<EVP_MD_CTX> mdctx(EVP_MD_CTX_new());
+      FIPSStatus approved = AWSLC_NOT_APPROVED;
+      
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved, EVP_DigestSignInit(mdctx.get(), NULL, NULL, NULL, pkey.get()));
+      ASSERT_EQ(AWSLC_NOT_APPROVED, approved);
+      
+      size_t sig_out_len = 0;
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved,
+          ASSERT_TRUE(EVP_DigestSign(mdctx.get(), nullptr, &sig_out_len,
+                                     MESSAGE, sizeof(MESSAGE))));
+      ASSERT_EQ(AWSLC_NOT_APPROVED, approved);
+
+      std::vector<uint8_t> signature(sig_out_len);
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved,
+          ASSERT_TRUE(EVP_DigestSign(mdctx.get(), signature.data(), &sig_out_len,
+                                     MESSAGE, sizeof(MESSAGE))));
+      ASSERT_EQ(AWSLC_APPROVED, approved);
+
+      mdctx.reset(EVP_MD_CTX_new());
+      ASSERT_TRUE(EVP_DigestVerifyInit(mdctx.get(), NULL, NULL, NULL, pkey.get()));
+      approved = AWSLC_NOT_APPROVED;
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved, ASSERT_TRUE(EVP_DigestVerify(mdctx.get(), signature.data(),
+                                                 sig_out_len, MESSAGE,
+                                                 sizeof(MESSAGE))));
+      ASSERT_EQ(AWSLC_APPROVED, approved);
+    }
+
+    // Test Method 2: EVP_PKEY_sign/EVP_PKEY_verify (pre-hash signatures)
+    {
+      // Compute mu for this EVP key
+      size_t pk_len = 0;
+      ASSERT_TRUE(EVP_PKEY_get_raw_public_key(pkey.get(), nullptr, &pk_len));
+      std::vector<uint8_t> evp_pk(pk_len);
+      ASSERT_TRUE(EVP_PKEY_get_raw_public_key(pkey.get(), evp_pk.data(), &pk_len));
+      
+      std::vector<uint8_t> evp_mu(64);
+      std::vector<uint8_t> evp_tr(64);
+      
+      // Compute tr = SHAKE256(pk, 64)
+      bssl::ScopedEVP_MD_CTX evp_md_ctx_pk;
+      ASSERT_TRUE(EVP_DigestInit_ex(evp_md_ctx_pk.get(), EVP_shake256(), nullptr));
+      ASSERT_TRUE(EVP_DigestUpdate(evp_md_ctx_pk.get(), evp_pk.data(), pk_len));
+      ASSERT_TRUE(EVP_DigestFinalXOF(evp_md_ctx_pk.get(), evp_tr.data(), 64));
+
+      // Compute mu = SHAKE256(tr || pre || MESSAGE, 64)
+      uint8_t evp_pre[2] = {0x00, 0x00};
+      bssl::ScopedEVP_MD_CTX evp_md_ctx_mu;
+      ASSERT_TRUE(EVP_DigestInit_ex(evp_md_ctx_mu.get(), EVP_shake256(), nullptr));
+      ASSERT_TRUE(EVP_DigestUpdate(evp_md_ctx_mu.get(), evp_tr.data(), 64));
+      ASSERT_TRUE(EVP_DigestUpdate(evp_md_ctx_mu.get(), evp_pre, 2));
+      ASSERT_TRUE(EVP_DigestUpdate(evp_md_ctx_mu.get(), MESSAGE, sizeof(MESSAGE)));
+      ASSERT_TRUE(EVP_DigestFinalXOF(evp_md_ctx_mu.get(), evp_mu.data(), 64));
+
+      bssl::UniquePtr<EVP_PKEY_CTX> sign_ctx(EVP_PKEY_CTX_new(pkey.get(), nullptr));
+      FIPSStatus approved = AWSLC_NOT_APPROVED;
+      
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved, ASSERT_TRUE(EVP_PKEY_sign_init(sign_ctx.get())));
+      ASSERT_EQ(AWSLC_NOT_APPROVED, approved);
+      
+      size_t sig_len = 0;
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved, ASSERT_TRUE(EVP_PKEY_sign(sign_ctx.get(), nullptr, &sig_len,
+                                              evp_mu.data(), evp_mu.size())));
+      ASSERT_EQ(AWSLC_NOT_APPROVED, approved);
+
+      std::vector<uint8_t> signature2(sig_len);
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved, ASSERT_TRUE(EVP_PKEY_sign(sign_ctx.get(), signature2.data(), &sig_len,
+                                              evp_mu.data(), evp_mu.size())));
+      ASSERT_EQ(AWSLC_APPROVED, approved);
+
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved, ASSERT_TRUE(EVP_PKEY_verify_init(sign_ctx.get())));
+      ASSERT_EQ(AWSLC_NOT_APPROVED, approved);
+      
+      CALL_SERVICE_AND_CHECK_APPROVED(
+          approved, ASSERT_TRUE(EVP_PKEY_verify(sign_ctx.get(), signature2.data(), sig_len,
+                                                evp_mu.data(), evp_mu.size())));
+      ASSERT_EQ(AWSLC_APPROVED, approved);
+    }
+  }
+}
+
 // Verifies that the awslc_version_string is as expected.
 // Since this is running in FIPS mode it should end in FIPS
 // Update this when the AWS-LC version number is modified
 TEST(ServiceIndicatorTest, AWSLCVersionString) {
-  ASSERT_STREQ(awslc_version_string(), "AWS-LC FIPS 1.41.1");
+  ASSERT_STREQ(awslc_version_string(), "AWS-LC FIPS " AWSLC_VERSION_NUMBER_STRING);
 }
 
 #else
@@ -5289,6 +5597,6 @@ TEST(ServiceIndicatorTest, BasicTest) {
 // Since this is not running in FIPS mode it shouldn't end in FIPS
 // Update this when the AWS-LC version number is modified
 TEST(ServiceIndicatorTest, AWSLCVersionString) {
-  ASSERT_STREQ(awslc_version_string(), "AWS-LC 1.41.1");
+  ASSERT_STREQ(awslc_version_string(), "AWS-LC " AWSLC_VERSION_NUMBER_STRING);
 }
 #endif // AWSLC_FIPS

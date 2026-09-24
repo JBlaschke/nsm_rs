@@ -1,16 +1,5 @@
-/* Copyright (c) 2018, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2018, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <openssl/bytestring.h>
 
@@ -18,11 +7,12 @@
 
 
 static int is_valid_code_point(uint32_t v) {
-  // References in the following are to Unicode 9.0.0.
+  // References in the following are to Unicode 15.0.0.
   if (// The Unicode space runs from zero to 0x10ffff (3.4 D9).
       v > 0x10ffff ||
       // Values 0x...fffe, 0x...ffff, and 0xfdd0-0xfdef are permanently reserved
-      // (3.4 D14)
+      // as noncharacters (3.4 D14). See also 23.7. As our APIs are intended for
+      // "open interchange", such as ASN.1, we reject them.
       (v & 0xfffe) == 0xfffe ||
       (v >= 0xfdd0 && v <= 0xfdef) ||
       // Surrogate code points are invalid (3.2 C1).

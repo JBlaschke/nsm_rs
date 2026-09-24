@@ -1,17 +1,11 @@
 #! /usr/bin/env perl
 # Copyright 2006-2016 The OpenSSL Project Authors. All Rights Reserved.
-#
-# Licensed under the OpenSSL license (the "License").  You may not use
-# this file except in compliance with the License.  You can obtain a copy
-# in the file LICENSE in the source distribution or at
-# https://www.openssl.org/source/license.html
+# SPDX-License-Identifier: Apache-2.0
 
 #
 # ====================================================================
 # Written by Andy Polyakov <appro@openssl.org> for the OpenSSL
-# project. The module is, however, dual licensed under OpenSSL and
-# CRYPTOGAMS licenses depending on where you obtain it. For further
-# details see http://www.openssl.org/~appro/cryptogams/.
+# project.
 # ====================================================================
 #
 # sha1_block procedure for x86_64.
@@ -2024,29 +2018,33 @@ $code.=<<___ if ($avx>1);
 ___
 $code.=<<___;
 .section	.xdata
-.align	8
+.align	4
 .LSEH_info_sha1_block_data_order_nohw:
 	.byte	9,0,0,0
 	.rva	se_handler
 ___
 $code.=<<___ if ($shaext);
+.align	4
 .LSEH_info_sha1_block_data_order_hw:
 	.byte	9,0,0,0
 	.rva	shaext_handler
 ___
 $code.=<<___;
+.align	4
 .LSEH_info_sha1_block_data_order_ssse3:
 	.byte	9,0,0,0
 	.rva	ssse3_handler
 	.rva	.Lprologue_ssse3,.Lepilogue_ssse3	# HandlerData[]
 ___
 $code.=<<___ if ($avx);
+.align	4
 .LSEH_info_sha1_block_data_order_avx:
 	.byte	9,0,0,0
 	.rva	ssse3_handler
 	.rva	.Lprologue_avx,.Lepilogue_avx		# HandlerData[]
 ___
 $code.=<<___ if ($avx>1);
+.align	4
 .LSEH_info_sha1_block_data_order_avx2:
 	.byte	9,0,0,0
 	.rva	ssse3_handler

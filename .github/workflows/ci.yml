@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "cleanup/**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Dependencies are vendored and .cargo/config.toml replaces crates.io with
+  # vendor/, so every cargo invocation runs offline against Cargo.lock.
+  CARGO_NET_OFFLINE: "true"
+  # Line coverage the `coverage` job enforces; raise it when the measured
+  # value grows (it must never go down).
+  COVERAGE_FLOOR: "94"
+
+jobs:
+  build-test:
+    name: build and test (${{ matrix.os }}, ${{ matrix.provider }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        provider: [aws-lc-rs, ring]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.provider }}
+      - run: cargo build --locked --all-targets --no-default-features --features ${{ matrix.provider }}
+      - run: cargo test --locked --all-targets --no-default-features --features ${{ matrix.provider }}
+      - run: cargo test --locked --doc --no-default-features --features ${{ matrix.provider }}
+
+  msrv:
+    name: build and test on the minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - run: cargo build --locked --all-targets
+      - run: cargo test --locked
+
+  stress:
+    name: stress test (50 services, 50 clients)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --test stress -- --ignored
+
+  lint:
+    name: fmt, clippy and rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --all-targets --no-default-features --features ring -- -D warnings
+      - run: cargo doc --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  deps:
+    name: advisories, licenses, sources, unused dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Advisories (RustSec), licenses, sources and duplicate versions, as
+      # configured in deny.toml. --all-features covers both crypto providers.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      # cargo-machete scans every Cargo.toml below the directory it is given,
+      # vendor/ included; point it at a copy that holds only this crate.
+      - name: cargo machete
+        run: |
+          dir=$(mktemp -d)
+          cp Cargo.toml "$dir"/ && cp -R src tests "$dir"/
+          cargo machete "$dir"
+
+  docker:
+    name: docker image builds and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker build --tag nsm:ci .
+      - run: docker run --rm nsm:ci --version
+      - run: docker run --rm nsm:ci list-interfaces
+      - run: docker run --rm nsm:ci list-ips --ip-version 4
+
+  coverage:
+    # The `env` context is not available in a job name, so the floor is
+    # printed by the step below instead.
+    name: line coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      - run: echo "enforcing a line-coverage floor of ${COVERAGE_FLOOR}%"
+      - run: cargo llvm-cov --locked --lcov --output-path lcov.info --fail-under-lines "$COVERAGE_FLOOR"
+      - run: cargo llvm-cov report --summary-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info

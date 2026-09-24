@@ -8,7 +8,7 @@ use zerovec::*;
 
 #[repr(C, packed)]
 #[derive(ule::ULE, Copy, Clone)]
-pub struct FooULE {
+struct FooULE {
     a: u8,
     b: <u32 as AsULE>::ULE,
     c: <char as AsULE>::ULE,
@@ -42,19 +42,19 @@ impl AsULE for Foo {
 
 #[repr(C, packed)]
 #[derive(ule::VarULE)]
-pub struct RelationULE {
-    /// This maps to (AndOr, Polarity, Operand),
-    /// with the first bit mapping to AndOr (1 == And), the second bit
-    /// to Polarity (1 == Positive), and the remaining bits to Operand
-    /// encoded via Operand::encode. It is unsound for the Operand bits to
-    /// not be a valid encoded Operand.
+struct RelationULE {
+    /// This maps to (`AndOr`, `Polarity`, `Operand`),
+    /// with the first bit mapping to `AndOr` (`1 == And`), the second bit
+    /// to `Polarity` (`1 == Positive`), and the remaining bits to `Operand`
+    /// encoded via `Operand::encode`. It is unsound for the `Operand` bits to
+    /// not be a valid encoded `Operand`.
     andor_polarity_operand: u8,
     modulo: <u32 as AsULE>::ULE,
     range_list: ZeroSlice<Foo>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct Relation<'a> {
+struct Relation<'a> {
     andor_polarity_operand: u8,
     modulo: u32,
     range_list: ZeroVec<'a, Foo>,
@@ -64,14 +64,14 @@ unsafe impl EncodeAsVarULE<RelationULE> for Relation<'_> {
     fn encode_var_ule_as_slices<R>(&self, cb: impl FnOnce(&[&[u8]]) -> R) -> R {
         cb(&[
             &[self.andor_polarity_operand],
-            ule::ULE::as_byte_slice(&[self.modulo.to_unaligned()]),
+            ule::ULE::slice_as_bytes(&[self.modulo.to_unaligned()]),
             self.range_list.as_bytes(),
         ])
     }
 }
 
 impl RelationULE {
-    pub fn as_relation(&self) -> Relation {
+    fn as_relation(&self) -> Relation<'_> {
         Relation {
             andor_polarity_operand: self.andor_polarity_operand,
             modulo: u32::from_unaligned(self.modulo),
@@ -116,7 +116,7 @@ fn test_zerovec() {
     assert_eq!(zerovec, TEST_SLICE);
 
     let bytes = zerovec.as_bytes();
-    let reparsed: ZeroVec<Foo> = ZeroVec::parse_byte_slice(bytes).expect("Parsing should succeed");
+    let reparsed: ZeroVec<Foo> = ZeroVec::parse_bytes(bytes).expect("Parsing should succeed");
 
     assert_eq!(reparsed, TEST_SLICE);
 }
@@ -144,7 +144,7 @@ fn test_varzerovec() {
     let bytes = vzv.as_bytes();
 
     let recovered: VarZeroVec<RelationULE> =
-        VarZeroVec::parse_byte_slice(bytes).expect("Parsing should succeed");
+        VarZeroVec::parse_bytes(bytes).expect("Parsing should succeed");
 
     for (ule, stack) in recovered.iter().zip(relations.iter()) {
         assert_eq!(*stack, ule.as_relation());

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CLIOperation"],"fn":["init","parse"],"struct":["Claim","ListIPs","ListInterfaces","Listen","Publish"]};

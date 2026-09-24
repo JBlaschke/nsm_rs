@@ -1,57 +1,6 @@
-/* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
- * project 2006.
- */
-/* ====================================================================
- * Copyright (c) 2006 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com). */
+// Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project 2006.
+// Copyright (c) 2006 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/evp.h>
 
@@ -63,6 +12,7 @@
 #include <openssl/err.h>
 
 #include "../fipsmodule/evp/internal.h"
+#include "../ec_extra/internal.h"
 #include "internal.h"
 
 
@@ -90,14 +40,18 @@ static int eckey_pub_encode(CBB *out, const EVP_PKEY *key) {
   return 1;
 }
 
-static int eckey_pub_decode(EVP_PKEY *out, CBS *params, CBS *key) {
+static int eckey_pub_decode(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key) {
   // See RFC 5480, section 2.
 
   // The parameters are a named curve.
   EC_POINT *point = NULL;
   EC_KEY *eckey = NULL;
-  const EC_GROUP *group = EC_KEY_parse_curve_name(params);
-  if (group == NULL || CBS_len(params) != 0) {
+
+  enum ECParametersType paramType = UNKNOWN_EC_PARAMETERS;
+
+  const EC_GROUP *group = EC_KEY_parse_parameters_and_type(params, &paramType);
+  if (group == NULL || CBS_len(params) != 0 ||
+      paramType == UNKNOWN_EC_PARAMETERS) {
     OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
     goto err;
   }
@@ -112,6 +66,12 @@ static int eckey_pub_decode(EVP_PKEY *out, CBS *params, CBS *key) {
       !EC_POINT_oct2point(group, point, CBS_data(key), CBS_len(key), NULL) ||
       !EC_KEY_set_public_key(eckey, point)) {
     goto err;
+  }
+
+  if(paramType == SPECIFIED_CURVE_EC_PARAMETERS) {
+    eckey->group_decoded_from_explicit_params = 1;
+  } else {
+    eckey->group_decoded_from_explicit_params = 0;
   }
 
   EC_POINT_free(point);
@@ -139,15 +99,17 @@ static int eckey_pub_cmp(const EVP_PKEY *a, const EVP_PKEY *b) {
   }
 }
 
-static int eckey_priv_decode(EVP_PKEY *out, CBS *params, CBS *key, CBS *pubkey) {
+static int eckey_priv_decode(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key, CBS *pubkey) {
   // See RFC 5915.
   if(pubkey) {
     OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
     return 0;
   }
 
-  const EC_GROUP *group = EC_KEY_parse_parameters(params);
-  if (group == NULL || CBS_len(params) != 0) {
+  enum ECParametersType paramType = UNKNOWN_EC_PARAMETERS;
+
+  const EC_GROUP *group = EC_KEY_parse_parameters_and_type(params, &paramType);
+  if (group == NULL || CBS_len(params) != 0 || paramType == UNKNOWN_EC_PARAMETERS) {
     OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
     return 0;
   }
@@ -157,6 +119,12 @@ static int eckey_priv_decode(EVP_PKEY *out, CBS *params, CBS *key, CBS *pubkey) 
     OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
     EC_KEY_free(ec_key);
     return 0;
+  }
+
+  if (paramType == SPECIFIED_CURVE_EC_PARAMETERS) {
+    ec_key->group_decoded_from_explicit_params = 1;
+  } else {
+    ec_key->group_decoded_from_explicit_params = 0;
   }
 
   EVP_PKEY_assign_EC_KEY(out, ec_key);
@@ -268,6 +236,7 @@ const EVP_PKEY_ASN1_METHOD ec_asn1_meth = {
   NULL /* set_pub_raw */,
   NULL /* get_priv_raw */,
   NULL /* get_pub_raw */,
+  NULL /* get_priv_seed */,
 
   eckey_opaque,
 

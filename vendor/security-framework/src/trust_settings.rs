@@ -12,8 +12,7 @@ use security_framework_sys::trust_settings::*;
 
 use std::ptr;
 
-use crate::base::Error;
-use crate::base::Result;
+use crate::base::{Error, Result};
 use crate::certificate::SecCertificate;
 use crate::cvt;
 
@@ -31,7 +30,7 @@ pub enum Domain {
 
 impl From<Domain> for SecTrustSettingsDomain {
     #[inline]
-    fn from(domain: Domain) -> SecTrustSettingsDomain {
+    fn from(domain: Domain) -> Self {
         match domain {
             Domain::User => kSecTrustSettingsDomainUser,
             Domain::Admin => kSecTrustSettingsDomainAdmin,
@@ -63,7 +62,7 @@ pub enum TrustSettingsForCertificate {
 impl TrustSettingsForCertificate {
     /// Create from `kSecTrustSettingsResult*` constant
     fn new(value: i64) -> Self {
-        if value < 0 || value > i64::from(u32::max_value()) {
+        if value < 0 || value > i64::from(u32::MAX) {
             return Self::Invalid;
         }
         match value as u32 {
@@ -90,7 +89,7 @@ impl TrustSettings {
     /// to learn what the aggregate trust setting for that certificate within this domain.
     #[inline(always)]
     #[must_use]
-    pub fn new(domain: Domain) -> Self {
+    pub const fn new(domain: Domain) -> Self {
         Self { domain }
     }
 
@@ -132,7 +131,7 @@ impl TrustSettings {
         let trust_settings: CFTypeRef = ptr::null_mut();
         cvt(unsafe {
             SecTrustSettingsSetTrustSettings(
-                cert.as_CFTypeRef() as *mut _,
+                cert.as_concrete_TypeRef(),
                 domain.into(),
                 trust_settings,
             )
@@ -169,7 +168,7 @@ impl TrustSettings {
                     .find(policy_name_key.as_CFTypeRef().cast())
                     .map(|name| unsafe { CFString::wrap_under_get_rule((*name).cast()) });
 
-                matches!(maybe_name, Some(ref name) if name != &ssl_policy_name)
+                matches!(maybe_name, Some(name) if name != ssl_policy_name)
             };
 
             if is_not_ssl_policy {

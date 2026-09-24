@@ -7,7 +7,6 @@
 
 use super::raw::*;
 use crate::backend::c;
-use crate::backend::fd::LibcFd as LibcSocket;
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::forget;
@@ -27,17 +26,17 @@ use core::mem::forget;
 /// socket, which is then borrowed under the same lifetime.
 #[derive(Copy, Clone)]
 #[repr(transparent)]
-#[cfg_attr(staged_api, rustc_layout_scalar_valid_range_start(0))]
+//#[rustc_layout_scalar_valid_range_start(0)]
 // This is -2, in two's complement. -1 is `INVALID_SOCKET`.
-#[cfg_attr(
-    all(staged_api, target_pointer_width = "32"),
-    rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FE)
-)]
-#[cfg_attr(
-    all(staged_api, target_pointer_width = "64"),
-    rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FF_FF_FF_FF_FE)
-)]
-#[cfg_attr(staged_api, rustc_nonnull_optimization_guaranteed)]
+//#[cfg_attr(
+//    target_pointer_width = "32",
+//    rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FE)
+//)]
+//#[cfg_attr(
+//    target_pointer_width = "64",
+//    rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FF_FF_FF_FF_FE)
+//)]
+//#[rustc_nonnull_optimization_guaranteed]
 #[cfg_attr(staged_api, stable(feature = "io_safety", since = "1.63.0"))]
 pub struct BorrowedSocket<'socket> {
     socket: RawSocket,
@@ -53,24 +52,24 @@ pub struct BorrowedSocket<'socket> {
 /// argument or returned as an owned value, and it never has the value
 /// `INVALID_SOCKET`.
 #[repr(transparent)]
-#[cfg_attr(staged_api, rustc_layout_scalar_valid_range_start(0))]
+//#[rustc_layout_scalar_valid_range_start(0)]
 // This is -2, in two's complement. -1 is `INVALID_SOCKET`.
-#[cfg_attr(
-    all(staged_api, target_pointer_width = "32"),
-    rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FE)
-)]
-#[cfg_attr(
-    all(staged_api, target_pointer_width = "64"),
-    rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FF_FF_FF_FF_FE)
-)]
-#[cfg_attr(staged_api, rustc_nonnull_optimization_guaranteed)]
+//#[cfg_attr(
+//    target_pointer_width = "32",
+//    rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FE)
+//)]
+//#[cfg_attr(
+//    target_pointer_width = "64",
+//    rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FF_FF_FF_FF_FE)
+//)]
+//#[rustc_nonnull_optimization_guaranteed]
 #[cfg_attr(staged_api, stable(feature = "io_safety", since = "1.63.0"))]
 pub struct OwnedSocket {
     socket: RawSocket,
 }
 
 impl BorrowedSocket<'_> {
-    /// Return a `BorrowedSocket` holding the given raw socket.
+    /// Returns a `BorrowedSocket` holding the given raw socket.
     ///
     /// # Safety
     ///
@@ -132,7 +131,7 @@ impl Drop for OwnedSocket {
     #[inline]
     fn drop(&mut self) {
         unsafe {
-            let _ = c::closesocket(self.socket as LibcSocket);
+            let _ = c::closesocket(self.socket as c::SOCKET);
         }
     }
 }

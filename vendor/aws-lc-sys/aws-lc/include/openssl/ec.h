@@ -1,69 +1,12 @@
-/* Originally written by Bodo Moeller for the OpenSSL project.
- * ====================================================================
- * Copyright (c) 1998-2005 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
-/* ====================================================================
- * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
- *
- * Portions of the attached software ("Contribution") are developed by
- * SUN MICROSYSTEMS, INC., and are contributed to the OpenSSL project.
- *
- * The Contribution is licensed pursuant to the OpenSSL open source
- * license provided above.
- *
- * The elliptic curve binary polynomial software is originally written by
- * Sheueling Chang Shantz and Douglas Stebila of Sun Microsystems
- * Laboratories. */
+// Originally written by Bodo Moeller for the OpenSSL project.
+// Copyright (c) 1998-2005 The OpenSSL Project.  All rights reserved.
+// Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
+//
+// The elliptic curve binary polynomial software is originally written by
+// Sheueling Chang Shantz and Douglas Stebila of Sun Microsystems
+// Laboratories.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENSSL_HEADER_EC_H
 #define OPENSSL_HEADER_EC_H
@@ -92,7 +35,7 @@ typedef enum {
 
   // POINT_CONVERSION_HYBRID indicates that the point is encoded as z||x||y,
   // where z specifies which solution of the quadratic equation y is.
-  POINT_CONVERSION_HYBRID = 6,
+  POINT_CONVERSION_HYBRID = 6
 } point_conversion_form_t;
 
 
@@ -124,6 +67,26 @@ OPENSSL_EXPORT const EC_GROUP *EC_group_p521(void);
 // EC_group_secp256k1 returns an |EC_GROUP| for secp256k1.
 OPENSSL_EXPORT const EC_GROUP *EC_group_secp256k1(void);
 
+// EC_group_brainpoolP224r1 returns an |EC_GROUP| for brainpoolP224r1, defined
+// in RFC 5639.
+OPENSSL_EXPORT const EC_GROUP *EC_group_brainpoolP224r1(void);
+
+// EC_group_brainpoolP256r1 returns an |EC_GROUP| for brainpoolP256r1, defined
+// in RFC 5639.
+OPENSSL_EXPORT const EC_GROUP *EC_group_brainpoolP256r1(void);
+
+// EC_group_brainpoolP320r1 returns an |EC_GROUP| for brainpoolP320r1, defined
+// in RFC 5639.
+OPENSSL_EXPORT const EC_GROUP *EC_group_brainpoolP320r1(void);
+
+// EC_group_brainpoolP384r1 returns an |EC_GROUP| for brainpoolP384r1, defined
+// in RFC 5639.
+OPENSSL_EXPORT const EC_GROUP *EC_group_brainpoolP384r1(void);
+
+// EC_group_brainpoolP512r1 returns an |EC_GROUP| for brainpoolP512r1, defined
+// in RFC 5639.
+OPENSSL_EXPORT const EC_GROUP *EC_group_brainpoolP512r1(void);
+
 // EC_GROUP_new_by_curve_name returns the |EC_GROUP| object for the elliptic
 // curve specified by |nid|, or NULL on unsupported NID.  For OpenSSL
 // compatibility, this function returns a non-const pointer which may be passed
@@ -136,6 +99,11 @@ OPENSSL_EXPORT const EC_GROUP *EC_group_secp256k1(void);
 // - |NID_secp384r1| (NIST P-384)
 // - |NID_secp521r1| (NIST P-521)
 // - |NID_secp256k1| (SEC/ANSI P-256 K1)
+// - |NID_brainpoolP224r1| (RFC 5639)
+// - |NID_brainpoolP256r1| (RFC 5639)
+// - |NID_brainpoolP320r1| (RFC 5639)
+// - |NID_brainpoolP384r1| (RFC 5639)
+// - |NID_brainpoolP512r1| (RFC 5639)
 //
 // Calling this function causes all four curves to be linked into the binary.
 // Prefer calling |EC_group_*| to allow the static linker to drop unused curves.
@@ -544,6 +512,11 @@ OPENSSL_EXPORT OPENSSL_DEPRECATED void EC_GROUP_set_point_conversion_form(
 // the desired compression format.
 OPENSSL_EXPORT OPENSSL_DEPRECATED point_conversion_form_t
 EC_GROUP_get_point_conversion_form(const EC_GROUP *group);
+
+// EC_KEY_decoded_from_explicit_params returns 1 if the |EC_KEY| was constructed
+// from explicitly encoded parameters to determine the |EC_GROUP|, otherwise
+// returns 0.
+OPENSSL_EXPORT OPENSSL_DEPRECATED int EC_KEY_decoded_from_explicit_params(const EC_KEY *key);
 
 
 // EC_METHOD No-ops [Deprecated].

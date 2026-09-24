@@ -17,14 +17,14 @@ use std::{
 };
 
 // Internal
+use crate::Command;
 use crate::builder::StyledStr;
 use crate::builder::Styles;
 use crate::output::fmt::Colorizer;
 use crate::output::fmt::Stream;
 use crate::parser::features::suggestions;
 use crate::util::FlatMap;
-use crate::util::{color::ColorChoice, SUCCESS_CODE, USAGE_CODE};
-use crate::Command;
+use crate::util::{SUCCESS_CODE, USAGE_CODE, color::ColorChoice};
 
 #[cfg(feature = "error-context")]
 mod context;
@@ -195,10 +195,22 @@ impl<F: ErrorFormatter> Error<F> {
     }
 
     /// Insert a piece of context
+    ///
+    /// If this `ContextKind` is already present, its value is replaced and the old value is returned.
     #[inline(never)]
     #[cfg(feature = "error-context")]
     pub fn insert(&mut self, kind: ContextKind, value: ContextValue) -> Option<ContextValue> {
         self.inner.context.insert(kind, value)
+    }
+
+    /// Remove a piece of context, return the old value if any
+    ///
+    /// The context is currently implemented in a vector, so `remove` takes
+    /// linear time.
+    #[inline(never)]
+    #[cfg(feature = "error-context")]
+    pub fn remove(&mut self, kind: ContextKind) -> Option<ContextValue> {
+        self.inner.context.remove(&kind)
     }
 
     /// Should the message be written to `stdout` or not?
@@ -805,13 +817,13 @@ impl<F: ErrorFormatter> Error<F> {
 
 impl<F: ErrorFormatter> From<io::Error> for Error<F> {
     fn from(e: io::Error) -> Self {
-        Error::raw(ErrorKind::Io, e)
+        Self::raw(ErrorKind::Io, e)
     }
 }
 
 impl<F: ErrorFormatter> From<fmt::Error> for Error<F> {
     fn from(e: fmt::Error) -> Self {
-        Error::raw(ErrorKind::Format, e)
+        Self::raw(ErrorKind::Format, e)
     }
 }
 
@@ -850,7 +862,7 @@ pub(crate) enum Message {
 impl Message {
     fn format(&mut self, cmd: &Command, usage: Option<StyledStr>) {
         match self {
-            Message::Raw(s) => {
+            Self::Raw(s) => {
                 let mut message = String::new();
                 std::mem::swap(s, &mut message);
 
@@ -863,18 +875,18 @@ impl Message {
 
                 *self = Self::Formatted(styled);
             }
-            Message::Formatted(_) => {}
+            Self::Formatted(_) => {}
         }
     }
 
     fn formatted(&self, styles: &Styles) -> Cow<'_, StyledStr> {
         match self {
-            Message::Raw(s) => {
+            Self::Raw(s) => {
                 let styled = format::format_error_message(s, styles, None, None);
 
                 Cow::Owned(styled)
             }
-            Message::Formatted(s) => Cow::Borrowed(s),
+            Self::Formatted(s) => Cow::Borrowed(s),
         }
     }
 }

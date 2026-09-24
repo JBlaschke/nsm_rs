@@ -1,8 +1,6 @@
-#![allow(unknown_lints, unexpected_cfgs)]
 #![allow(clippy::needless_range_loop)]
 #![warn(rust_2018_idioms)]
 #![cfg(feature = "full")]
-#![cfg(not(miri))]
 
 // Tests to run on both current-thread & multi-thread runtime variants.
 
@@ -41,40 +39,6 @@ macro_rules! rt_test {
 
         #[cfg(not(target_os = "wasi"))] // Wasi doesn't support threads
         mod threaded_scheduler_1_thread {
-            $($t)*
-
-            const NUM_WORKERS: usize = 1;
-
-            fn rt() -> Arc<Runtime> {
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(1)
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .into()
-            }
-        }
-
-        #[cfg(not(target_os = "wasi"))] // Wasi doesn't support threads
-        #[cfg(tokio_unstable)]
-        mod alt_threaded_scheduler_4_threads {
-            $($t)*
-
-            const NUM_WORKERS: usize = 4;
-
-            fn rt() -> Arc<Runtime> {
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(4)
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .into()
-            }
-        }
-
-        #[cfg(not(target_os = "wasi"))] // Wasi doesn't support threads
-        #[cfg(tokio_unstable)]
-        mod alt_threaded_scheduler_1_thread {
             $($t)*
 
             const NUM_WORKERS: usize = 1;
@@ -223,6 +187,7 @@ rt_test! {
 
     #[cfg(not(target_os="wasi"))] // Wasi does not support threads
     #[test]
+    #[cfg_attr(miri, ignore)] // Too slow on miri
     fn spawn_many_from_block_on() {
         use tokio::sync::mpsc;
 
@@ -274,6 +239,7 @@ rt_test! {
 
     #[cfg(not(target_os="wasi"))] // Wasi does not support threads
     #[test]
+    #[cfg_attr(miri, ignore)] // Too slow on miri
     fn spawn_many_from_task() {
         use tokio::sync::mpsc;
 
@@ -542,7 +508,6 @@ rt_test! {
     }
 
     #[cfg(not(target_os="wasi"))] // Wasi does not support bind
-    #[cfg_attr(miri, ignore)] // No `socket` in miri.
     #[test]
     fn block_on_socket() {
         let rt = rt();
@@ -617,7 +582,6 @@ rt_test! {
     }
 
     #[cfg(not(target_os="wasi"))] // Wasi does not support bind
-    #[cfg_attr(miri, ignore)] // No `socket` in miri.
     #[test]
     fn socket_from_blocking() {
         let rt = rt();
@@ -688,7 +652,6 @@ rt_test! {
     // concern. There also isn't a great/obvious solution to take. For now, the
     // test is disabled.
     #[cfg(not(windows))]
-    #[cfg_attr(miri, ignore)] // No `socket` in miri.
     #[cfg(not(target_os="wasi"))] // Wasi does not support bind or threads
     fn io_driver_called_when_under_load() {
         let rt = rt();
@@ -743,10 +706,26 @@ rt_test! {
     /// spuriously.
     #[test]
     #[cfg(not(target_os="wasi"))]
-    #[cfg_attr(miri, ignore)] // No `socket` in miri.
     fn yield_defers_until_park() {
         for _ in 0..10 {
-            if yield_defers_until_park_inner() {
+            if yield_defers_until_park_inner(false) {
+                // test passed
+                return;
+            }
+
+            // Wait a bit and run the test again.
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+
+        panic!("yield_defers_until_park is failing consistently");
+    }
+
+    /// Same as above, but with cooperative scheduling.
+    #[test]
+    #[cfg(not(target_os="wasi"))]
+    fn coop_yield_defers_until_park() {
+        for _ in 0..10 {
+            if yield_defers_until_park_inner(true) {
                 // test passed
                 return;
             }
@@ -761,9 +740,11 @@ rt_test! {
     /// Implementation of `yield_defers_until_park` test. Returns `true` if the
     /// test passed.
     #[cfg(not(target_os="wasi"))]
-    fn yield_defers_until_park_inner() -> bool {
+    fn yield_defers_until_park_inner(use_coop: bool) -> bool {
         use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
         use std::sync::Barrier;
+
+        const BUDGET: usize = 128;
 
         let rt = rt();
 
@@ -803,7 +784,15 @@ rt_test! {
                         // Yield until connected
                         let mut cnt = 0;
                         while !flag_clone.load(SeqCst){
-                            tokio::task::yield_now().await;
+                            if use_coop {
+                                // Consume a good chunk of budget, which should
+                                // force at least one yield.
+                                for _ in 0..BUDGET {
+                                    tokio::task::consume_budget().await;
+                                }
+                            } else {
+                                tokio::task::yield_now().await;
+                            }
                             cnt += 1;
 
                             if cnt >= 10 {
@@ -843,7 +832,6 @@ rt_test! {
     }
 
     #[cfg(not(target_os="wasi"))] // Wasi does not support threads
-    #[cfg_attr(miri, ignore)] // No `socket` in miri.
     #[test]
     fn client_server_block_on() {
         let rt = rt();
@@ -1009,7 +997,7 @@ rt_test! {
     }
 
     #[cfg(not(target_os="wasi"))] // Wasi doesn't support UDP or bind()
-    #[cfg_attr(miri, ignore)] // No `socket` in miri.
+    #[cfg_attr(miri, ignore)] // No UDP sockets in miri.
     #[test]
     fn io_notify_while_shutting_down() {
         use tokio::net::UdpSocket;
@@ -1047,6 +1035,7 @@ rt_test! {
 
     #[cfg(not(target_os="wasi"))] // Wasi does not support threads
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri detects leaked threads (see #7010)
     fn shutdown_timeout() {
         let (tx, rx) = oneshot::channel();
         let runtime = rt();
@@ -1065,6 +1054,7 @@ rt_test! {
 
     #[cfg(not(target_os="wasi"))] // Wasi does not support threads
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri detects leaked threads (see #7010)
     fn shutdown_timeout_0() {
         let runtime = rt();
 
@@ -1080,6 +1070,7 @@ rt_test! {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri detects leaked threads (see #7010)
     fn shutdown_wakeup_time() {
         let runtime = rt();
 
@@ -1141,7 +1132,6 @@ rt_test! {
     }
 
     #[cfg(not(target_os = "wasi"))] // Wasi does not support bind
-    #[cfg_attr(miri, ignore)] // No `socket` in miri.
     #[test]
     fn local_set_block_on_socket() {
         let rt = rt();
@@ -1164,7 +1154,6 @@ rt_test! {
     }
 
     #[cfg(not(target_os = "wasi"))] // Wasi does not support bind
-    #[cfg_attr(miri, ignore)] // No `socket` in miri.
     #[test]
     fn local_set_client_server_block_on() {
         let rt = rt();
@@ -1285,6 +1274,7 @@ rt_test! {
     // Tests that the "next task" scheduler optimization is not able to starve
     // other tasks.
     #[test]
+    #[cfg_attr(miri, ignore)] // Too slow on miri
     fn ping_pong_saturation() {
         use std::sync::atomic::{Ordering, AtomicBool};
         use tokio::sync::mpsc;
@@ -1348,6 +1338,7 @@ rt_test! {
 
     #[test]
     #[cfg(not(target_os="wasi"))]
+    #[cfg_attr(miri, ignore)] // Too slow on miri
     fn shutdown_concurrent_spawn() {
         const NUM_TASKS: usize = 10_000;
         for _ in 0..5 {

@@ -17,12 +17,16 @@ using `Cargo.toml`:
 
 ```toml
 [dependencies]
-aws-lc-rs = "1.0.0"
+aws-lc-rs = "1"
 ```
+Consuming projects will need a C/C++ compiler to build.
 
-Consuming projects will need a C Compiler (Clang or GCC) to build.
-For some platforms, the build may also require CMake.
-Building with the "fips" feature on any platform requires **CMake** and **Go**.
+**Non-FIPS builds (default):**
+* CMake is **never** required
+* Bindgen is **never** required (pre-generated bindings are provided)
+* Go is **never** required
+
+**FIPS builds:** Require **CMake**, **Go**, and potentially **bindgen** depending on the target platform.
 
 See our [User Guide](https://aws.github.io/aws-lc-rs/) for guidance on installing build requirements.
 
@@ -50,18 +54,19 @@ latest version of the AWS-LC-FIPS module that has completed FIPS validation test
 accredited lab and has been submitted to NIST for certification. This will continue to be the
 case as we periodically submit new versions of the AWS-LC-FIPS module to NIST for certification.
 Currently, aws-lc-fips-sys binds to
-[AWS-LC-FIPS 3.0.x](https://github.com/aws/aws-lc/tree/fips-2024-09-27).
+[AWS-LC-FIPS 4.x](https://github.com/aws/aws-lc/tree/fips-2025-09-12-lts).
 
 Consult with your local FIPS compliance team to determine the version of AWS-LC-FIPS module that you require. Consumers
 needing to remain on a previous version of the AWS-LC-FIPS module should pin to specific versions of aws-lc-rs to avoid
 automatically being upgraded to a newer module version.
-(See [cargo’s documentation](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html)
+(See [cargo's documentation](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html)
 on how to specify dependency versions.)
 
 | AWS-LC-FIPS module | aws-lc-rs |
 |--------------------|-----------|
 | 2.0.x              | \<1.12.0  |
-| 3.0.x              | *latest*  |
+| 3.0.x              | \<1.18.0  |
+| 4.x                | *latest*  |
 
 Refer to the
 [NIST Cryptographic Module Validation Program's Modules In Progress List](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/Modules-In-Process-List)
@@ -69,6 +74,13 @@ for the latest status of the static or dynamic AWS-LC Cryptographic Module. Plea
 [FIPS.md in the aws-lc repository](https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/FIPS.md)
 for relevant security policies and information on supported operating environments.
 We will also update our release notes and documentation to reflect any changes in FIPS certification status.
+
+##### non-fips
+
+Enable this feature to guarantee that the non-FIPS [*aws-lc-sys*](https://crates.io/crates/aws-lc-sys)
+crate is used for cryptographic implementations. This feature is mutually exclusive with the `fips`
+feature - enabling both will result in a compile-time error. Use this feature when you need a
+compile-time guarantee that your build is using the non-FIPS cryptographic module.
 
 ##### asan
 
@@ -95,12 +107,65 @@ Use of prebuilt NASM objects is prevented if either of the following conditions 
 Be aware that [features are additive](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification);
 by enabling this feature, it is enabled for all crates within the same build.
 
+##### dev-tests-only
+
+Enables the `rand::unsealed` module, which re-exports the normally sealed `SecureRandom` trait.
+This allows consumers to provide their own implementations of `SecureRandom` (e.g., a
+deterministic RNG) for testing purposes. When enabled, a `mut_fill` method is also available on
+`SecureRandom`.
+
+This feature is restricted to **dev/debug profile builds only** — attempting to use it in a
+release build will result in a compile-time error.
+
+It can be enabled in two ways:
+* **Feature flag:** `cargo test --features dev-tests-only`
+* **Environment variable:** `AWS_LC_RS_DEV_TESTS_ONLY=1 cargo test`
+
+**⚠️ Warning:** This feature is intended **only** for development and testing. It must not be
+used in production builds. The `rand::unsealed` module and `mut_fill` method are not part of the
+stable public API and may change without notice.
+
+##### legacy-des
+
+Enables single DES and Triple DES as opt-in symmetric ciphers under the `cipher`
+module, exposing `DES_FOR_LEGACY_USE_ONLY` (single DES),
+`DES_EDE_FOR_LEGACY_USE_ONLY` (2-key Triple DES / DES-EDE) and
+`DES_EDE3_FOR_LEGACY_USE_ONLY` (3-key Triple DES / DES-EDE3), together with the
+supporting key-length and IV-length constants. Only CBC and ECB operating modes are
+supported.
+
+**⚠️ Warning:** Single DES and Triple DES are legacy algorithms. Single DES
+provides only 56 bits of effective security and has been considered insecure for
+decades. Triple DES has been disallowed for encryption by
+[NIST SP 800-131A Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-131a/rev-2/final):
+2-key Triple DES after 2015, and 3-key Triple DES after 2023. This feature exists
+solely to support interoperability. All exposed items are marked `#[deprecated]`
+so that any use site produces a compiler warning. **Do not use single DES or Triple
+DES in new designs.** If you only need confidentiality, prefer AES-GCM or another
+AEAD from the `aead` module; if you specifically need a block cipher, prefer one
+of the AES algorithms in `cipher`.
+
+**Build-time impact:** The default `aws-lc-sys` bindings do not expose the low-level `DES_*`
+symbols this feature relies on, so enabling `legacy-des` also enables `aws-lc-sys?/all-bindings`.
+Concretely:
+
+* On platforms with pre-generated per-target bindings, the build switches from the universal
+  bindings to the per-target bindings (no extra tooling required).
+* On platforms *without* pre-generated bindings for the selected target, `bindgen` is invoked at
+  build time, which requires `libclang` to be installed in the build environment.
+
+Because [features are additive](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification),
+enabling `legacy-des` anywhere in your dependency graph applies the above to the entire build.
+
 ## Use of prebuilt NASM objects
 
+Prebuilt NASM objects are **only** applicable to Windows x86-64 platforms. They are **never** used on any other platform (Linux, macOS, etc.).
+
 For Windows x86 and x86-64, NASM is required for assembly code compilation. On these platforms,
-we recommend that you install [the NASM assembler](https://www.nasm.us/). If NASM is
-detected in the build environment *it is used* to compile the assembly files. However,
-if a NASM assembler is not available, and the "fips" feature is not enabled, then the build fails unless one of the following conditions are true:
+we recommend that you install [the NASM assembler](https://www.nasm.us/). **If NASM is
+detected in the build environment, it is always used** to compile the assembly files. Prebuilt NASM objects are only used as a fallback.
+
+If a NASM assembler is not available, and the "fips" feature is not enabled, then the build fails unless one of the following conditions are true:
 
 * You are building for `x86-64` and either:
    * The `AWS_LC_SYS_PREBUILT_NASM` environment variable is found and has a value of "1"; OR
@@ -111,12 +176,12 @@ objects, install NASM in the build environment and/or set the variable `AWS_LC_S
 
 ### About prebuilt NASM objects
 
-Prebuilt NASM objects are generated using automation similar to the crate provided pregenerated bindings. See the repositories
+Prebuilt NASM objects are generated using automation similar to the crate provided pregenerated bindings. See the repository's
 [GitHub workflow configuration](https://github.com/aws/aws-lc-rs/blob/main/.github/workflows/sys-bindings-generator.yml) for more information.
 The prebuilt NASM objects are checked into the repository
 and are [available for inspection](https://github.com/aws/aws-lc-rs/tree/main/aws-lc-sys/builder/prebuilt-nasm).
 For each PR submitted,
-[CI verifies](https://github.com/aws/aws-lc-rs/blob/8fb6869fc7bde92529a5cca40cf79513820984f7/.github/workflows/tests.yml#L209-L241)
+[CI verifies](https://github.com/aws/aws-lc-rs/blob/main/.github/workflows/tests.yml)
 that the NASM objects newly built from source match the NASM objects currently in the repository.
 
 ## *ring*-compatibility
@@ -126,8 +191,8 @@ behavior is observably different.
 
 * Our implementation requires the `std` library. We currently do not support a
   [`#![no_std]`](https://docs.rust-embedded.org/book/intro/no-std.html) build.
-* We can only support a subset of the platforms supported by `aws-lc-sys`. See the list of
-  supported platforms above.
+* `aws-lc-rs` supports the platforms supported by `aws-lc-sys` and AWS-LC. See the
+  [Platform Support](https://aws.github.io/aws-lc-rs/platform_support.html) page in our User Guide.
 * `Ed25519KeyPair::from_pkcs8` and `Ed25519KeyPair::from_pkcs8_maybe_unchecked` both support
   parsing of v1 or v2 PKCS#8 documents. If a v2 encoded key is provided to either function,
   public key component, if present, will be verified to match the one derived from the encoded

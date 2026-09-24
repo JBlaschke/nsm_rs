@@ -1,16 +1,5 @@
-/* Copyright (c) 2019, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2019, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <openssl/evp.h>
 
@@ -121,7 +110,7 @@ static int x25519_get_pub_raw(const EVP_PKEY *pkey, uint8_t *out,
   return 1;
 }
 
-static int x25519_pub_decode(EVP_PKEY *out, CBS *params, CBS *key) {
+static int x25519_pub_decode(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key) {
   // See RFC 8410, section 4.
 
   // The parameters must be omitted. Public keys have length 32.
@@ -159,7 +148,7 @@ static int x25519_pub_cmp(const EVP_PKEY *a, const EVP_PKEY *b) {
   return OPENSSL_memcmp(a_key->pub, b_key->pub, 32) == 0;
 }
 
-static int x25519_priv_decode(EVP_PKEY *out, CBS *params, CBS *key, CBS *pubkey) {
+static int x25519_priv_decode(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key, CBS *pubkey) {
   // See RFC 8410, section 7.
 
   // Parameters must be empty. The key is a 32-byte value wrapped in an extra
@@ -266,6 +255,7 @@ const EVP_PKEY_ASN1_METHOD x25519_asn1_meth = {
     x25519_set_pub_raw,
     x25519_get_priv_raw,
     x25519_get_pub_raw,
+    NULL /* get_priv_seed */,
     NULL /* pkey_opaque */,
     x25519_size,
     x25519_bits,

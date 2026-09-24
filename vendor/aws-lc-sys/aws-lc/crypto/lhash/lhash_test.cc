@@ -1,16 +1,5 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2014, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <openssl/lhash.h>
 
@@ -35,11 +24,11 @@
 DEFINE_LHASH_OF(char)
 
 static std::unique_ptr<char[]> RandString(void) {
-  unsigned len = 1 + (rand() % 3);
+  unsigned len = 1 + (rand() % 3); // NOLINT(clang-analyzer-security.insecureAPI.rand)
   std::unique_ptr<char[]> ret(new char[len + 1]);
 
   for (unsigned i = 0; i < len; i++) {
-    ret[i] = '0' + (rand() & 7);
+    ret[i] = '0' + (rand() & 7); // NOLINT(clang-analyzer-security.insecureAPI.rand)
   }
   ret[len] = 0;
 
@@ -102,7 +91,7 @@ TEST(LHashTest, Basic) {
       kDelete,
     };
 
-    Action action = static_cast<Action>(rand() % 3);
+    Action action = static_cast<Action>(rand() % 3); // NOLINT(clang-analyzer-security.insecureAPI.rand)
     switch (action) {
       case kRetrieve: {
         std::unique_ptr<char[]> key = RandString();

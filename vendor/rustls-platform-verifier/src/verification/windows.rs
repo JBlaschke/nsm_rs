@@ -18,73 +18,108 @@
 //! [Microsoft's Documentation]: <https://docs.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certgetcertificatechain>
 //! [Microsoft's Example]: <https://docs.microsoft.com/en-us/windows/win32/seccrypto/example-c-program-creating-a-certificate-chain>
 
-use super::{log_server_cert, ALLOWED_EKUS};
-use crate::windows::{
-    c_void_from_ref, c_void_from_ref_mut, nonnull_from_const_ptr, ZeroedWithSize,
+use std::{
+    convert::TryInto,
+    mem::{self, MaybeUninit},
+    os::raw::c_void,
+    ptr::{self, NonNull},
+    sync::Arc,
 };
-use once_cell::sync::OnceCell;
+
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerifier};
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
 use rustls::pki_types;
-use rustls::{CertificateError, DigitallySignedStruct, Error as TlsError, SignatureScheme};
-use winapi::{
-    shared::{
-        minwindef::{FILETIME, TRUE},
-        ntdef::{LPSTR, VOID},
-        winerror::{
-            CERT_E_CN_NO_MATCH, CERT_E_EXPIRED, CERT_E_INVALID_NAME, CERT_E_UNTRUSTEDROOT,
-            CERT_E_WRONG_USAGE, CRYPT_E_REVOKED,
-        },
+use rustls::{
+    CertificateError, DigitallySignedStruct, Error as TlsError, Error::InvalidCertificate,
+    SignatureScheme,
+};
+use windows_sys::Win32::{
+    Foundation::{
+        CERT_E_CN_NO_MATCH, CERT_E_EXPIRED, CERT_E_INVALID_NAME, CERT_E_UNTRUSTEDROOT,
+        CERT_E_WRONG_USAGE, CRYPT_E_REVOKED, FILETIME, TRUE,
     },
-    um::wincrypt::{
-        CertAddEncodedCertificateToStore, CertCloseStore, CertFreeCertificateChain,
-        CertFreeCertificateChainEngine, CertFreeCertificateContext, CertGetCertificateChain,
-        CertOpenStore, CertSetCertificateContextProperty, CertVerifyCertificateChainPolicy,
-        AUTHTYPE_SERVER, CERT_CHAIN_CACHE_END_CERT, CERT_CHAIN_CONTEXT, CERT_CHAIN_PARA,
+    Security::Cryptography::{
+        CertAddEncodedCertificateToStore, CertCloseStore, CertCreateCertificateChainEngine,
+        CertFreeCertificateChain, CertFreeCertificateChainEngine, CertFreeCertificateContext,
+        CertGetCertificateChain, CertOpenStore, CertSetCertificateContextProperty,
+        CertVerifyCertificateChainPolicy, HTTPSPolicyCallbackData, AUTHTYPE_SERVER,
+        CERT_CHAIN_CACHE_END_CERT, CERT_CHAIN_CONTEXT,
         CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS, CERT_CHAIN_POLICY_PARA,
         CERT_CHAIN_POLICY_SSL, CERT_CHAIN_POLICY_STATUS,
         CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT, CERT_CHAIN_REVOCATION_CHECK_END_CERT,
         CERT_CONTEXT, CERT_OCSP_RESPONSE_PROP_ID, CERT_SET_PROPERTY_IGNORE_PERSIST_ERROR_FLAG,
         CERT_STORE_ADD_ALWAYS, CERT_STORE_DEFER_CLOSE_UNTIL_LAST_FREE_FLAG, CERT_STORE_PROV_MEMORY,
-        CERT_USAGE_MATCH, CRYPT_DATA_BLOB, CTL_USAGE, SSL_EXTRA_CERT_CHAIN_POLICY_PARA,
-        USAGE_MATCH_TYPE_AND, X509_ASN_ENCODING,
+        CERT_STRONG_SIGN_PARA, CERT_TRUST_IS_PARTIAL_CHAIN, CERT_TRUST_IS_UNTRUSTED_ROOT,
+        CERT_USAGE_MATCH, CRYPT_INTEGER_BLOB, CTL_USAGE, HCERTSTORE, USAGE_MATCH_TYPE_AND,
+        X509_ASN_ENCODING,
     },
 };
 
-use rustls::Error::InvalidCertificate;
-use std::{
-    convert::TryInto,
-    mem::{self, MaybeUninit},
-    ptr::{self, NonNull},
-    sync::Arc,
-};
+use super::{log_server_cert, ALLOWED_EKUS};
+
+// The `windows-sys` definition for `CERT_CHAIN_PARA` does not take old OS versions
+// into account so we define it ourselves for better OS backwards compat.
+// In the future a compile-time size assertion can be added against the upstream type to help stay in sync.
+#[allow(non_camel_case_types, non_snake_case)]
+#[repr(C)]
+struct CERT_CHAIN_PARA {
+    pub cbSize: u32,
+    pub RequestedUsage: CERT_USAGE_MATCH,
+    pub RequestedIssuancePolicy: CERT_USAGE_MATCH,
+    pub dwUrlRetrievalTimeout: u32,
+    pub fCheckRevocationFreshnessTime: i32, // BOOL
+    pub dwRevocationFreshnessTime: u32,
+    pub pftCacheResync: *mut FILETIME,
+    // XXX: `pStrongSignPara` and `dwStrongSignFlags` might or might not be defined on the current system. It started
+    // being available in Windows 8. See https://docs.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_para
+    #[cfg(not(target_vendor = "win7"))]
+    pub pStrongSignPara: *const CERT_STRONG_SIGN_PARA,
+    #[cfg(not(target_vendor = "win7"))]
+    pub dwStrongSignFlags: u32,
+}
+
+// Same workaround with CERT_CHAIN_PARA
+#[allow(non_camel_case_types, non_snake_case)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CERT_CHAIN_ENGINE_CONFIG {
+    pub cbSize: u32,
+    pub hRestrictedRoot: HCERTSTORE,
+    pub hRestrictedTrust: HCERTSTORE,
+    pub hRestrictedOther: HCERTSTORE,
+    pub cAdditionalStore: u32,
+    pub rghAdditionalStore: *mut HCERTSTORE,
+    pub dwFlags: u32,
+    pub dwUrlRetrievalTimeout: u32,
+    pub MaximumCachedCertificates: u32,
+    pub CycleDetectionModulus: u32,
+    pub hExclusiveRoot: HCERTSTORE,
+    pub hExclusiveTrustedPeople: HCERTSTORE,
+    // XXX: `dwExclusiveFlags` started being available in Windows 8 and Windows Server 2012
+    // See https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_engine_config
+    #[cfg(not(target_vendor = "win7"))]
+    pub dwExclusiveFlags: u32,
+}
 
 use crate::verification::invalid_certificate;
-#[cfg(any(test, feature = "ffi-testing", feature = "dbg"))]
-use winapi::um::wincrypt::CERT_CHAIN_ENGINE_CONFIG;
 
 // SAFETY: see method implementation
 unsafe impl ZeroedWithSize for CERT_CHAIN_PARA {
     fn zeroed_with_size() -> Self {
-        // This must be zeroed and not constructed since `dwStrongSignFlags` might or might not be defined on
-        // the current system.
-        // https://docs.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_para
         // SAFETY: `CERT_CHAIN_PARA` only contains pointers and integers, which are safe to zero.
+        // Additionally, MSDN states you *MUST* zero all unused fields.
         let mut new: Self = unsafe { mem::zeroed() };
-        new.cbSize = size_of_struct(&new);
+        new.cbSize = Self::SIZE;
         new
     }
 }
 
 // SAFETY: see method implementation
-unsafe impl ZeroedWithSize for SSL_EXTRA_CERT_CHAIN_POLICY_PARA {
+unsafe impl ZeroedWithSize for HTTPSPolicyCallbackData {
     fn zeroed_with_size() -> Self {
         // SAFETY: zeroed is needed here since it contains a union.
         let mut new: Self = unsafe { mem::zeroed() };
-        let size = size_of_struct(&new);
-        // SAFETY: Its safe to write to to a union field that is `Copy`.
-        // https://doc.rust-lang.org/reference/items/unions.html#reading-and-writing-union-fields
-        *(unsafe { new.u.cbSize_mut() }) = size;
+        new.Anonymous.cbSize = Self::SIZE;
         new
     }
 }
@@ -94,18 +129,17 @@ unsafe impl ZeroedWithSize for CERT_CHAIN_POLICY_PARA {
     fn zeroed_with_size() -> Self {
         // SAFETY: This structure only contains integers and pointers.
         let mut new: Self = unsafe { mem::zeroed() };
-        new.cbSize = size_of_struct(&new);
+        new.cbSize = Self::SIZE;
         new
     }
 }
 
-#[cfg(any(test, feature = "ffi-testing", feature = "dbg"))]
 // SAFETY: see method implementation
 unsafe impl ZeroedWithSize for CERT_CHAIN_ENGINE_CONFIG {
     fn zeroed_with_size() -> Self {
         // SAFETY: This structure only contains integers and pointers.
         let mut new: Self = unsafe { mem::zeroed() };
-        new.cbSize = size_of_struct(&new);
+        new.cbSize = Self::SIZE;
         new
     }
 }
@@ -119,17 +153,17 @@ impl CertChain {
         &self,
         mut server_null_terminated: Vec<u16>,
     ) -> Result<CERT_CHAIN_POLICY_STATUS, TlsError> {
-        let mut extra_params = SSL_EXTRA_CERT_CHAIN_POLICY_PARA::zeroed_with_size();
+        let mut extra_params = HTTPSPolicyCallbackData::zeroed_with_size();
         extra_params.dwAuthType = AUTHTYPE_SERVER;
         // `server_null_terminated` outlives `extra_params`.
         extra_params.pwszServerName = server_null_terminated.as_mut_ptr();
 
         let mut params = CERT_CHAIN_POLICY_PARA::zeroed_with_size();
-        // Ignore any errors when trying to obtain OCSP recovcation information.
+        // Ignore any errors when trying to obtain OCSP revocation information.
         // This is also done in OpenSSL, Secure Transport from Apple, etc.
         params.dwFlags = CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS;
         // `extra_params` outlives `params`.
-        params.pvExtraPolicyPara = c_void_from_ref_mut(&mut extra_params);
+        params.pvExtraPolicyPara = NonNull::from(&mut extra_params).cast::<c_void>().as_ptr();
 
         let mut status: MaybeUninit<CERT_CHAIN_POLICY_STATUS> = MaybeUninit::uninit();
 
@@ -138,7 +172,7 @@ impl CertChain {
             CertVerifyCertificateChainPolicy(
                 CERT_CHAIN_POLICY_SSL,
                 self.inner.as_ptr(),
-                &mut params,
+                &params,
                 status.as_mut_ptr(),
             )
         };
@@ -181,7 +215,7 @@ impl Certificate {
     unsafe fn set_property(
         &mut self,
         prop_id: u32,
-        prop_data: *const VOID,
+        prop_data: *const c_void,
     ) -> Result<(), TlsError> {
         // SAFETY: `cert` points to a valid certificate context and the OCSP data is valid to read.
         call_with_last_error(|| {
@@ -203,6 +237,92 @@ impl Drop for Certificate {
     }
 }
 
+#[derive(Debug)]
+struct CertEngine {
+    inner: NonNull<c_void>, // HCERTENGINECONTEXT
+}
+
+impl CertEngine {
+    fn new_with_extra_roots(
+        roots: impl IntoIterator<Item = pki_types::CertificateDer<'static>>,
+    ) -> Result<Self, TlsError> {
+        let mut exclusive_store = CertificateStore::new()?;
+        for root in roots {
+            exclusive_store.add_cert(&root)?;
+        }
+
+        let mut config = CERT_CHAIN_ENGINE_CONFIG::zeroed_with_size();
+        config.hExclusiveRoot = exclusive_store.inner.as_ptr();
+
+        let mut engine = EnginePtr::NULL;
+
+        // XXX: Due to the redefinition of `CERT_CHAIN_ENGINE_CONFIG`, we need to do pointer casts
+        // in order to pass our expanded structure into `CertCreateCertificateChainEngine`.
+        // See also `CERT_CHAIN_PARA` casting below.
+        let config = NonNull::from(&config).cast().as_ptr();
+        // SAFETY: `engine` is valid to be written to and the config is valid to be read.
+        let res = unsafe { CertCreateCertificateChainEngine(config, &mut engine) };
+
+        #[allow(clippy::as_conversions)]
+        let engine = call_with_last_error(|| match NonNull::new(engine as *mut c_void) {
+            Some(c) if res == TRUE => Some(c),
+            _ => None,
+        })?;
+        Ok(Self { inner: engine })
+    }
+
+    #[cfg(any(test, feature = "ffi-testing", feature = "dbg"))]
+    fn new_with_fake_root(root: &[u8]) -> Result<Self, TlsError> {
+        use windows_sys::Win32::Security::Cryptography::{
+            CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL, CERT_CHAIN_ENABLE_CACHE_AUTO_UPDATE,
+        };
+
+        let mut root_store = CertificateStore::new()?;
+        root_store.add_cert(root)?;
+
+        let mut config = CERT_CHAIN_ENGINE_CONFIG::zeroed_with_size();
+        // We use these flags for the following reasons:
+        //
+        // - CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL is used in an attempt to stop Windows from using the internet to
+        // fetch anything during the tests, regardless of what test data is used.
+        //
+        // - CERT_CHAIN_ENABLE_CACHE_AUTO_UPDATE is used as a minor performance optimization to allow Windows to reuse
+        // data inside of a test and avoid any extra parsing, etc, it might need to do pulling directly from the store each time.
+        //
+        // Ref: https://docs.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_engine_config
+        config.dwFlags = CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL | CERT_CHAIN_ENABLE_CACHE_AUTO_UPDATE;
+        config.hExclusiveRoot = root_store.inner.as_ptr();
+
+        let mut engine = EnginePtr::NULL;
+        // Same workaround with as above when creating the engine.
+        let config = NonNull::from(&config).cast().as_ptr();
+        // SAFETY: `engine` is valid to be written to and the config is valid to be read.
+        let res = unsafe { CertCreateCertificateChainEngine(config, &mut engine) };
+
+        #[allow(clippy::as_conversions)]
+        let engine = call_with_last_error(|| match NonNull::new(engine as *mut c_void) {
+            Some(c) if res == TRUE => Some(c),
+            _ => None,
+        })?;
+
+        Ok(Self { inner: engine })
+    }
+}
+
+impl Drop for CertEngine {
+    fn drop(&mut self) {
+        // SAFETY: The engine pointer is guaranteed to be non-null.
+        unsafe { CertFreeCertificateChainEngine(EnginePtr::from_raw(self.inner)) };
+    }
+}
+
+// SAFETY: We know no other threads is mutating the `CertEngine`, because it would require `unsafe`.
+// Across the FFI, `CertGetCertificateChain` don't mutate it either.
+unsafe impl Sync for CertEngine {}
+// SAFETY: All methods of `CertEngine`, including `Drop`, are safe to be called from other
+// threads, because all contained resources are owned by Windows and we only maintain reference counted handles to them.
+unsafe impl Send for CertEngine {}
+
 /// An in-memory Windows certificate store.
 ///
 /// # Safety
@@ -211,21 +331,16 @@ impl Drop for Certificate {
 /// `CertificateStore`. This is only safe to do if the certificate store is
 /// constructed with `CERT_STORE_DEFER_CLOSE_UNTIL_LAST_FREE_FLAG`.
 struct CertificateStore {
-    inner: NonNull<VOID>, // HCERTSTORE
+    inner: NonNull<c_void>, // HCERTSTORE
     // In production code, this is always `None`.
     //
     // During tests, we set this to `Some` as the tests use a
     // custom verification engine that only uses specific roots.
-    engine: Option<NonNull<VOID>>, // HCERTENGINECONTEXT
+    engine: Option<CertEngine>, // HCERTENGINECONTEXT
 }
 
 impl Drop for CertificateStore {
     fn drop(&mut self) {
-        if let Some(engine) = self.engine.take() {
-            // SAFETY: The engine pointer is guaranteed to be non-null.
-            unsafe { CertFreeCertificateChainEngine(engine.as_ptr()) };
-        }
-
         // SAFETY: See the `CertificateStore` documentation.
         unsafe { CertCloseStore(self.inner.as_ptr(), 0) };
     }
@@ -256,43 +371,14 @@ impl CertificateStore {
         })
     }
 
-    fn engine_ptr(&self) -> *mut VOID {
-        self.engine.map(|e| e.as_ptr()).unwrap_or(ptr::null_mut())
-    }
-
     #[cfg(any(test, feature = "ffi-testing", feature = "dbg"))]
     fn new_with_fake_root(root: &[u8]) -> Result<Self, TlsError> {
-        use winapi::um::wincrypt::{
-            CertCreateCertificateChainEngine, CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL,
-            CERT_CHAIN_ENABLE_CACHE_AUTO_UPDATE,
-        };
-
         let mut inner = Self::new()?;
 
         let mut root_store = CertificateStore::new()?;
         root_store.add_cert(root)?;
 
-        let mut config = CERT_CHAIN_ENGINE_CONFIG::zeroed_with_size();
-        // We use these flags for the following reasons:
-        //
-        // - CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL is used in an attempt to stop Windows from using the internet to
-        // fetch anything during the tests, regardless of what test data is used.
-        //
-        // - CERT_CHAIN_ENABLE_CACHE_AUTO_UPDATE is used as a minor performance optimization to allow Windows to reuse
-        // data inside of a test and avoid any extra parsing, etc, it might need to do pulling directly from the store each time.
-        //
-        // Ref: https://docs.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_chain_engine_config
-        config.dwFlags = CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL | CERT_CHAIN_ENABLE_CACHE_AUTO_UPDATE;
-        config.hExclusiveRoot = root_store.inner.as_ptr();
-
-        let mut engine = ptr::null_mut();
-        // SAFETY: `engine` is valid to be written to and the config is valid to be read.
-        let res = unsafe { CertCreateCertificateChainEngine(&mut config, &mut engine) };
-
-        let engine = call_with_last_error(|| match nonnull_from_const_ptr(engine) {
-            Some(c) if res == TRUE => Some(c),
-            _ => None,
-        })?;
+        let engine = CertEngine::new_with_fake_root(root)?;
         inner.engine = Some(engine);
 
         Ok(inner)
@@ -304,7 +390,7 @@ impl CertificateStore {
     ///
     /// Errors if the certificate was malformed and couldn't be added.
     fn add_cert(&mut self, cert: &[u8]) -> Result<Certificate, TlsError> {
-        let mut cert_context: *const CERT_CONTEXT = ptr::null_mut();
+        let mut cert_context: *mut CERT_CONTEXT = ptr::null_mut();
 
         // SAFETY: `inner` is a valid certificate store, and `cert` is a valid a byte array valid
         // for reads, the correct length is being provided, and `cert_context` is valid to write to.
@@ -323,7 +409,7 @@ impl CertificateStore {
 
         // SAFETY: Constructing a `Certificate` is only safe if the store was
         // created with the right flags; see the `CertificateStore` docs.
-        match (res, nonnull_from_const_ptr(cert_context)) {
+        match (res, NonNull::new(cert_context)) {
             (TRUE, Some(cert)) => Ok(Certificate { inner: cert }),
             _ => Err(InvalidCertificate(CertificateError::BadEncoding)),
         }
@@ -333,8 +419,9 @@ impl CertificateStore {
         &self,
         certificate: &Certificate,
         now: pki_types::UnixTime,
+        engine: Option<&CertEngine>,
     ) -> Result<CertChain, TlsError> {
-        let mut cert_chain = ptr::null();
+        let mut cert_chain = ptr::null_mut();
 
         let mut parameters = CERT_CHAIN_PARA::zeroed_with_size();
 
@@ -344,13 +431,13 @@ impl CertificateStore {
             dwType: USAGE_MATCH_TYPE_AND,
             Usage: CTL_USAGE {
                 cUsageIdentifier: ALLOWED_EKUS.len() as u32,
-                rgpszUsageIdentifier: ALLOWED_EKUS.as_ptr() as *mut LPSTR,
+                rgpszUsageIdentifier: ALLOWED_EKUS.as_ptr() as *mut windows_sys::core::PSTR,
             },
         };
         parameters.RequestedUsage = usage;
 
         #[allow(clippy::as_conversions)]
-        let mut time = {
+        let time = {
             /// Seconds between Jan 1st, 1601 and Jan 1, 1970.
             const UNIX_ADJUSTMENT: std::time::Duration =
                 std::time::Duration::from_secs(11_644_473_600);
@@ -384,12 +471,21 @@ impl CertificateStore {
         // SAFETY: `cert` points to a valid certificate context, parameters is valid for reads, `cert_chain` is valid
         // for writes, and the certificate store is valid and initialized.
         let res = unsafe {
+            // XXX: Due to the redefinition of `CERT_CHAIN_PARA`, we need to do pointer casts
+            // in order to pass our expanded structure into `CertGetCertificateChain`.
+            // This is safe because the OS uses `cbSize` to know if the extra parameters
+            // are present or not. As we set `cbSize` correctly, the fields can be read from correctly.
+            let parameters = NonNull::from(&parameters).cast().as_ptr();
+
             CertGetCertificateChain(
-                self.engine_ptr(),
+                match engine {
+                    Some(eng) => EnginePtr::from_raw(eng.inner),
+                    None => EnginePtr::NULL,
+                },
                 certificate.inner.as_ptr(),
-                &mut time,
+                &time,
                 self.inner.as_ptr(),
-                &mut parameters,
+                parameters,
                 FLAGS,
                 ptr::null_mut(),
                 &mut cert_chain,
@@ -398,11 +494,38 @@ impl CertificateStore {
 
         // XXX: Windows will internally map the chain's `TrustStatus.dwErrorStatus` to a `dwError` when
         // a chain policy is verified, so we only check for errors there.
-        call_with_last_error(|| match nonnull_from_const_ptr(cert_chain) {
+        call_with_last_error(|| match NonNull::new(cert_chain) {
             Some(c) if res == TRUE => Some(CertChain { inner: c }),
             _ => None,
         })
     }
+}
+
+// `windows-sys` >= 0.60
+impl EnginePtr for *mut c_void {
+    fn from_raw(val: NonNull<c_void>) -> Self {
+        val.as_ptr()
+    }
+
+    const NULL: Self = ptr::null_mut();
+}
+
+// `windows-sys` 0.52-0.59
+impl EnginePtr for isize {
+    #[allow(clippy::as_conversions)]
+    fn from_raw(val: NonNull<c_void>) -> Self {
+        val.as_ptr() as isize
+    }
+
+    const NULL: Self = 0;
+}
+
+/// An abstraction trait over the different ways various `windows-sys` versions represent
+/// the type of `HCERTCHAINENGINE`.
+trait EnginePtr: Sized {
+    fn from_raw(val: NonNull<c_void>) -> Self;
+
+    const NULL: Self;
 }
 
 fn call_with_last_error<T, F: FnMut() -> Option<T>>(mut call: F) -> Result<T, TlsError> {
@@ -420,31 +543,52 @@ fn call_with_last_error<T, F: FnMut() -> Option<T>>(mut call: F) -> Result<T, Tl
 pub struct Verifier {
     /// Testing only: The root CA certificate to trust.
     #[cfg(any(test, feature = "ffi-testing", feature = "dbg"))]
-    test_only_root_ca_override: Option<Vec<u8>>,
-    pub(super) crypto_provider: OnceCell<Arc<CryptoProvider>>,
+    test_only_root_ca_override: Option<pki_types::CertificateDer<'static>>,
+    crypto_provider: Arc<CryptoProvider>,
+    /// Extra trust anchors to add to the verifier above and beyond those provided by
+    /// the system-provided trust stores.
+    extra_roots: Option<CertEngine>,
 }
 
 impl Verifier {
     /// Creates a new instance of a TLS certificate verifier that utilizes the
     /// Windows certificate facilities.
-    ///
-    /// A [`CryptoProvider`] must be set with
-    /// [`set_provider`][Verifier::set_provider]/[`with_provider`][Verifier::with_provider] or
-    /// [`CryptoProvider::install_default`] before the verifier can be used.
-    pub fn new() -> Self {
-        Self {
+    #[cfg_attr(docsrs, doc(cfg(all())))]
+    pub fn new(crypto_provider: Arc<CryptoProvider>) -> Result<Self, TlsError> {
+        Ok(Self {
             #[cfg(any(test, feature = "ffi-testing", feature = "dbg"))]
             test_only_root_ca_override: None,
-            crypto_provider: OnceCell::new(),
-        }
+            crypto_provider,
+            extra_roots: None,
+        })
+    }
+
+    /// Creates a new instance of a TLS certificate verifier that utilizes the
+    /// Windows certificate facilities and augmented by the provided extra root certificates.
+    #[cfg_attr(docsrs, doc(cfg(not(target_os = "android"))))]
+    pub fn new_with_extra_roots(
+        roots: impl IntoIterator<Item = pki_types::CertificateDer<'static>>,
+        crypto_provider: Arc<CryptoProvider>,
+    ) -> Result<Self, TlsError> {
+        let cert_engine = CertEngine::new_with_extra_roots(roots)?;
+        Ok(Self {
+            #[cfg(any(test, feature = "ffi-testing", feature = "dbg"))]
+            test_only_root_ca_override: None,
+            crypto_provider,
+            extra_roots: Some(cert_engine),
+        })
     }
 
     /// Creates a test-only TLS certificate verifier which trusts our fake root CA cert.
     #[cfg(any(test, feature = "ffi-testing", feature = "dbg"))]
-    pub(crate) fn new_with_fake_root(root: &[u8]) -> Self {
+    pub(crate) fn new_with_fake_root(
+        root: pki_types::CertificateDer<'static>,
+        crypto_provider: Arc<CryptoProvider>,
+    ) -> Self {
         Self {
-            test_only_root_ca_override: Some(root.into()),
-            crypto_provider: OnceCell::new(),
+            test_only_root_ca_override: Some(root),
+            crypto_provider,
+            extra_roots: None,
         }
     }
 
@@ -478,7 +622,7 @@ impl Verifier {
 
         if let Some(ocsp_data) = ocsp_data {
             #[allow(clippy::as_conversions)]
-            let data = CRYPT_DATA_BLOB {
+            let data = CRYPT_INTEGER_BLOB {
                 cbData: ocsp_data.len().try_into().map_err(|_| {
                     invalid_certificate("Malformed OCSP response stapled to server certificate")
                 })?,
@@ -487,7 +631,10 @@ impl Verifier {
 
             // SAFETY: `data` is a valid pointer and matches the property ID.
             unsafe {
-                primary_cert.set_property(CERT_OCSP_RESPONSE_PROP_ID, c_void_from_ref(&data))?;
+                primary_cert.set_property(
+                    CERT_OCSP_RESPONSE_PROP_ID,
+                    NonNull::from(&data).cast::<c_void>().as_ptr(),
+                )?;
             }
         }
 
@@ -498,7 +645,28 @@ impl Verifier {
             .chain(Some(0))
             .collect();
 
-        let cert_chain = store.new_chain_in(&primary_cert, now)?;
+        let mut cert_chain = store.new_chain_in(&primary_cert, now, store.engine.as_ref())?;
+
+        // We only use `TrustStatus` here because it hasn't had verification performed on it.
+        // SAFETY: The pointer is guaranteed to be non-null.
+        let cert_error_status = unsafe { *cert_chain.inner.as_ptr() }
+            .TrustStatus
+            .dwErrorStatus;
+
+        let extra_roots_may_needed =
+            (cert_error_status & (CERT_TRUST_IS_PARTIAL_CHAIN | CERT_TRUST_IS_UNTRUSTED_ROOT)) != 0;
+
+        // If we have extra roots and building the chain gave us an error, we try to build a
+        // new one with the extra roots.
+        if extra_roots_may_needed && self.extra_roots.is_some() {
+            let mut store = CertificateStore::new()?;
+
+            for cert in intermediate_certs.iter().copied() {
+                store.add_cert(cert)?;
+            }
+
+            cert_chain = store.new_chain_in(&primary_cert, now, self.extra_roots.as_ref())?;
+        }
 
         let status = cert_chain.verify_chain_policy(server)?;
 
@@ -526,12 +694,7 @@ impl Verifier {
     }
 }
 
-fn size_of_struct<T>(val: &T) -> u32 {
-    mem::size_of_val(val)
-        .try_into()
-        .expect("size of struct can't exceed u32")
-}
-
+#[cfg_attr(docsrs, doc(cfg(all())))]
 impl ServerCertVerifier for Verifier {
     fn verify_server_cert(
         &self,
@@ -580,7 +743,7 @@ impl ServerCertVerifier for Verifier {
             message,
             cert,
             dss,
-            &self.get_provider().signature_verification_algorithms,
+            &self.crypto_provider.signature_verification_algorithms,
         )
     }
 
@@ -594,19 +757,36 @@ impl ServerCertVerifier for Verifier {
             message,
             cert,
             dss,
-            &self.get_provider().signature_verification_algorithms,
+            &self.crypto_provider.signature_verification_algorithms,
         )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.get_provider()
+        self.crypto_provider
             .signature_verification_algorithms
             .supported_schemes()
     }
 }
 
-impl Default for Verifier {
-    fn default() -> Self {
-        Self::new()
-    }
+/// A trait to represent an object that can be safely created with all zero values
+/// and have a size assigned to it.
+///
+/// # Safety
+///
+/// This has the same safety requirements as [std::mem::zeroed].
+unsafe trait ZeroedWithSize: Sized {
+    const SIZE: u32 = {
+        let size = core::mem::size_of::<Self>();
+
+        // NB: `TryInto` isn't stable in const yet.
+        #[allow(clippy::as_conversions)]
+        if size <= u32::MAX as usize {
+            size as u32
+        } else {
+            panic!("structure was larger then DWORD")
+        }
+    };
+
+    /// Returns a zeroed structure with its structure size (`cbSize`) field set to the correct value.
+    fn zeroed_with_size() -> Self;
 }

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR ISC
 
-use crate::agreement::{agree, Algorithm, PrivateKey, PublicKey, UnparsedPublicKey};
+use crate::agreement::{agree, Algorithm, ParsedPublicKey, PrivateKey, PublicKey};
 use crate::error::Unspecified;
 use crate::rand::SecureRandom;
 use core::fmt;
@@ -40,11 +40,11 @@ impl EphemeralPrivateKey {
         Ok(Self(PrivateKey::generate(alg)?))
     }
 
-    #[cfg(test)]
-    #[allow(clippy::missing_errors_doc, missing_docs)]
+    #[cfg(any(test, dev_tests_only))]
+    #[allow(missing_docs, clippy::missing_errors_doc)]
     pub fn generate_for_test(
         alg: &'static Algorithm,
-        rng: &dyn SecureRandom,
+        rng: &mut dyn SecureRandom,
     ) -> Result<Self, Unspecified> {
         Ok(Self(PrivateKey::generate_for_test(alg, rng)?))
     }
@@ -98,9 +98,9 @@ impl EphemeralPrivateKey {
 #[allow(clippy::needless_pass_by_value)]
 #[allow(clippy::missing_panics_doc)]
 #[allow(clippy::module_name_repetitions)]
-pub fn agree_ephemeral<B: AsRef<[u8]>, F, R, E>(
+pub fn agree_ephemeral<B: TryInto<ParsedPublicKey>, F, R, E>(
     my_private_key: EphemeralPrivateKey,
-    peer_public_key: &UnparsedPublicKey<B>,
+    peer_public_key: B,
     error_value: E,
     kdf: F,
 ) -> Result<R, E>
@@ -154,6 +154,7 @@ mod tests {
         // The spec gives a test vector for 1,000,000 iterations but it takes
         // too long to do 1,000,000 iterations by default right now. This
         // 10,000 iteration vector is self-computed.
+        #[cfg(not(disable_slow_tests))]
         expect_iterated_x25519(
             "2c125a20f639d504a7703d2e223c79a79de48c4ee8c23379aa19a62ecd211815",
             1_000..10_000,
@@ -185,8 +186,8 @@ mod tests {
         );
 
         let my_private = {
-            let rng = test::rand::FixedSliceRandom { bytes: &my_private };
-            agreement::EphemeralPrivateKey::generate_for_test(alg, &rng).unwrap()
+            let mut rng = test::rand::FixedSliceRandom { bytes: &my_private };
+            agreement::EphemeralPrivateKey::generate_for_test(alg, &mut rng).unwrap()
         };
 
         let my_public = test::from_dirty_hex(
@@ -227,8 +228,8 @@ mod tests {
         );
 
         let my_private = {
-            let rng = test::rand::FixedSliceRandom { bytes: &my_private };
-            agreement::EphemeralPrivateKey::generate_for_test(alg, &rng).unwrap()
+            let mut rng = test::rand::FixedSliceRandom { bytes: &my_private };
+            agreement::EphemeralPrivateKey::generate_for_test(alg, &mut rng).unwrap()
         };
 
         let my_public = test::from_dirty_hex(
@@ -267,8 +268,8 @@ mod tests {
         );
 
         let my_private = {
-            let rng = test::rand::FixedSliceRandom { bytes: &my_private };
-            agreement::EphemeralPrivateKey::generate_for_test(alg, &rng).unwrap()
+            let mut rng = test::rand::FixedSliceRandom { bytes: &my_private };
+            agreement::EphemeralPrivateKey::generate_for_test(alg, &mut rng).unwrap()
         };
 
         let my_public = test::from_dirty_hex(
@@ -307,8 +308,8 @@ mod tests {
         );
 
         let my_private = {
-            let rng = test::rand::FixedSliceRandom { bytes: &my_private };
-            agreement::EphemeralPrivateKey::generate_for_test(alg, &rng).unwrap()
+            let mut rng = test::rand::FixedSliceRandom { bytes: &my_private };
+            agreement::EphemeralPrivateKey::generate_for_test(alg, &mut rng).unwrap()
         };
 
         let my_public = test::from_dirty_hex(
@@ -336,16 +337,17 @@ mod tests {
     fn agreement_traits() {
         use crate::test;
 
-        let rng = rand::SystemRandom::new();
+        let mut rng = rand::SystemRandom::new();
 
         let ephemeral_private_key =
-            agreement::EphemeralPrivateKey::generate_for_test(&agreement::ECDH_P256, &rng).unwrap();
+            agreement::EphemeralPrivateKey::generate_for_test(&agreement::ECDH_P256, &mut rng)
+                .unwrap();
 
         test::compile_time_assert_send::<agreement::EphemeralPrivateKey>();
         test::compile_time_assert_sync::<agreement::EphemeralPrivateKey>();
 
         assert_eq!(
-            format!("{:?}", &ephemeral_private_key),
+            format!("{ephemeral_private_key:?}"),
             "EphemeralPrivateKey { algorithm: Algorithm { curve: P256 } }"
         );
     }
@@ -414,10 +416,10 @@ mod tests {
                 if test_case.consume_optional_string("Error").is_none() {
                     let my_private_bytes = test_case.consume_bytes("D");
                     let my_private = {
-                        let rng = test::rand::FixedSliceRandom {
+                        let mut rng = test::rand::FixedSliceRandom {
                             bytes: &my_private_bytes,
                         };
-                        agreement::EphemeralPrivateKey::generate_for_test(alg, &rng)?
+                        agreement::EphemeralPrivateKey::generate_for_test(alg, &mut rng)?
                     };
                     let my_public = test_case.consume_bytes("MyQ");
                     let output = test_case.consume_bytes("Output");
@@ -491,11 +493,11 @@ mod tests {
     }
 
     fn try_x25519(private_key: &[u8], public_key: &[u8]) -> Result<Vec<u8>, Unspecified> {
-        let rng = test::rand::FixedSliceRandom { bytes: private_key };
+        let mut rng = test::rand::FixedSliceRandom { bytes: private_key };
         let private_key =
-            agreement::EphemeralPrivateKey::generate_for_test(&agreement::X25519, &rng)?;
+            agreement::EphemeralPrivateKey::generate_for_test(&agreement::X25519, &mut rng)?;
         let public_key = agreement::UnparsedPublicKey::new(&agreement::X25519, public_key);
-        agreement::agree_ephemeral(private_key, &public_key, Unspecified, |agreed_value| {
+        agreement::agree_ephemeral(private_key, public_key, Unspecified, |agreed_value| {
             Ok(Vec::from(agreed_value))
         })
     }

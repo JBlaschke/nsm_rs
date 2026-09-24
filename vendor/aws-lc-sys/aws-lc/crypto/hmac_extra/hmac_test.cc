@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <memory>
 #include <string>
@@ -87,6 +34,14 @@ static const EVP_MD *GetDigest(const std::string &name) {
     return EVP_sha512_224();
   } else if (name == "SHA512/256") {
     return EVP_sha512_256();
+  } else if (name == "SHA3-224") {
+    return EVP_sha3_224();
+  } else if (name == "SHA3-256") {
+    return EVP_sha3_256();
+  } else if (name == "SHA3-384") {
+    return EVP_sha3_384();
+  } else if (name == "SHA3-512") {
+    return EVP_sha3_512();
   }
   return nullptr;
 }
@@ -253,6 +208,87 @@ TEST(HMACTest, TestVectors) {
     EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
     OPENSSL_memset(mac.get(), 0, expected_mac_len); // Clear the prior correct answer
 
+    // Test using HMAC_CTX.
+    bssl::ScopedHMAC_CTX ctx;
+    ASSERT_TRUE(
+        HMAC_Init_ex(ctx.get(), key.data(), key.size(), digest, nullptr));
+    ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
+    ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
+    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
+    OPENSSL_memset(mac.get(), 0, expected_mac_len); // Clear the prior correct answer
+
+    // Test that an HMAC_CTX may be reset with the same key.
+    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, digest, nullptr));
+    ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
+    ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
+    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
+    OPENSSL_memset(mac.get(), 0, expected_mac_len); // Clear the prior correct answer
+
+    // Test that an HMAC_CTX may be reset with the same key and a null md
+    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, nullptr, nullptr));
+    ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
+    ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
+    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
+    OPENSSL_memset(mac.get(), 0, expected_mac_len);  // Clear the prior correct answer
+
+    // Some callers will call init multiple times and we need to ensure that doesn't break anything
+    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), key.data(), key.size(), digest, nullptr));
+    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, nullptr, nullptr));
+    ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
+    ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
+    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
+    OPENSSL_memset(mac.get(), 0, expected_mac_len);  // Clear the prior correct answer
+
+    // Test feeding the input in byte by byte.
+    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, nullptr, nullptr));
+    for (size_t i = 0; i < input.size(); i++) {
+      ASSERT_TRUE(HMAC_Update(ctx.get(), &input[i], 1));
+    }
+    ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
+    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
+
+    // Test consuming HMAC through the |EVP_PKEY_HMAC| interface.
+    RunHMACTestEVP(key, input, output, digest);
+  });
+}
+
+TEST(HMACTest, TestVectorsPrecomputedKey) {
+  FileTestGTest("crypto/hmac_extra/hmac_tests.txt", [](FileTest *t) {
+    std::string digest_str;
+    ASSERT_TRUE(t->GetAttribute(&digest_str, "HMAC"));
+    const EVP_MD *digest = GetDigest(digest_str);
+    ASSERT_TRUE(digest) << "Unknown digest: " << digest_str;
+
+    std::vector<uint8_t> key, input, output;
+    ASSERT_TRUE(t->GetBytes(&key, "Key"));
+    ASSERT_TRUE(t->GetBytes(&input, "Input"));
+    ASSERT_TRUE(t->GetBytes(&output, "Output"));
+    ASSERT_EQ(EVP_MD_size(digest), output.size());
+
+    // Test using the one-shot API.
+    const unsigned expected_mac_len = EVP_MD_size(digest);
+    std::unique_ptr<uint8_t[]> mac(new uint8_t[expected_mac_len]);
+    unsigned mac_len;
+    ASSERT_TRUE(HMAC(digest, key.data(), key.size(), input.data(), input.size(),
+                     mac.get(), &mac_len));
+    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
+    OPENSSL_memset(mac.get(), 0, expected_mac_len); // Clear the prior correct answer
+
+    // Digests that do not support pre-computed keys will have a non-positive
+    // pre-computed key size. In this case, assert that we can't successfully
+    // call precomputed-key functions.
+    bssl::ScopedHMAC_CTX ctx;
+    if (GetPrecomputedKeySize(digest_str) <= 0) {
+        ASSERT_TRUE(
+            HMAC_Init_ex(ctx.get(), key.data(), key.size(), digest, nullptr));
+        ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
+        ASSERT_FALSE(HMAC_set_precomputed_key_export(ctx.get()));
+        size_t len;
+        ASSERT_FALSE(HMAC_get_precomputed_key(ctx.get(), key.data(), &len));
+        ASSERT_FALSE(HMAC_Init_from_precomputed_key(ctx.get(), key.data(), key.size(), digest));
+        return;
+    }
+
     // Test using the one-shot API with precompute
     ASSERT_TRUE(HMAC_with_precompute(digest, key.data(), key.size(),
                                      input.data(), input.size(), mac.get(),
@@ -261,7 +297,6 @@ TEST(HMACTest, TestVectors) {
     OPENSSL_memset(mac.get(), 0, expected_mac_len); // Clear the prior correct answer
 
     // Test using HMAC_CTX.
-    bssl::ScopedHMAC_CTX ctx;
     ASSERT_TRUE(
         HMAC_Init_ex(ctx.get(), key.data(), key.size(), digest, nullptr));
     ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
@@ -308,43 +343,21 @@ TEST(HMACTest, TestVectors) {
     EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
     OPENSSL_memset(mac.get(), 0, expected_mac_len); // Clear the prior correct answer
 
-    // Test that an HMAC_CTX may be reset with the same key.
-    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, digest, nullptr));
-    ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
-    ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
-    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
-    OPENSSL_memset(mac.get(), 0, expected_mac_len); // Clear the prior correct answer
-
-    // Same test but with HMAC_Init_from_precomputed_key
+    // Test that an HMAC_CTX may be reset with the same key but with HMAC_Init_from_precomputed_key
     ASSERT_TRUE(HMAC_Init_from_precomputed_key(ctx.get(), nullptr, 0, digest));
     ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
     ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
     EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
     OPENSSL_memset(mac.get(), 0, expected_mac_len); // Clear the prior correct answer
 
-    // Test that an HMAC_CTX may be reset with the same key and a null md
-    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, nullptr, nullptr));
-    ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
-    ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
-    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
-    OPENSSL_memset(mac.get(), 0, expected_mac_len);  // Clear the prior correct answer
-
-    // Same test but using the Init_from_precomputed_key instead
+    // Test that an HMAC_CTX may be reset with the same key and a null md but using the Init_from_precomputed_key instead
     ASSERT_TRUE(HMAC_Init_from_precomputed_key(ctx.get(), nullptr, 0, nullptr));
     ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
     ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
     EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
     OPENSSL_memset(mac.get(), 0, expected_mac_len);  // Clear the prior correct answer
 
-    // Some callers will call init multiple times and we need to ensure that doesn't break anything
-    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), key.data(), key.size(), digest, nullptr));
-    ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, nullptr, nullptr));
-    ASSERT_TRUE(HMAC_Update(ctx.get(), input.data(), input.size()));
-    ASSERT_TRUE(HMAC_Final(ctx.get(), mac.get(), &mac_len));
-    EXPECT_EQ(Bytes(output), Bytes(mac.get(), mac_len));
-    OPENSSL_memset(mac.get(), 0, expected_mac_len);  // Clear the prior correct answer
-
-    // Same test but using a mix of Init_ex and Init_from_precomputed_key
+    // Some callers will call init multiple times and we need to ensure that doesn't break anything but using a mix of Init_ex and Init_from_precomputed_key
     ASSERT_TRUE(HMAC_Init_ex(ctx.get(), key.data(), key.size(), digest, nullptr));
     ASSERT_TRUE(HMAC_Init_from_precomputed_key(ctx.get(), nullptr, 0, nullptr));
     ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, nullptr, nullptr));
@@ -413,7 +426,7 @@ TEST(HMACTest, TestVectors) {
     ASSERT_EQ(precomputed_key_len, precomputed_key_len_out2);
     ASSERT_EQ(Bytes(precomputed_key, precomputed_key_len), Bytes(precomputed_key2, precomputed_key_len));
 
-    // Test feeding the input in byte by byte.
+    // Test feeding the input in byte by byte after initializing from precomputed key
     ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, nullptr, nullptr));
     for (size_t i = 0; i < input.size(); i++) {
       ASSERT_TRUE(HMAC_Update(ctx.get(), &input[i], 1));
@@ -501,6 +514,26 @@ TEST(HMACTest, WycheproofSHA512_256) {
                     EVP_sha512_256());
 }
 
+TEST(HMACTest, WycheproofSHA3_224) {
+  RunWycheproofTest("third_party/wycheproof_testvectors/hmac_sha3_224_test.txt",
+                    EVP_sha3_224());
+}
+
+TEST(HMACTest, WycheproofSHA3_256) {
+  RunWycheproofTest("third_party/wycheproof_testvectors/hmac_sha3_256_test.txt",
+                    EVP_sha3_256());
+}
+
+TEST(HMACTest, WycheproofSHA3_384) {
+  RunWycheproofTest("third_party/wycheproof_testvectors/hmac_sha3_384_test.txt",
+                    EVP_sha3_384());
+}
+
+TEST(HMACTest, WycheproofSHA3_512) {
+  RunWycheproofTest("third_party/wycheproof_testvectors/hmac_sha3_512_test.txt",
+                    EVP_sha3_512());
+}
+
 TEST(HMACTest, EVP_DigestVerify) {
   bssl::UniquePtr<EVP_PKEY> pkey(
       EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, nullptr, nullptr, 0));
@@ -548,4 +581,49 @@ TEST(HMACTest, HandlesNullOutputParameters) {
   ASSERT_TRUE(HMAC_Init_ex(ctx.get(), &key[0], sizeof(key), digest, nullptr));
   ASSERT_TRUE(HMAC_Update(ctx.get(), &input[0], sizeof(input)));
   ASSERT_FALSE(HMAC_Final(ctx.get(), nullptr, &mac_len));
+}
+
+TEST(HMACTest, InitExResetsContext) {
+  bssl::ScopedHMAC_CTX ctx;
+  bssl::ScopedHMAC_CTX ctx_copy;
+
+  const EVP_MD *digest = EVP_sha256();
+
+  const uint8_t key1[] = "test_key_1";
+  const uint8_t data1[] = "first_message";
+
+  uint8_t mac1[EVP_MAX_MD_SIZE];
+  uint8_t mac2[EVP_MAX_MD_SIZE];
+  uint8_t mac3[EVP_MAX_MD_SIZE];
+  unsigned mac_len;
+
+  // First HMAC computation with |key1| and |data1|.
+  ASSERT_TRUE(HMAC_Init_ex(ctx.get(), key1, sizeof(key1), digest, nullptr));
+  ASSERT_TRUE(HMAC_Update(ctx.get(), data1, sizeof(data1)));
+  // Copy to |ctx_copy| and finalize that to preserve |HMAC_STATE_IN_PROGRESS|
+  // in |ctx|.
+  ASSERT_TRUE(HMAC_CTX_copy(ctx_copy.get(), ctx.get()));
+  ASSERT_TRUE(HMAC_Final(ctx_copy.get(), mac1, &mac_len));
+
+  // Reset context with NULL |key|/|digest| - should reuse previous key and
+  // reset state. This tests that |HMAC_Init_ex| properly resets even after
+  // Update/Final.
+  ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, nullptr, nullptr));
+  ASSERT_TRUE(HMAC_Update(ctx.get(), data1, sizeof(data1)));
+  ASSERT_TRUE(HMAC_Final(ctx.get(), mac2, &mac_len));
+
+  // |mac1| and |mac2| should be the same (same key reused, context reset).
+  EXPECT_EQ(Bytes(mac1, mac_len), Bytes(mac2, mac_len));
+
+  // Reset |ctx| with NULL |key| but explicit digest - should reuse previous
+  // key and reset state.
+  ASSERT_TRUE(HMAC_Init_ex(ctx.get(), nullptr, 0, digest, nullptr));
+  ASSERT_TRUE(HMAC_Update(ctx.get(), data1, sizeof(data1)));
+  // Copy to |ctx_copy| and finalize that to preserve |HMAC_STATE_IN_PROGRESS|
+  // in |ctx|.
+  ASSERT_TRUE(HMAC_CTX_copy(ctx_copy.get(), ctx.get()));
+  ASSERT_TRUE(HMAC_Final(ctx_copy.get(), mac3, &mac_len));
+
+  // |mac1| and |mac3| should be the same (same key reused, context reset).
+  EXPECT_EQ(Bytes(mac1, mac_len), Bytes(mac3, mac_len));
 }

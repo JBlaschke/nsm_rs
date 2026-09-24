@@ -6,15 +6,8 @@
 //! Cryptographic pseudo-random number generation.
 //!
 //! An application should create a single `SystemRandom` and then use it for
-//! all randomness generation. Functions that generate random bytes should take
-//! a `&dyn SecureRandom` parameter instead of instantiating their own. Besides
-//! being more efficient, this also helps document where non-deterministic
-//! (random) outputs occur. Taking a reference to a `SecureRandom` also helps
-//! with testing techniques like fuzzing, where it is useful to use a
-//! (non-secure) deterministic implementation of `SecureRandom` so that results
-//! can be replayed. Following this pattern also may help with sandboxing
-//! (seccomp filters on Linux in particular). See `SystemRandom`'s
-//! documentation for more details.
+//! all randomness generation. See `SystemRandom`'s documentation for more
+//! details.
 
 //! # Example
 //! ```
@@ -32,10 +25,41 @@
 //! let random_array = rand::generate(&rng).unwrap();
 //! let more_rand_bytes: [u8; 64] = random_array.expose();
 //! ```
+use crate::aws_lc::RAND_bytes;
 use crate::error::Unspecified;
 use crate::fips::indicator_check;
-use aws_lc::RAND_bytes;
 use core::fmt::Debug;
+
+/// Re-exports of sealed traits for development testing.
+///
+/// This module is only available when the `dev-tests-only` feature is enabled.
+/// It exposes the [`SecureRandom`](unsealed::SecureRandom) trait, allowing consumers
+/// to provide their own implementations (e.g., a deterministic RNG) for testing purposes.
+///
+/// # Example
+///
+/// ```ignore
+/// use aws_lc_rs::rand::{unsealed, SecureRandom};
+/// use aws_lc_rs::error::Unspecified;
+///
+/// #[derive(Debug)]
+/// struct DeterministicRandom(u8);
+///
+/// impl unsealed::SecureRandom for DeterministicRandom {
+///     fn fill_impl(&self, dest: &mut [u8]) -> Result<(), Unspecified> {
+///         for (i, byte) in dest.iter_mut().enumerate() {
+///             *byte = self.0.wrapping_add(i as u8);
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
+#[cfg(any(dev_tests_only, aws_lc_rs_docsrs))]
+#[cfg_attr(aws_lc_rs_docsrs, doc(cfg(feature = "dev-tests-only")))]
+#[allow(unused_imports)]
+pub mod unsealed {
+    pub use super::sealed::*;
+}
 
 /// A secure random number generator.
 pub trait SecureRandom: sealed::SecureRandom {
@@ -44,6 +68,16 @@ pub trait SecureRandom: sealed::SecureRandom {
     /// # Errors
     /// `error::Unspecified` if unable to fill `dest`.
     fn fill(&self, dest: &mut [u8]) -> Result<(), Unspecified>;
+
+    /// Fills `dest` with random bytes.
+    ///
+    /// This method is only available when the `dev-tests-only` feature is enabled.
+    ///
+    /// # Errors
+    /// `error::Unspecified` if unable to fill `dest`.
+    #[cfg(any(test, dev_tests_only, aws_lc_rs_docsrs))]
+    #[cfg_attr(aws_lc_rs_docsrs, doc(cfg(feature = "dev-tests-only")))]
+    fn mut_fill(&mut self, dest: &mut [u8]) -> Result<(), Unspecified>;
 }
 
 impl<T> SecureRandom for T
@@ -52,6 +86,12 @@ where
 {
     #[inline]
     fn fill(&self, dest: &mut [u8]) -> Result<(), Unspecified> {
+        self.fill_impl(dest)
+    }
+
+    #[inline]
+    #[cfg(any(test, dev_tests_only, aws_lc_rs_docsrs))]
+    fn mut_fill(&mut self, dest: &mut [u8]) -> Result<(), Unspecified> {
         self.fill_impl(dest)
     }
 }
@@ -86,15 +126,21 @@ pub fn generate<T: RandomlyConstructable>(
 pub(crate) mod sealed {
     use crate::error;
 
+    /// A sealed trait for secure random number generation.
     pub trait SecureRandom: core::fmt::Debug {
         /// Fills `dest` with random bytes.
+        ///
+        /// # Errors
+        /// Returns `error::Unspecified` if unable to fill `dest`.
         fn fill_impl(&self, dest: &mut [u8]) -> Result<(), error::Unspecified>;
     }
 
+    /// A sealed trait for types that can be randomly constructed.
     pub trait RandomlyConstructable: Sized {
+        /// Returns a zeroed instance of the type.
         fn zero() -> Self;
-        // `Default::default()`
-        fn as_mut_bytes(&mut self) -> &mut [u8]; // `AsMut<[u8]>::as_mut`
+        /// Returns a mutable byte slice of the value.
+        fn as_mut_bytes(&mut self) -> &mut [u8];
     }
 
     impl<const T: usize> RandomlyConstructable for [u8; T] {
@@ -172,7 +218,8 @@ mod tests {
 
     #[test]
     fn test_secure_random_fill() {
-        let mut random_array = [0u8; 173];
+        // Collect enough random values so that the assertions below should never fail again
+        let mut random_array = [0u8; 1009];
         let rng = SystemRandom::new();
         rng.fill(&mut random_array).unwrap();
 
@@ -184,7 +231,8 @@ mod tests {
 
     #[test]
     fn test_rand_fill() {
-        let mut random_array: [u8; 173] = [0u8; 173];
+        // Collect enough random values so that the assertions below should never fail again
+        let mut random_array = [0u8; 1009];
         rand::fill(&mut random_array).unwrap();
 
         let (mean, variance) = mean_variance(&mut random_array.into_iter());
@@ -197,7 +245,8 @@ mod tests {
     fn test_randomly_constructable() {
         let rando = SystemRandom::new();
         let random_array = generate(&rando).unwrap();
-        let random_array: [u8; 173] = random_array.expose();
+        // Collect enough random values so that the assertions below should never fail again
+        let random_array: [u8; 1009] = random_array.expose();
         let (mean, variance) = mean_variance(&mut random_array.into_iter());
         assert!((106f64..150f64).contains(&mean), "Mean: {mean}");
         assert!(variance > 8f64);

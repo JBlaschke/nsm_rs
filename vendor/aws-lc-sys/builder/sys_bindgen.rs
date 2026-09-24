@@ -1,7 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR ISC
 
-use crate::{get_rust_include_path, BindingOptions, COPYRIGHT};
+use crate::{
+    effective_target, emit_warning, get_rust_include_path, is_all_bindings, BindingOptions,
+    EnvGuard, COPYRIGHT, PRELUDE,
+};
 use bindgen::callbacks::{ItemInfo, ParseCallbacks};
 use std::fmt::Debug;
 use std::path::Path;
@@ -31,28 +34,50 @@ impl ParseCallbacks for StripPrefixCallback {
     }
 }
 
-const PRELUDE: &str = r"
-#![allow(
-    clippy::cast_lossless,
-    clippy::cast_possible_truncation,
-    clippy::default_trait_access,
-    clippy::must_use_candidate,
-    clippy::not_unsafe_ptr_arg_deref,
-    clippy::ptr_as_ptr,
-    clippy::pub_underscore_fields,
-    clippy::semicolon_if_nothing_returned,
-    clippy::too_many_lines,
-    clippy::unreadable_literal,
-    clippy::used_underscore_binding,
-    clippy::useless_transmute,
-    dead_code,
-    improper_ctypes,
-    non_camel_case_types,
-    non_snake_case,
-    non_upper_case_globals,
-    unused_imports,
-)]
-";
+const ALLOWED_HEADERS: [&str; 30] = [
+    "aead.h",
+    "aes.h",
+    "base.h",
+    "bn.h",
+    "boringssl_prefix_symbols.h",
+    "boringssl_prefix_symbols_asm.h",
+    "boringssl_prefix_symbols_nasm.inc",
+    "bytestring.h",
+    "chacha.h",
+    "cipher.h",
+    "cmac.h",
+    "crypto.h",
+    "curve25519.h",
+    "digest.h",
+    "ec.h",
+    "ec_key.h",
+    "ecdh.h",
+    "ecdsa.h",
+    "err.h",
+    "evp.h",
+    "hkdf.h",
+    "hmac.h",
+    "is_awslc.h",
+    "kdf.h",
+    "mem.h",
+    "nid.h",
+    "poly1305.h",
+    "rand.h",
+    "rsa.h",
+    "sha.h",
+];
+
+// These functions have parameters using a blocked type
+const BLOCKED_FUNCTIONS: [&str; 5] = [
+    "BN_print_fp",
+    "CBS_parse_generalized_time",
+    "CBS_parse_utc_time",
+    "ERR_print_errors_fp",
+    "RSA_print_fp",
+];
+
+// These types might vary by platform. Ensure that they do not appear in the universal bindings.
+const BLOCKED_TYPES: [&str; 4] = ["FILE", "fpos_t", "tm", "__sFILE"];
 
 fn prepare_bindings_builder(manifest_dir: &Path, options: &BindingOptions) -> bindgen::Builder {
     let clang_args = crate::prepare_clang_args(manifest_dir, options);
@@ -62,10 +87,9 @@ fn prepare_bindings_builder(manifest_dir: &Path, options: &BindingOptions) -> bi
         .derive_debug(true)
         .derive_default(true)
         .derive_eq(true)
-        .allowlist_file(r".*(/|\\)openssl((/|\\)[^/\\]+)+\.h")
         .allowlist_file(r".*(/|\\)rust_wrapper\.h")
         .rustified_enum(r"point_conversion_form_t")
-        .rust_target(bindgen::RustTarget::Stable_1_59)
+        .rust_target(bindgen::RustTarget::stable(70, 0).unwrap())
         .default_macro_constant_type(bindgen::MacroTypeVariation::Signed)
         .generate_comments(true)
         .fit_macro_constants(false)
@@ -81,6 +105,23 @@ fn prepare_bindings_builder(manifest_dir: &Path, options: &BindingOptions) -> bi
                 .display()
                 .to_string(),
         );
+
+    if is_all_bindings() {
+        builder = builder.allowlist_file(r".*(/|\\)openssl((/|\\)[^/\\]+)+\.h");
+    } else {
+        for header in ALLOWED_HEADERS {
+            emit_warning(format!("Allowed header: {header}").as_str());
+            builder = builder.allowlist_file(format!("{}{}", r".*(/|\\)openssl(/|\\)", header));
+        }
+        for function in BLOCKED_FUNCTIONS {
+            emit_warning(format!("Blocked function: {function}").as_str());
+            builder = builder.blocklist_function(function);
+        }
+        for tipe in BLOCKED_TYPES {
+            emit_warning(format!("Opaque type: {tipe}").as_str());
+            builder = builder.blocklist_type(tipe);
+        }
+    }
 
     if !options.disable_prelude {
         builder = builder.raw_line(PRELUDE);
@@ -101,6 +142,7 @@ pub(crate) fn generate_bindings(
     manifest_dir: &Path,
     options: &BindingOptions,
 ) -> bindgen::Bindings {
+    let _guard_target = EnvGuard::new("TARGET", effective_target());
     prepare_bindings_builder(manifest_dir, options)
         .generate()
         .expect("Unable to generate bindings.")

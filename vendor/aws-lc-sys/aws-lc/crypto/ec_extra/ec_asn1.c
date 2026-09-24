@@ -1,55 +1,6 @@
-/* Written by Nils Larsch for the OpenSSL project. */
-/* ====================================================================
- * Copyright (c) 2000-2003 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com). */
+// Written by Nils Larsch for the OpenSSL project.
+// Copyright (c) 2000-2003 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/ec.h>
 
@@ -66,6 +17,7 @@
 #include "../bytestring/internal.h"
 #include "../fipsmodule/ec/internal.h"
 #include "../internal.h"
+#include "internal.h"
 
 
 static const CBS_ASN1_TAG kParametersTag =
@@ -74,11 +26,14 @@ static const CBS_ASN1_TAG kPublicKeyTag =
     CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 1;
 
 // TODO(https://crbug.com/boringssl/497): Allow parsers to specify a list of
-// acceptable groups, so parsers don't have to pull in all four.
+// acceptable groups, so parsers don't have to pull in all ten.
 typedef const EC_GROUP *(*ec_group_func)(void);
 static const ec_group_func kAllGroups[] = {
-    &EC_group_p224, &EC_group_p256,      &EC_group_p384,
-    &EC_group_p521, &EC_group_secp256k1,
+    &EC_group_p224,             &EC_group_p256,
+    &EC_group_p384,             &EC_group_p521,
+    &EC_group_secp256k1,        &EC_group_brainpoolP224r1,
+    &EC_group_brainpoolP256r1,  &EC_group_brainpoolP320r1,
+    &EC_group_brainpoolP384r1,  &EC_group_brainpoolP512r1,
 };
 
 EC_KEY *EC_KEY_parse_private_key(CBS *cbs, const EC_GROUP *group) {
@@ -94,6 +49,8 @@ EC_KEY *EC_KEY_parse_private_key(CBS *cbs, const EC_GROUP *group) {
   // Parse the optional parameters field.
   EC_KEY *ret = NULL;
   BIGNUM *priv_key = NULL;
+  enum ECParametersType paramType = UNKNOWN_EC_PARAMETERS;
+
   if (CBS_peek_asn1_tag(&ec_private_key, kParametersTag)) {
     // Per SEC 1, as an alternative to omitting it, one is allowed to specify
     // this field and put in a NULL to mean inheriting this value. This was
@@ -104,8 +61,8 @@ EC_KEY *EC_KEY_parse_private_key(CBS *cbs, const EC_GROUP *group) {
       OPENSSL_PUT_ERROR(EC, EC_R_DECODE_ERROR);
       goto err;
     }
-    const EC_GROUP *inner_group = EC_KEY_parse_parameters(&child);
-    if (inner_group == NULL) {
+    const EC_GROUP *inner_group = EC_KEY_parse_parameters_and_type(&child, &paramType);
+    if (inner_group == NULL || paramType == UNKNOWN_EC_PARAMETERS) {
       goto err;
     }
     if (group == NULL) {
@@ -129,6 +86,12 @@ EC_KEY *EC_KEY_parse_private_key(CBS *cbs, const EC_GROUP *group) {
   ret = EC_KEY_new();
   if (ret == NULL || !EC_KEY_set_group(ret, group)) {
     goto err;
+  }
+
+  if(paramType == SPECIFIED_CURVE_EC_PARAMETERS) {
+    ret->group_decoded_from_explicit_params = 1;
+  } else {
+    ret->group_decoded_from_explicit_params = 0;
   }
 
   // Although RFC 5915 specifies the length of the key, OpenSSL historically
@@ -365,20 +328,31 @@ int EC_KEY_marshal_curve_name(CBB *cbb, const EC_GROUP *group) {
 }
 
 EC_GROUP *EC_KEY_parse_parameters(CBS *cbs) {
+  enum ECParametersType paramType = UNKNOWN_EC_PARAMETERS;
+  return EC_KEY_parse_parameters_and_type(cbs, &paramType);
+}
+
+EC_GROUP *EC_KEY_parse_parameters_and_type(CBS *cbs, enum ECParametersType *paramType) {
+  GUARD_PTR(paramType);
+
+  const EC_GROUP *ret = NULL;
+  *paramType = UNKNOWN_EC_PARAMETERS;
+
   if (!CBS_peek_asn1_tag(cbs, CBS_ASN1_SEQUENCE)) {
-    return EC_KEY_parse_curve_name(cbs);
+    ret = EC_KEY_parse_curve_name(cbs);
+    if(ret) {
+      *paramType = NAMED_CURVE_EC_PARAMETERS;
+    }
+    return (EC_GROUP *)ret;
   }
 
-  // OpenSSL sometimes produces ECPrivateKeys with explicitly-encoded versions
+  // OpenSSL sometimes produces ECPrivateKeys or ECPublicKey with explicitly-encoded versions
   // of named curves.
-  //
-  // TODO(davidben): Remove support for this.
   struct explicit_prime_curve curve;
   if (!parse_explicit_prime_curve(cbs, &curve)) {
     return NULL;
   }
 
-  const EC_GROUP *ret = NULL;
   BIGNUM *p = BN_new(), *a = BN_new(), *b = BN_new(), *x = BN_new(),
          *y = BN_new();
   if (p == NULL || a == NULL || b == NULL || x == NULL || y == NULL) {
@@ -409,6 +383,7 @@ EC_GROUP *EC_KEY_parse_parameters(CBS *cbs) {
       break;
     }
     ret = group;
+    *paramType = SPECIFIED_CURVE_EC_PARAMETERS;
     break;
   }
 
@@ -424,6 +399,7 @@ err:
   BN_free(y);
   return (EC_GROUP *)ret;
 }
+
 
 int EC_POINT_point2cbb(CBB *out, const EC_GROUP *group, const EC_POINT *point,
                        point_conversion_form_t form, BN_CTX *ctx) {
@@ -587,6 +563,10 @@ EC_KEY *o2i_ECPublicKey(EC_KEY **keyp, const uint8_t **inp, long len) {
   }
   if (!EC_POINT_oct2point(ret->group, ret->pub_key, *inp, len, NULL)) {
     OPENSSL_PUT_ERROR(EC, ERR_R_EC_LIB);
+    return NULL;
+  }
+  if (EC_POINT_is_at_infinity(ret->group, ret->pub_key)) {
+    OPENSSL_PUT_ERROR(EC, EC_R_POINT_AT_INFINITY);
     return NULL;
   }
   // save the point conversion form

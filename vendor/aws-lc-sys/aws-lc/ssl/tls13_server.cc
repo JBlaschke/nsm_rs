@@ -1,16 +1,5 @@
-/* Copyright (c) 2016, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2016, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <openssl/ssl.h>
 
@@ -112,7 +101,12 @@ static int ssl_ext_supported_versions_add_serverhello(SSL_HANDSHAKE *hs,
 
 static const SSL_CIPHER *choose_tls13_cipher(const SSL *ssl) {
   STACK_OF(SSL_CIPHER) *tls13_ciphers = nullptr;
-  if (ssl->ctx->tls13_cipher_list &&
+  // First check config, otherwise fallback to ctx preferences.
+  if (ssl->config && ssl->config->tls13_cipher_list &&
+      ssl->config->tls13_cipher_list.get()->ciphers &&
+      sk_SSL_CIPHER_num(ssl->config->tls13_cipher_list.get()->ciphers.get()) > 0) {
+    tls13_ciphers = ssl->config->tls13_cipher_list.get()->ciphers.get();
+  } else if (ssl->ctx->tls13_cipher_list &&
       ssl->ctx->tls13_cipher_list.get()->ciphers &&
       sk_SSL_CIPHER_num(ssl->ctx->tls13_cipher_list.get()->ciphers.get()) > 0) {
     tls13_ciphers = ssl->ctx->tls13_cipher_list.get()->ciphers.get();
@@ -411,6 +405,7 @@ static enum ssl_hs_wait_t do_select_session(SSL_HANDSHAKE *hs) {
 
       ssl->s3->session_reused = true;
       hs->can_release_private_key = true;
+      ssl->verify_result = hs->new_session->verify_result;
 
       // Resumption incorporates fresh key material, so refresh the timeout.
       ssl_session_renew_timeout(ssl, hs->new_session.get(),
@@ -1110,6 +1105,7 @@ static enum ssl_hs_wait_t do_read_client_certificate(SSL_HANDSHAKE *hs) {
       // |verify_result|, though this is a no-op because servers do not
       // implement the client's odd soft-fail mode.)
       hs->new_session->verify_result = X509_V_OK;
+      ssl->verify_result = hs->new_session->verify_result;
     }
 
     // Skip this state.

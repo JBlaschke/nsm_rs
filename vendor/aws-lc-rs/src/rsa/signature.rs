@@ -1,32 +1,24 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR ISC
 
-use std::{
-    fmt::{self, Debug, Formatter},
-    mem::MaybeUninit,
-    ops::RangeInclusive,
-    ptr::{null, null_mut},
+use std::fmt::{self, Debug, Formatter};
+use std::ops::RangeInclusive;
+
+use crate::aws_lc::{
+    EVP_PKEY_CTX_set_rsa_padding, EVP_PKEY_CTX_set_rsa_pss_saltlen, EVP_PKEY_CTX_set_signature_md,
+    RSA_bits, EVP_PKEY, EVP_PKEY_CTX, RSA_PKCS1_PSS_PADDING, RSA_PSS_SALTLEN_DIGEST,
 };
 
-use aws_lc::{
-    EVP_DigestSign, EVP_DigestVerify, EVP_DigestVerifyInit, EVP_PKEY_CTX_set_rsa_padding,
-    EVP_PKEY_CTX_set_rsa_pss_saltlen, EVP_PKEY_get0_RSA, RSA_bits, RSA_get0_n, EVP_PKEY,
-    EVP_PKEY_CTX, RSA_PKCS1_PSS_PADDING, RSA_PSS_SALTLEN_DIGEST,
-};
-
-use crate::{
-    digest::{self, digest_ctx::DigestContext},
-    error::Unspecified,
-    fips::indicator_check,
-    ptr::{ConstPointer, DetachableLcPtr, LcPtr},
-    sealed::Sealed,
-    signature::VerificationAlgorithm,
-};
-
-#[cfg(feature = "ring-sig-verify")]
-use untrusted::Input;
+use crate::digest::{self, match_digest_type, Digest};
+use crate::error::Unspecified;
+use crate::ptr::LcPtr;
+use crate::rsa::key::parse_rsa_public_key;
+use crate::sealed::Sealed;
+use crate::signature::{ParsedPublicKey, ParsedVerificationAlgorithm, VerificationAlgorithm};
 
 use super::encoding;
+#[cfg(feature = "ring-sig-verify")]
+use untrusted::Input;
 
 #[allow(non_camel_case_types)]
 #[allow(clippy::module_name_repetitions)]
@@ -61,6 +53,42 @@ impl RsaParameters {
     }
 }
 
+impl ParsedVerificationAlgorithm for RsaParameters {
+    fn parsed_verify_sig(
+        &self,
+        public_key: &ParsedPublicKey,
+        msg: &[u8],
+        signature: &[u8],
+    ) -> Result<(), Unspecified> {
+        let evp_pkey = public_key.key();
+        verify_rsa_signature(
+            self.digest_algorithm(),
+            self.padding(),
+            evp_pkey,
+            msg,
+            signature,
+            self.bit_size_range(),
+        )
+    }
+
+    fn parsed_verify_digest_sig(
+        &self,
+        public_key: &ParsedPublicKey,
+        digest: &Digest,
+        signature: &[u8],
+    ) -> Result<(), Unspecified> {
+        let evp_pkey = public_key.key();
+        verify_rsa_digest_signature(
+            self.digest_algorithm(),
+            self.padding(),
+            evp_pkey,
+            digest,
+            signature,
+            self.bit_size_range(),
+        )
+    }
+}
+
 impl VerificationAlgorithm for RsaParameters {
     #[cfg(feature = "ring-sig-verify")]
     fn verify(
@@ -82,12 +110,29 @@ impl VerificationAlgorithm for RsaParameters {
         msg: &[u8],
         signature: &[u8],
     ) -> Result<(), Unspecified> {
-        let evp_pkey = encoding::rfc8017::decode_public_key_der(public_key)?;
+        let evp_pkey = parse_rsa_public_key(public_key)?;
         verify_rsa_signature(
             self.digest_algorithm(),
             self.padding(),
             &evp_pkey,
             msg,
+            signature,
+            self.bit_size_range(),
+        )
+    }
+
+    fn verify_digest_sig(
+        &self,
+        public_key: &[u8],
+        digest: &Digest,
+        signature: &[u8],
+    ) -> Result<(), Unspecified> {
+        let evp_pkey = parse_rsa_public_key(public_key)?;
+        verify_rsa_digest_signature(
+            self.digest_algorithm(),
+            self.padding(),
+            &evp_pkey,
+            digest,
             signature,
             self.bit_size_range(),
         )
@@ -118,7 +163,7 @@ impl RsaParameters {
     /// `error::Unspecified` on parse error.
     pub fn public_modulus_len(public_key: &[u8]) -> Result<u32, Unspecified> {
         let rsa = encoding::rfc8017::decode_public_key_der(public_key)?;
-        Ok(unsafe { RSA_bits(*rsa.get_rsa()?.as_const()) })
+        Ok(unsafe { RSA_bits(rsa.as_const().get_rsa()?.as_const_ptr()) })
     }
 
     #[must_use]
@@ -162,6 +207,7 @@ pub(crate) enum RsaSigningAlgorithmId {
 }
 
 #[allow(clippy::module_name_repetitions)]
+/// Encoding type for an RSA signature
 pub struct RsaSignatureEncoding(
     &'static digest::Algorithm,
     &'static RsaPadding,
@@ -212,36 +258,13 @@ impl Debug for RsaSignatureEncoding {
 }
 
 #[inline]
-pub(super) fn compute_rsa_signature<'a>(
-    ctx: &mut DigestContext,
-    message: &[u8],
-    signature: &'a mut [u8],
-) -> Result<&'a mut [u8], Unspecified> {
-    let mut out_sig_len = signature.len();
-
-    if 1 != indicator_check!(unsafe {
-        EVP_DigestSign(
-            ctx.as_mut_ptr(),
-            signature.as_mut_ptr(),
-            &mut out_sig_len,
-            message.as_ptr(),
-            message.len(),
-        )
-    }) {
-        return Err(Unspecified);
-    }
-
-    Ok(&mut signature[0..out_sig_len])
-}
-
-#[inline]
 pub(crate) fn configure_rsa_pkcs1_pss_padding(pctx: *mut EVP_PKEY_CTX) -> Result<(), ()> {
     if 1 != unsafe { EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_PSS_PADDING) } {
         return Err(());
-    };
+    }
     if 1 != unsafe { EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, RSA_PSS_SALTLEN_DIGEST) } {
         return Err(());
-    };
+    }
     Ok(())
 }
 
@@ -254,70 +277,50 @@ pub(crate) fn verify_rsa_signature(
     signature: &[u8],
     allowed_bit_size: &RangeInclusive<u32>,
 ) -> Result<(), Unspecified> {
-    let rsa = ConstPointer::new(unsafe { EVP_PKEY_get0_RSA(*public_key.as_const()) })?;
-    let n = ConstPointer::new(unsafe { RSA_get0_n(*rsa) })?;
-    let n_bits = n.num_bits();
-    if !allowed_bit_size.contains(&n_bits) {
+    if !allowed_bit_size.contains(&public_key.as_const().key_size_bits().try_into()?) {
         return Err(Unspecified);
     }
 
-    let mut md_ctx = DigestContext::new_uninit();
-    let digest = digest::match_digest_type(&algorithm.id);
+    let padding_fn = if let RsaPadding::RSA_PKCS1_PSS_PADDING = padding {
+        Some(configure_rsa_pkcs1_pss_padding)
+    } else {
+        None
+    };
 
-    let mut pctx = null_mut::<EVP_PKEY_CTX>();
-
-    if 1 != unsafe {
-        // EVP_DigestVerifyInit does not mutate |pkey| for thread-safety purposes and may be
-        // used concurrently with other non-mutating functions on |pkey|.
-        // https://github.com/aws/aws-lc/blob/9b4b5a15a97618b5b826d742419ccd54c819fa42/include/openssl/evp.h#L353-L369
-        EVP_DigestVerifyInit(
-            md_ctx.as_mut_ptr(),
-            &mut pctx,
-            *digest,
-            null_mut(),
-            *public_key.as_mut_unsafe(),
-        )
-    } {
-        return Err(Unspecified);
-    }
-
-    if let RsaPadding::RSA_PKCS1_PSS_PADDING = padding {
-        // AWS-LC owns pctx, check for null and then immediately detach so we don't drop it.
-        let pctx = DetachableLcPtr::new(pctx)?.detach();
-        configure_rsa_pkcs1_pss_padding(pctx)?;
-    }
-
-    if 1 != indicator_check!(unsafe {
-        EVP_DigestVerify(
-            md_ctx.as_mut_ptr(),
-            signature.as_ptr(),
-            signature.len(),
-            msg.as_ptr(),
-            msg.len(),
-        )
-    }) {
-        return Err(Unspecified);
-    }
-
-    Ok(())
+    public_key.verify(msg, Some(algorithm), padding_fn, signature)
 }
 
 #[inline]
-pub(super) fn get_signature_length(ctx: &mut DigestContext) -> Result<usize, Unspecified> {
-    let mut out_sig_len = MaybeUninit::<usize>::uninit();
-
-    // determine signature size
-    if 1 != unsafe {
-        EVP_DigestSign(
-            ctx.as_mut_ptr(),
-            null_mut(),
-            out_sig_len.as_mut_ptr(),
-            null(),
-            0,
-        )
-    } {
+pub(crate) fn verify_rsa_digest_signature(
+    algorithm: &'static digest::Algorithm,
+    padding: &'static RsaPadding,
+    public_key: &LcPtr<EVP_PKEY>,
+    digest: &Digest,
+    signature: &[u8],
+    allowed_bit_size: &RangeInclusive<u32>,
+) -> Result<(), Unspecified> {
+    // Enforced here so no caller can omit it; the ctx below is configured from `digest`.
+    if algorithm != digest.algorithm() {
         return Err(Unspecified);
     }
 
-    Ok(unsafe { out_sig_len.assume_init() })
+    if !allowed_bit_size.contains(&public_key.as_const().key_size_bits().try_into()?) {
+        return Err(Unspecified);
+    }
+
+    let padding_fn = Some({
+        |pctx: *mut EVP_PKEY_CTX| {
+            let evp_md = match_digest_type(&digest.algorithm().id);
+            if 1 != unsafe { EVP_PKEY_CTX_set_signature_md(pctx, evp_md.as_const_ptr()) } {
+                return Err(());
+            }
+            if let RsaPadding::RSA_PKCS1_PSS_PADDING = padding {
+                configure_rsa_pkcs1_pss_padding(pctx)
+            } else {
+                Ok(())
+            }
+        }
+    });
+
+    public_key.verify_digest_sig(digest, padding_fn, signature)
 }

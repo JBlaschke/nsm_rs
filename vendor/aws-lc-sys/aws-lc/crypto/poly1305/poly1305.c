@@ -1,16 +1,5 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2014, Google Inc.
+// SPDX-License-Identifier: ISC
 
 // This implementation of poly1305 is by Andrew Moon
 // (https://github.com/floodyberry/poly1305-donna) and released as public
@@ -42,10 +31,6 @@ OPENSSL_STATIC_ASSERT(
     sizeof(struct poly1305_state_st) + 63 <= sizeof(poly1305_state),
     _poly1305_state_isn_t_large_enough_to_hold_aligned_poly1305_state_st)
 
-static inline struct poly1305_state_st *poly1305_aligned_state(
-    poly1305_state *state) {
-  return align_pointer(state, 64);
-}
 
 // poly1305_blocks updates |state| given some amount of input data. This
 // function may only be called with a |len| that is not a multiple of 16 at the

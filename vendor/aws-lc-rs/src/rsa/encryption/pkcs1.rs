@@ -4,11 +4,13 @@
 #![allow(clippy::module_name_repetitions)]
 
 use super::{PrivateDecryptingKey, PublicEncryptingKey};
-use crate::{error::Unspecified, fips::indicator_check, ptr::LcPtr};
-use aws_lc::{
+use crate::aws_lc::{
     EVP_PKEY_CTX_set_rsa_padding, EVP_PKEY_decrypt, EVP_PKEY_decrypt_init, EVP_PKEY_encrypt,
     EVP_PKEY_encrypt_init, EVP_PKEY_CTX, RSA_PKCS1_PADDING,
 };
+use crate::error::Unspecified;
+use crate::fips::indicator_check;
+use crate::ptr::LcPtr;
 use core::fmt::Debug;
 
 /// RSA PKCS1-v1.5 public key for encryption.
@@ -42,7 +44,7 @@ impl Pkcs1PublicEncryptingKey {
     ) -> Result<&'ciphertext mut [u8], Unspecified> {
         let mut pkey_ctx = self.public_key.0.create_EVP_PKEY_CTX()?;
 
-        if 1 != unsafe { EVP_PKEY_encrypt_init(*pkey_ctx.as_mut()) } {
+        if 1 != unsafe { EVP_PKEY_encrypt_init(pkey_ctx.as_mut_ptr()) } {
             return Err(Unspecified);
         }
 
@@ -52,7 +54,7 @@ impl Pkcs1PublicEncryptingKey {
 
         if 1 != indicator_check!(unsafe {
             EVP_PKEY_encrypt(
-                *pkey_ctx.as_mut(),
+                pkey_ctx.as_mut_ptr(),
                 ciphertext.as_mut_ptr(),
                 &mut out_len,
                 plaintext.as_ptr(),
@@ -60,7 +62,7 @@ impl Pkcs1PublicEncryptingKey {
             )
         }) {
             return Err(Unspecified);
-        };
+        }
 
         Ok(&mut ciphertext[..out_len])
     }
@@ -129,7 +131,7 @@ impl Pkcs1PrivateDecryptingKey {
     ) -> Result<&'plaintext mut [u8], Unspecified> {
         let mut pkey_ctx = self.private_key.0.create_EVP_PKEY_CTX()?;
 
-        if 1 != unsafe { EVP_PKEY_decrypt_init(*pkey_ctx.as_mut()) } {
+        if 1 != unsafe { EVP_PKEY_decrypt_init(pkey_ctx.as_mut_ptr()) } {
             return Err(Unspecified);
         }
 
@@ -139,7 +141,7 @@ impl Pkcs1PrivateDecryptingKey {
 
         if 1 != indicator_check!(unsafe {
             EVP_PKEY_decrypt(
-                *pkey_ctx.as_mut(),
+                pkey_ctx.as_mut_ptr(),
                 plaintext.as_mut_ptr(),
                 &mut out_len,
                 ciphertext.as_ptr(),
@@ -147,7 +149,7 @@ impl Pkcs1PrivateDecryptingKey {
             )
         }) {
             return Err(Unspecified);
-        };
+        }
 
         Ok(&mut plaintext[..out_len])
     }
@@ -181,9 +183,9 @@ impl Debug for Pkcs1PrivateDecryptingKey {
 fn configure_pkcs1_crypto_operation(
     evp_pkey_ctx: &mut LcPtr<EVP_PKEY_CTX>,
 ) -> Result<(), Unspecified> {
-    if 1 != unsafe { EVP_PKEY_CTX_set_rsa_padding(*evp_pkey_ctx.as_mut(), RSA_PKCS1_PADDING) } {
+    if 1 != unsafe { EVP_PKEY_CTX_set_rsa_padding(evp_pkey_ctx.as_mut_ptr(), RSA_PKCS1_PADDING) } {
         return Err(Unspecified);
-    };
+    }
 
     Ok(())
 }

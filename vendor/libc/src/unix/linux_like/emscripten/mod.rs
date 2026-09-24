@@ -1,8 +1,6 @@
 use crate::prelude::*;
 
-pub type c_char = i8;
 pub type wchar_t = i32;
-pub type useconds_t = u32;
 pub type dev_t = u32;
 pub type socklen_t = u32;
 pub type pthread_t = c_ulong;
@@ -28,8 +26,6 @@ pub type blksize_t = c_long;
 pub type fsblkcnt_t = u32;
 pub type fsfilcnt_t = u32;
 pub type rlim_t = u64;
-pub type c_long = i32;
-pub type c_ulong = u32;
 pub type nlink_t = u32;
 
 pub type ino64_t = crate::ino_t;
@@ -44,13 +40,8 @@ pub type statfs64 = crate::statfs;
 pub type statvfs64 = crate::statvfs;
 pub type dirent64 = crate::dirent;
 
-#[cfg_attr(feature = "extra_traits", derive(Debug))]
-pub enum fpos64_t {} // FIXME: fill this out with a struct
-impl Copy for fpos64_t {}
-impl Clone for fpos64_t {
-    fn clone(&self) -> fpos64_t {
-        *self
-    }
+extern_ty! {
+    pub type fpos64_t; // FIXME(emscripten): fill this out with a struct
 }
 
 s! {
@@ -60,11 +51,11 @@ s! {
         pub gl_offs: size_t,
         pub gl_flags: c_int,
 
-        __unused1: *mut c_void,
-        __unused2: *mut c_void,
-        __unused3: *mut c_void,
-        __unused4: *mut c_void,
-        __unused5: *mut c_void,
+        __unused1: Padding<*mut c_void>,
+        __unused2: Padding<*mut c_void>,
+        __unused3: Padding<*mut c_void>,
+        __unused4: Padding<*mut c_void>,
+        __unused5: Padding<*mut c_void>,
     }
 
     pub struct passwd {
@@ -99,7 +90,7 @@ s! {
         pub f_ffree: crate::fsfilcnt_t,
         pub f_favail: crate::fsfilcnt_t,
         pub f_fsid: c_ulong,
-        __f_unused: c_int,
+        __f_unused: Padding<c_int>,
         pub f_flag: c_ulong,
         pub f_namemax: c_ulong,
         __f_spare: [c_int; 6],
@@ -123,11 +114,11 @@ s! {
         pub ssi_stime: u64,
         pub ssi_addr: u64,
         pub ssi_addr_lsb: u16,
-        _pad2: u16,
+        _pad2: Padding<u16>,
         pub ssi_syscall: i32,
         pub ssi_call_addr: u64,
         pub ssi_arch: u32,
-        _pad: [u8; 28],
+        _pad: Padding<[u8; 28]>,
     }
 
     pub struct fsid_t {
@@ -136,11 +127,6 @@ s! {
 
     pub struct cpu_set_t {
         bits: [u32; 32],
-    }
-
-    pub struct if_nameindex {
-        pub if_index: c_uint,
-        pub if_name: *mut c_char,
     }
 
     // System V IPC
@@ -161,6 +147,8 @@ s! {
         pub sem_flg: c_short,
     }
 
+    // FIXME(1.0): This should not implement `PartialEq`
+    #[allow(unpredictable_function_pointer_comparisons)]
     pub struct sigaction {
         pub sa_sigaction: crate::sighandler_t,
         pub sa_mask: crate::sigset_t,
@@ -174,10 +162,10 @@ s! {
         pub gid: crate::gid_t,
         pub cuid: crate::uid_t,
         pub cgid: crate::gid_t,
-        pub mode: crate::mode_t,
+        pub mode: mode_t,
         pub __seq: c_int,
-        __unused1: c_long,
-        __unused2: c_long,
+        __unused1: Padding<c_long>,
+        __unused2: Padding<c_long>,
     }
 
     pub struct termios {
@@ -200,7 +188,8 @@ s! {
     }
 
     pub struct pthread_attr_t {
-        __size: [u32; 11],
+        // 11 pointer-width words: 44 bytes on wasm32, 88 on wasm64 (MEMORY64).
+        __size: [usize; 11],
     }
 
     pub struct sigset_t {
@@ -223,22 +212,27 @@ s! {
         pub cmsg_type: c_int,
     }
 
+    pub struct in6_pktinfo {
+        pub ipi6_addr: crate::in6_addr,
+        pub ipi6_ifindex: c_uint,
+    }
+
     pub struct sem_t {
         __val: [c_int; 4],
     }
     pub struct stat {
         pub st_dev: crate::dev_t,
-        #[cfg(not(emscripten_new_stat_abi))]
-        __st_dev_padding: c_int,
-        #[cfg(not(emscripten_new_stat_abi))]
+        #[cfg(emscripten_old_stat_abi)]
+        __st_dev_padding: Padding<c_int>,
+        #[cfg(emscripten_old_stat_abi)]
         __st_ino_truncated: c_long,
-        pub st_mode: crate::mode_t,
+        pub st_mode: mode_t,
         pub st_nlink: crate::nlink_t,
         pub st_uid: crate::uid_t,
         pub st_gid: crate::gid_t,
         pub st_rdev: crate::dev_t,
-        #[cfg(not(emscripten_new_stat_abi))]
-        __st_rdev_padding: c_int,
+        #[cfg(emscripten_old_stat_abi)]
+        __st_rdev_padding: Padding<c_int>,
         pub st_size: off_t,
         pub st_blksize: crate::blksize_t,
         pub st_blocks: crate::blkcnt_t,
@@ -266,8 +260,8 @@ s! {
         pub shm_cpid: crate::pid_t,
         pub shm_lpid: crate::pid_t,
         pub shm_nattch: c_ulong,
-        __pad1: c_ulong,
-        __pad2: c_ulong,
+        __pad1: Padding<c_ulong>,
+        __pad2: Padding<c_ulong>,
     }
 
     pub struct msqid_ds {
@@ -275,13 +269,13 @@ s! {
         pub msg_stime: crate::time_t,
         pub msg_rtime: crate::time_t,
         pub msg_ctime: crate::time_t,
-        __msg_cbytes: c_ulong,
+        pub __msg_cbytes: c_ulong,
         pub msg_qnum: crate::msgqnum_t,
         pub msg_qbytes: crate::msglen_t,
         pub msg_lspid: crate::pid_t,
         pub msg_lrpid: crate::pid_t,
-        __pad1: c_ulong,
-        __pad2: c_ulong,
+        __pad1: Padding<c_ulong>,
+        __pad2: Padding<c_ulong>,
     }
 
     pub struct statfs {
@@ -316,7 +310,6 @@ s! {
         pub ha: [c_uchar; crate::MAX_ADDR_LEN],
     }
 
-    #[allow(missing_debug_implementations)]
     #[repr(align(4))]
     pub struct pthread_mutex_t {
         size: [u8; crate::__SIZEOF_PTHREAD_MUTEX_T],
@@ -341,9 +334,7 @@ s! {
     pub struct pthread_condattr_t {
         size: [u8; crate::__SIZEOF_PTHREAD_CONDATTR_T],
     }
-}
 
-s_no_extra_traits! {
     pub struct dirent {
         pub d_ino: crate::ino_t,
         pub d_off: off_t,
@@ -374,7 +365,7 @@ s_no_extra_traits! {
         pub mq_maxmsg: c_long,
         pub mq_msgsize: c_long,
         pub mq_curmsgs: c_long,
-        pad: [c_long; 4],
+        pad: Padding<[c_long; 4]>,
     }
 
     #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
@@ -382,159 +373,12 @@ s_no_extra_traits! {
     pub struct pthread_cond_t {
         size: [u8; crate::__SIZEOF_PTHREAD_COND_T],
     }
+}
 
-    #[allow(missing_debug_implementations)]
+s_no_extra_traits! {
     #[repr(align(8))]
     pub struct max_align_t {
         priv_: [f64; 3],
-    }
-}
-
-cfg_if! {
-    if #[cfg(feature = "extra_traits")] {
-        impl PartialEq for dirent {
-            fn eq(&self, other: &dirent) -> bool {
-                self.d_ino == other.d_ino
-                    && self.d_off == other.d_off
-                    && self.d_reclen == other.d_reclen
-                    && self.d_type == other.d_type
-                    && self
-                        .d_name
-                        .iter()
-                        .zip(other.d_name.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-        impl Eq for dirent {}
-        impl fmt::Debug for dirent {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("dirent")
-                    .field("d_ino", &self.d_ino)
-                    .field("d_off", &self.d_off)
-                    .field("d_reclen", &self.d_reclen)
-                    .field("d_type", &self.d_type)
-                    // FIXME: .field("d_name", &self.d_name)
-                    .finish()
-            }
-        }
-        impl hash::Hash for dirent {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.d_ino.hash(state);
-                self.d_off.hash(state);
-                self.d_reclen.hash(state);
-                self.d_type.hash(state);
-                self.d_name.hash(state);
-            }
-        }
-
-        impl PartialEq for sysinfo {
-            fn eq(&self, other: &sysinfo) -> bool {
-                self.uptime == other.uptime
-                    && self.loads == other.loads
-                    && self.totalram == other.totalram
-                    && self.freeram == other.freeram
-                    && self.sharedram == other.sharedram
-                    && self.bufferram == other.bufferram
-                    && self.totalswap == other.totalswap
-                    && self.freeswap == other.freeswap
-                    && self.procs == other.procs
-                    && self.pad == other.pad
-                    && self.totalhigh == other.totalhigh
-                    && self.freehigh == other.freehigh
-                    && self.mem_unit == other.mem_unit
-                    && self
-                        .__reserved
-                        .iter()
-                        .zip(other.__reserved.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-        impl Eq for sysinfo {}
-        impl fmt::Debug for sysinfo {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sysinfo")
-                    .field("uptime", &self.uptime)
-                    .field("loads", &self.loads)
-                    .field("totalram", &self.totalram)
-                    .field("freeram", &self.freeram)
-                    .field("sharedram", &self.sharedram)
-                    .field("bufferram", &self.bufferram)
-                    .field("totalswap", &self.totalswap)
-                    .field("freeswap", &self.freeswap)
-                    .field("procs", &self.procs)
-                    .field("pad", &self.pad)
-                    .field("totalhigh", &self.totalhigh)
-                    .field("freehigh", &self.freehigh)
-                    .field("mem_unit", &self.mem_unit)
-                    // FIXME: .field("__reserved", &self.__reserved)
-                    .finish()
-            }
-        }
-        impl hash::Hash for sysinfo {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.uptime.hash(state);
-                self.loads.hash(state);
-                self.totalram.hash(state);
-                self.freeram.hash(state);
-                self.sharedram.hash(state);
-                self.bufferram.hash(state);
-                self.totalswap.hash(state);
-                self.freeswap.hash(state);
-                self.procs.hash(state);
-                self.pad.hash(state);
-                self.totalhigh.hash(state);
-                self.freehigh.hash(state);
-                self.mem_unit.hash(state);
-                self.__reserved.hash(state);
-            }
-        }
-
-        impl PartialEq for mq_attr {
-            fn eq(&self, other: &mq_attr) -> bool {
-                self.mq_flags == other.mq_flags
-                    && self.mq_maxmsg == other.mq_maxmsg
-                    && self.mq_msgsize == other.mq_msgsize
-                    && self.mq_curmsgs == other.mq_curmsgs
-            }
-        }
-        impl Eq for mq_attr {}
-        impl fmt::Debug for mq_attr {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("mq_attr")
-                    .field("mq_flags", &self.mq_flags)
-                    .field("mq_maxmsg", &self.mq_maxmsg)
-                    .field("mq_msgsize", &self.mq_msgsize)
-                    .field("mq_curmsgs", &self.mq_curmsgs)
-                    .finish()
-            }
-        }
-        impl hash::Hash for mq_attr {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.mq_flags.hash(state);
-                self.mq_maxmsg.hash(state);
-                self.mq_msgsize.hash(state);
-                self.mq_curmsgs.hash(state);
-            }
-        }
-
-        impl PartialEq for pthread_cond_t {
-            fn eq(&self, other: &pthread_cond_t) -> bool {
-                self.size.iter().zip(other.size.iter()).all(|(a, b)| a == b)
-            }
-        }
-        impl Eq for pthread_cond_t {}
-        impl fmt::Debug for pthread_cond_t {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("pthread_cond_t")
-                    // FIXME: .field("size", &self.size)
-                    .finish()
-            }
-        }
-        impl hash::Hash for pthread_cond_t {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.size.hash(state);
-            }
-        }
     }
 }
 
@@ -823,7 +667,7 @@ pub const ST_NOATIME: c_ulong = 1024;
 pub const ST_NODIRATIME: c_ulong = 2048;
 
 pub const RTLD_NEXT: *mut c_void = -1i64 as *mut c_void;
-pub const RTLD_DEFAULT: *mut c_void = 0i64 as *mut c_void;
+pub const RTLD_DEFAULT: *mut c_void = ptr::null_mut();
 pub const RTLD_NODELETE: c_int = 0x1000;
 pub const RTLD_NOW: c_int = 0x2;
 
@@ -893,7 +737,7 @@ pub const SHM_NORESERVE: c_int = 0o10000;
 
 pub const LOG_NFACILITIES: c_int = 24;
 
-pub const SEM_FAILED: *mut crate::sem_t = 0 as *mut sem_t;
+pub const SEM_FAILED: *mut crate::sem_t = ptr::null_mut();
 
 pub const AI_PASSIVE: c_int = 0x0001;
 pub const AI_CANONNAME: c_int = 0x0002;
@@ -1082,7 +926,7 @@ pub const EHWPOISON: c_int = 155;
 pub const EL2NSYNC: c_int = 156;
 
 pub const SA_NODEFER: c_int = 0x40000000;
-pub const SA_RESETHAND: c_int = 0x80000000;
+pub const SA_RESETHAND: c_int = u32_cast_int(0x80000000);
 pub const SA_RESTART: c_int = 0x10000000;
 pub const SA_NOCLDSTOP: c_int = 0x00000001;
 
@@ -1226,8 +1070,14 @@ pub const SO_RXQ_OVFL: c_int = 40;
 pub const SO_PEEK_OFF: c_int = 42;
 pub const SO_BUSY_POLL: c_int = 46;
 
+#[cfg(target_pointer_width = "32")]
 pub const __SIZEOF_PTHREAD_RWLOCK_T: usize = 32;
+#[cfg(target_pointer_width = "64")]
+pub const __SIZEOF_PTHREAD_RWLOCK_T: usize = 56;
+#[cfg(target_pointer_width = "32")]
 pub const __SIZEOF_PTHREAD_MUTEX_T: usize = 24;
+#[cfg(target_pointer_width = "64")]
+pub const __SIZEOF_PTHREAD_MUTEX_T: usize = 40;
 
 pub const O_DIRECT: c_int = 0x4000;
 pub const O_DIRECTORY: c_int = 0x10000;
@@ -1413,80 +1263,78 @@ pub const PRIO_USER: c_int = 2;
 pub const SOMAXCONN: c_int = 128;
 
 f! {
-    pub fn CMSG_NXTHDR(mhdr: *const msghdr, cmsg: *const cmsghdr) -> *mut cmsghdr {
-        if ((*cmsg).cmsg_len as usize) < mem::size_of::<cmsghdr>() {
-            return 0 as *mut cmsghdr;
-        };
+    pub unsafe fn CMSG_NXTHDR(mhdr: *const msghdr, cmsg: *const cmsghdr) -> *mut cmsghdr {
+        if ((*cmsg).cmsg_len as usize) < size_of::<cmsghdr>() {
+            return ptr::null_mut();
+        }
         let next = (cmsg as usize + super::CMSG_ALIGN((*cmsg).cmsg_len as usize)) as *mut cmsghdr;
         let max = (*mhdr).msg_control as usize + (*mhdr).msg_controllen as usize;
-        if (next.offset(1)) as usize > max {
-            0 as *mut cmsghdr
+        if (next.offset(1)) as usize >= max {
+            ptr::null_mut()
         } else {
-            next as *mut cmsghdr
+            next.cast()
         }
     }
 
-    pub fn CPU_ZERO(cpuset: &mut cpu_set_t) -> () {
-        for slot in cpuset.bits.iter_mut() {
-            *slot = 0;
-        }
+    pub unsafe fn CPU_ZERO(cpuset: &mut cpu_set_t) -> () {
+        cpuset.bits.fill(0);
     }
 
-    pub fn CPU_SET(cpu: usize, cpuset: &mut cpu_set_t) -> () {
-        let size_in_bits = 8 * mem::size_of_val(&cpuset.bits[0]); // 32, 64 etc
+    pub unsafe fn CPU_SET(cpu: usize, cpuset: &mut cpu_set_t) -> () {
+        let size_in_bits = 8 * size_of_val(&cpuset.bits[0]); // 32, 64 etc
         let (idx, offset) = (cpu / size_in_bits, cpu % size_in_bits);
         cpuset.bits[idx] |= 1 << offset;
         ()
     }
 
-    pub fn CPU_CLR(cpu: usize, cpuset: &mut cpu_set_t) -> () {
-        let size_in_bits = 8 * mem::size_of_val(&cpuset.bits[0]); // 32, 64 etc
+    pub unsafe fn CPU_CLR(cpu: usize, cpuset: &mut cpu_set_t) -> () {
+        let size_in_bits = 8 * size_of_val(&cpuset.bits[0]); // 32, 64 etc
         let (idx, offset) = (cpu / size_in_bits, cpu % size_in_bits);
         cpuset.bits[idx] &= !(1 << offset);
         ()
     }
 
-    pub fn CPU_ISSET(cpu: usize, cpuset: &cpu_set_t) -> bool {
-        let size_in_bits = 8 * mem::size_of_val(&cpuset.bits[0]);
+    pub unsafe fn CPU_ISSET(cpu: usize, cpuset: &cpu_set_t) -> bool {
+        let size_in_bits = 8 * size_of_val(&cpuset.bits[0]);
         let (idx, offset) = (cpu / size_in_bits, cpu % size_in_bits);
         0 != (cpuset.bits[idx] & (1 << offset))
     }
 
-    pub fn CPU_EQUAL(set1: &cpu_set_t, set2: &cpu_set_t) -> bool {
+    pub unsafe fn CPU_EQUAL(set1: &cpu_set_t, set2: &cpu_set_t) -> bool {
         set1.bits == set2.bits
-    }
-
-    pub fn major(dev: crate::dev_t) -> c_uint {
-        // see
-        // https://github.com/emscripten-core/emscripten/blob/
-        // main/system/lib/libc/musl/include/sys/sysmacros.h
-        let mut major = 0;
-        major |= (dev & 0x00000fff) >> 8;
-        major |= (dev & 0xfffff000) >> 31 >> 1;
-        major as c_uint
-    }
-
-    pub fn minor(dev: crate::dev_t) -> c_uint {
-        // see
-        // https://github.com/emscripten-core/emscripten/blob/
-        // main/system/lib/libc/musl/include/sys/sysmacros.h
-        let mut minor = 0;
-        minor |= (dev & 0x000000ff) >> 0;
-        minor |= (dev & 0xffffff00) >> 12;
-        minor as c_uint
     }
 }
 
 safe_f! {
-    pub {const} fn makedev(major: c_uint, minor: c_uint) -> crate::dev_t {
+    pub const safe fn makedev(major: c_uint, minor: c_uint) -> crate::dev_t {
         let major = major as crate::dev_t;
         let minor = minor as crate::dev_t;
         let mut dev = 0;
-        dev |= (major & 0x00000fff) << 8;
         dev |= (major & 0xfffff000) << 31 << 1;
-        dev |= (minor & 0x000000ff) << 0;
+        dev |= (major & 0x00000fff) << 8;
         dev |= (minor & 0xffffff00) << 12;
+        dev |= minor & 0x000000ff;
         dev
+    }
+
+    pub const safe fn major(dev: crate::dev_t) -> c_uint {
+        // see
+        // https://github.com/emscripten-core/emscripten/blob/
+        // main/system/lib/libc/musl/include/sys/sysmacros.h
+        let mut major = 0;
+        major |= (dev >> 31 >> 1) & 0xfffff000;
+        major |= (dev >> 8) & 0x00000fff;
+        major as c_uint
+    }
+
+    pub const safe fn minor(dev: crate::dev_t) -> c_uint {
+        // see
+        // https://github.com/emscripten-core/emscripten/blob/
+        // main/system/lib/libc/musl/include/sys/sysmacros.h
+        let mut minor = 0;
+        minor |= (dev >> 12) & 0xffffff00;
+        minor |= dev & 0x000000ff;
+        minor as c_uint
     }
 }
 
@@ -1533,9 +1381,7 @@ extern "C" {
     ) -> c_int;
     pub fn getloadavg(loadavg: *mut c_double, nelem: c_int) -> c_int;
 
-    pub fn mkfifoat(dirfd: c_int, pathname: *const c_char, mode: crate::mode_t) -> c_int;
-    pub fn if_nameindex() -> *mut if_nameindex;
-    pub fn if_freenameindex(ptr: *mut if_nameindex);
+    pub fn mkfifoat(dirfd: c_int, pathname: *const c_char, mode: mode_t) -> c_int;
 
     pub fn mremap(
         addr: *mut c_void,
@@ -1575,8 +1421,6 @@ extern "C" {
     pub fn mkstemps(template: *mut c_char, suffixlen: c_int) -> c_int;
     pub fn nl_langinfo(item: crate::nl_item) -> *mut c_char;
 
-    pub fn getdomainname(name: *mut c_char, len: size_t) -> c_int;
-    pub fn setdomainname(name: *const c_char, len: size_t) -> c_int;
     pub fn sendmmsg(
         sockfd: c_int,
         msgvec: *mut crate::mmsghdr,
@@ -1594,29 +1438,8 @@ extern "C" {
     pub fn ioctl(fd: c_int, request: c_int, ...) -> c_int;
     pub fn getpriority(which: c_int, who: crate::id_t) -> c_int;
     pub fn setpriority(which: c_int, who: crate::id_t, prio: c_int) -> c_int;
-    pub fn pthread_create(
-        native: *mut crate::pthread_t,
-        attr: *const crate::pthread_attr_t,
-        f: extern "C" fn(*mut c_void) -> *mut c_void,
-        value: *mut c_void,
-    ) -> c_int;
 
     pub fn getentropy(buf: *mut c_void, buflen: size_t) -> c_int;
-
-    pub fn getpwnam_r(
-        name: *const c_char,
-        pwd: *mut passwd,
-        buf: *mut c_char,
-        buflen: size_t,
-        result: *mut *mut passwd,
-    ) -> c_int;
-    pub fn getpwuid_r(
-        uid: crate::uid_t,
-        pwd: *mut passwd,
-        buf: *mut c_char,
-        buflen: size_t,
-        result: *mut *mut passwd,
-    ) -> c_int;
 
     // grp.h
     pub fn getgrgid(gid: crate::gid_t) -> *mut crate::group;
@@ -1635,6 +1458,14 @@ extern "C" {
         buflen: size_t,
         result: *mut *mut crate::group,
     ) -> c_int;
+    pub fn sigwait(set: *const crate::sigset_t, sig: *mut c_int) -> c_int;
+    pub fn sigwaitinfo(set: *const crate::sigset_t, info: *mut crate::siginfo_t) -> c_int;
+    pub fn sigtimedwait(
+        set: *const crate::sigset_t,
+        info: *mut crate::siginfo_t,
+        timeout: *const crate::timespec,
+    ) -> c_int;
+    pub fn faccessat(dirfd: c_int, pathname: *const c_char, mode: c_int, flags: c_int) -> c_int;
 }
 
 // Alias <foo> to <foo>64 to mimic glibc's LFS64 support

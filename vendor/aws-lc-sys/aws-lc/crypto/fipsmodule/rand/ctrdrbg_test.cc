@@ -1,16 +1,5 @@
-/* Copyright (c) 2017, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2017, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <gtest/gtest.h>
 
@@ -32,6 +21,10 @@ TEST(CTRDRBGTest, Basic) {
 
   CTR_DRBG_STATE drbg;
   ASSERT_TRUE(CTR_DRBG_init(&drbg, kSeed, nullptr, 0));
+
+  // This is an implicit assumption in random places in the code and is not
+  // always documented. Discovery is hard, so explicitly assert it's true.
+  ASSERT_EQ(drbg.reseed_counter, (uint64_t) 1);
 
   const uint8_t kReseed[CTR_DRBG_ENTROPY_LEN] = {
       0xfd, 0x85, 0xa8, 0x36, 0xbb, 0xa8, 0x50, 0x19, 0x88, 0x1e, 0x8c, 0x6b,
@@ -126,4 +119,22 @@ TEST(CTRDRBGTest, TestVectors) {
 
     EXPECT_EQ(Bytes(expected), Bytes(out));
   });
+}
+
+TEST(CTRDRBGTest, NoAlias) {
+  const uint8_t kSeed[CTR_DRBG_ENTROPY_LEN] = {0};
+  const uint8_t *kAliasEqual = kSeed;
+  const uint8_t kSeedOversized[CTR_DRBG_ENTROPY_LEN+10] = {0};
+  const uint8_t *kAliasOverlapping = &kSeedOversized[10];
+
+  CTR_DRBG_STATE drbg;
+  ASSERT_FALSE(CTR_DRBG_init(&drbg, kSeed, kAliasEqual, CTR_DRBG_ENTROPY_LEN));
+  ASSERT_FALSE(CTR_DRBG_init(&drbg, kSeedOversized, kAliasOverlapping, CTR_DRBG_ENTROPY_LEN));
+
+  ASSERT_TRUE(CTR_DRBG_init(&drbg, kSeed, nullptr, 0));
+
+  ASSERT_FALSE(CTR_DRBG_reseed(&drbg, kSeed, kAliasEqual, CTR_DRBG_ENTROPY_LEN));
+  ASSERT_FALSE(CTR_DRBG_reseed(&drbg, kSeedOversized, kAliasOverlapping, CTR_DRBG_ENTROPY_LEN));
+
+  CTR_DRBG_clear(&drbg);
 }

@@ -6,11 +6,10 @@
 #include <openssl/asn1t.h>
 #include <openssl/pem.h>
 
-#include "../bytestring/internal.h"
 #include "../internal.h"
 #include "internal.h"
 
-ASN1_ADB_TEMPLATE(p7default) = ASN1_EXP_OPT(PKCS7, d.data, ASN1_ANY, 0);
+ASN1_ADB_TEMPLATE(p7default) = ASN1_EXP_OPT(PKCS7, d.other, ASN1_ANY, 0);
 
 ASN1_ADB(PKCS7) = {
     ADB_ENTRY(NID_pkcs7_data,
@@ -25,57 +24,12 @@ ASN1_ADB(PKCS7) = {
     ADB_ENTRY(
         NID_pkcs7_encrypted,
         ASN1_EXP_OPT(PKCS7, d.encrypted, PKCS7_ENCRYPT,
-                     0))} ASN1_ADB_END(PKCS7, 0, type, 0, &p7default_tt, NULL);
+                     0))} ASN1_ADB_END(PKCS7, 0, type, 0, &p7default_tt, &p7default_tt);
 
 ASN1_SEQUENCE(PKCS7) = {ASN1_SIMPLE(PKCS7, type, ASN1_OBJECT),
                         ASN1_ADB_OBJECT(PKCS7)} ASN1_SEQUENCE_END(PKCS7)
 
-IMPLEMENT_ASN1_ALLOC_FUNCTIONS(PKCS7)
-
-PKCS7 *d2i_PKCS7(PKCS7 **a, const unsigned char **in, long len) {
-  uint8_t *der_bytes = NULL;
-  PKCS7 *ret = NULL;
-  CBS cbs, cbs_der;
-
-  if (!in) {
-    return NULL;
-  }
-
-  CBS_init(&cbs, *in, len);
-  // |CBS_asn1_ber_to_der| will allocate memory and point |der_bytes| to it.
-  // we're responsible for freeing this below.
-  if (!CBS_asn1_ber_to_der(&cbs, &cbs_der, &der_bytes)) {
-    goto err;
-  }
-
-  // |CBS_asn1_ber_to_der| will set |der_bytes| to NULL if it doesn't detect
-  // any convertible BER elements in |in|.
-  if (der_bytes == NULL) {
-    ret = (PKCS7 *)ASN1_item_d2i((ASN1_VALUE **)a, in, len,
-                                 ASN1_ITEM_rptr(PKCS7));
-  } else {
-    // |ASN1_item_d2i| will increment the input pointer by |der_len| length, so
-    // save off another pointer so we can free |der_bytes| at the end of this
-    // function.
-    uint8_t *der_bytes_ptr = der_bytes;
-    size_t der_len = CBS_len(&cbs_der);
-    ret = (PKCS7 *)ASN1_item_d2i((ASN1_VALUE **)a,
-                                 (const uint8_t **)&der_bytes_ptr, der_len,
-                                 ASN1_ITEM_rptr(PKCS7));
-    // Advance |*in| by however many bytes |ASN1_item_d2i| advanced
-    // |der_bytes_ptr|
-    *in += der_bytes_ptr - der_bytes;
-  }
-
-err:
-  OPENSSL_free(der_bytes);
-  der_bytes = NULL;
-  return ret;
-}
-
-int i2d_PKCS7(PKCS7 *a, unsigned char **out) {
-  return ASN1_item_i2d((ASN1_VALUE *)a, out, ASN1_ITEM_rptr(PKCS7));
-}
+IMPLEMENT_ASN1_FUNCTIONS(PKCS7)
 
 IMPLEMENT_ASN1_DUP_FUNCTION(PKCS7)
 
@@ -186,3 +140,18 @@ ASN1_SEQUENCE(PKCS7_ENVELOPE) = {
                 PKCS7_ENC_CONTENT)} ASN1_SEQUENCE_END(PKCS7_ENVELOPE)
 
 IMPLEMENT_ASN1_FUNCTIONS(PKCS7_ENVELOPE)
+
+ASN1_ITEM_TEMPLATE(PKCS7_ATTR_VERIFY) = ASN1_EX_TEMPLATE_TYPE(
+    ASN1_TFLG_SEQUENCE_OF | ASN1_TFLG_IMPTAG | ASN1_TFLG_UNIVERSAL, V_ASN1_SET,
+    PKCS7_ATTRIBUTES, X509_ATTRIBUTE)
+ASN1_ITEM_TEMPLATE_END(PKCS7_ATTR_VERIFY)
+
+int PKCS7_print_ctx(BIO *bio, PKCS7 *pkcs7, int indent, const ASN1_PCTX *pctx) {
+  GUARD_PTR(bio);
+  GUARD_PTR(pkcs7);
+
+  if (BIO_printf(bio, "PKCS7 printing is not supported") <= 0) {
+    return 0;
+  }
+  return 1;
+}

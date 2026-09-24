@@ -1,13 +1,20 @@
-pub use crate::arch::c_char_def as c_char;
+///! Definitions for Apache NuttX RTOS.
+///!
+///! Following definitions are based on NuttX 13.0.0.
+///! See https://github.com/apache/nuttx/tree/releases/13.0 for more details.
 use crate::prelude::*;
-use crate::{in6_addr, in_addr_t, timespec, DIR};
+use crate::{
+    in6_addr,
+    in_addr_t,
+    timespec,
+    DIR,
+};
 
+pub type pid_t = c_int;
 pub type nlink_t = u16;
 pub type ino_t = u16;
 pub type blkcnt_t = u64;
 pub type blksize_t = i16;
-pub type c_long = isize;
-pub type c_ulong = usize;
 pub type cc_t = u8;
 pub type clock_t = i64;
 pub type dev_t = i32;
@@ -22,20 +29,28 @@ pub type pthread_rwlockattr_t = i32;
 pub type pthread_t = i32;
 pub type rlim_t = i64;
 pub type sa_family_t = u16;
-pub type socklen_t = u32;
+pub type socklen_t = c_uint;
 pub type speed_t = usize;
 pub type suseconds_t = i32;
 pub type tcflag_t = u32;
-pub type clockid_t = i32;
+pub type clockid_t = c_int;
 pub type time_t = i64;
-pub type wchar_t = i32;
+
+cfg_if! {
+    if #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))] {
+        pub type wchar_t = c_int;
+    } else if #[cfg(any(target_arch = "arm", target_arch = "aarch64"))] {
+        pub type wchar_t = c_uint;
+    }
+}
 
 s! {
+    // sys/stat.h
     pub struct stat {
         pub st_dev: dev_t,
         pub st_ino: ino_t,
         pub st_mode: mode_t,
-        pub st_nlink: u64,
+        pub st_nlink: nlink_t,
         pub st_uid: u32,
         pub st_gid: u32,
         pub st_rdev: dev_t,
@@ -45,22 +60,35 @@ s! {
         pub st_ctim: timespec,
         pub st_blksize: blksize_t,
         pub st_blocks: i64,
-        __reserved: [usize; __DEFAULT_RESERVED_SIZE__],
+        __reserved: Padding<[usize; __DEFAULT_RESERVED_SIZE__]>,
     }
 
+    // sys/socket.h
     pub struct sockaddr {
         pub sa_family: sa_family_t,
         pub sa_data: [u8; 14],
     }
 
+    pub struct msghdr {
+        pub msg_name: *mut c_void,
+        pub msg_namelen: socklen_t,
+        pub msg_iov: *mut crate::iovec,
+        pub msg_iovlen: c_ulong,
+        pub msg_control: *mut c_void,
+        pub msg_controllen: c_ulong,
+        pub msg_flags: c_int,
+    }
+
+    // pwd.h
     pub struct passwd {
         pub pw_name: *const c_char,
+        pub pw_passwd: *const c_char,
         pub pw_uid: u32,
         pub pw_gid: u32,
         pub pw_gecos: *const c_char,
         pub pw_dir: *const c_char,
         pub pw_shell: *const c_char,
-        __reserved: [usize; __DEFAULT_RESERVED_SIZE__],
+        __reserved: Padding<[usize; __DEFAULT_RESERVED_SIZE__]>,
     }
 
     pub struct sem_t {
@@ -115,7 +143,7 @@ s! {
         pub int_p_cs_precedes: i8,
         pub int_p_sep_by_space: i8,
         pub int_p_sign_posn: i8,
-        __reserved: [usize; __DEFAULT_RESERVED_SIZE__],
+        __reserved: Padding<[usize; __DEFAULT_RESERVED_SIZE__]>,
     }
 
     pub struct tm {
@@ -129,8 +157,8 @@ s! {
         pub tm_yday: i32,
         pub tm_isdst: i32,
         pub tm_gmtoff: isize,
-        pub tm_zone: *const i8,
-        __reserved: [usize; __DEFAULT_RESERVED_SIZE__],
+        pub tm_zone: *const c_char,
+        __reserved: Padding<[usize; __DEFAULT_RESERVED_SIZE__]>,
     }
 
     pub struct addrinfo {
@@ -142,7 +170,7 @@ s! {
         pub ai_addr: *mut sockaddr,
         pub ai_canonname: *mut c_char,
         pub ai_next: *mut addrinfo,
-        __reserved: [usize; __DEFAULT_RESERVED_SIZE__],
+        __reserved: Padding<[usize; __DEFAULT_RESERVED_SIZE__]>,
     }
 
     pub struct pthread_rwlock_t {
@@ -161,12 +189,12 @@ s! {
         pub f_fsid: usize,
         pub f_flag: usize,
         pub f_namemax: usize,
-        __reserved: [usize; __DEFAULT_RESERVED_SIZE__],
+        __reserved: Padding<[usize; __DEFAULT_RESERVED_SIZE__]>,
     }
 
     pub struct dirent {
         pub d_type: u8,
-        pub d_name: [i8; __NAME_MAX__ + 1],
+        pub d_name: [c_char; __NAME_MAX__ + 1],
     }
 
     pub struct fd_set {
@@ -182,7 +210,7 @@ s! {
         pub sa_mask: sigset_t,
         pub sa_flags: i32,
         pub sa_user: usize,
-        __reserved: [usize; __DEFAULT_RESERVED_SIZE__],
+        __reserved: Padding<[usize; __DEFAULT_RESERVED_SIZE__]>,
     }
 
     pub struct termios {
@@ -192,9 +220,10 @@ s! {
         pub c_lflag: tcflag_t,
         pub c_cc: [cc_t; 12],
         pub c_speed: speed_t,
-        __reserved: [usize; __DEFAULT_RESERVED_SIZE__],
+        __reserved: Padding<[usize; __DEFAULT_RESERVED_SIZE__]>,
     }
 
+    // netinet/in.h
     pub struct in_addr {
         pub s_addr: in_addr_t,
     }
@@ -229,14 +258,21 @@ s! {
         pub imr_interface: in_addr,
     }
 
+    pub struct ip_mreqn {
+        pub imr_multiaddr: in_addr,
+        pub imr_address: in_addr,
+        pub imr_ifindex: c_uint,
+    }
+
     pub struct ipv6_mreq {
         pub ipv6mr_multiaddr: in6_addr,
         pub ipv6mr_interface: u32,
     }
 
-    pub struct timeval {
-        pub tv_sec: time_t,
-        pub tv_usec: suseconds_t,
+    pub struct ip_mreq_source {
+        pub imr_multiaddr: in_addr,
+        pub imr_interface: in_addr,
+        pub imr_sourceaddr: in_addr,
     }
 }
 
@@ -248,6 +284,7 @@ s! {
 // for example, struct passwd, https://pubs.opengroup.org/onlinepubs/009695399/basedefs/pwd.h.html,
 // POSIX only defines following fields in struct passwd:
 // char    *pw_name   User's login name.
+// char    *pw_passwd Encrypted password.
 // uid_t    pw_uid    Numerical user ID.
 // gid_t    pw_gid    Numerical group ID.
 // char    *pw_dir    Initial working directory.
@@ -275,7 +312,7 @@ pub const PTHREAD_MUTEX_INITIALIZER: pthread_mutex_t = pthread_mutex_t {
 };
 
 // dlfcn.h
-pub const RTLD_DEFAULT: *mut c_void = 0 as *mut c_void;
+pub const RTLD_DEFAULT: *mut c_void = ptr::null_mut();
 
 // stdlib.h
 pub const EXIT_SUCCESS: i32 = 0;
@@ -428,11 +465,14 @@ pub const ENOSHARE: i32 = 139;
 pub const ECASECLASH: i32 = 140;
 
 // fcntl.h
+// fcntl() commands
 pub const FIOCLEX: i32 = 0x30b;
-pub const F_SETFL: i32 = 0x9;
 pub const F_DUPFD_CLOEXEC: i32 = 0x12;
 pub const F_GETFD: i32 = 0x1;
 pub const F_GETFL: i32 = 0x2;
+pub const F_SETFD: i32 = 8;
+pub const F_SETFL: i32 = 9;
+// open flag settings for open() (and related APIs)
 pub const O_RDONLY: i32 = 0x1;
 pub const O_WRONLY: i32 = 0x2;
 pub const O_RDWR: i32 = 0x3;
@@ -479,62 +519,141 @@ pub const S_IXOTH: u32 = 0x001;
 
 // sys/poll.h
 pub const POLLIN: i16 = 0x01;
+pub const POLLRDNORM: i16 = 0x01;
+pub const POLLRDBAND: i16 = 0x01;
+pub const POLLPRI: i16 = 0x02;
 pub const POLLOUT: i16 = 0x04;
+pub const POLLWRNORM: i16 = 0x04;
+pub const POLLWRBAND: i16 = 0x04;
 pub const POLLHUP: i16 = 0x10;
+pub const POLLRDHUP: i16 = 0x10;
 pub const POLLERR: i16 = 0x08;
 pub const POLLNVAL: i16 = 0x20;
 
 // sys/socket.h
+// Supported Protocol Families
+pub const AF_UNSPEC: i32 = 0;
 pub const AF_UNIX: i32 = 1;
-pub const SOCK_DGRAM: i32 = 2;
-pub const SOCK_STREAM: i32 = 1;
 pub const AF_INET: i32 = 2;
 pub const AF_INET6: i32 = 10;
-pub const MSG_PEEK: i32 = 0x02;
+// The socket created by socket() has the indicated type, which specifies
+// the communication semantics.
+pub const SOCK_STREAM: i32 = 1;
+pub const SOCK_DGRAM: i32 = 2;
+pub const SOCK_RAW: i32 = 3;
+pub const SOCK_RDM: i32 = 4;
+pub const SOCK_SEQPACKET: i32 = 5;
+pub const SOCK_CLOEXEC: i32 = 0o02000000;
+pub const SOCK_NONBLOCK: i32 = 0o00004000;
+// Bits in the FLAGS argument to `send', `recv', et al. These are the bits
+// recognized by Linux, not all are supported by NuttX.
+pub const MSG_OOB: i32 = 0x000001;
+pub const MSG_PEEK: i32 = 0x000002;
+pub const MSG_TRUNC: i32 = 0x000020;
+pub const MSG_EOR: i32 = 0x000080;
+// Protocol levels supported by get/setsockopt():
 pub const SOL_SOCKET: i32 = 1;
-pub const SHUT_WR: i32 = 2;
-pub const SHUT_RD: i32 = 1;
-pub const SHUT_RDWR: i32 = 3;
-pub const SO_ERROR: i32 = 4;
-pub const SO_REUSEADDR: i32 = 11;
-pub const SOMAXCONN: i32 = 8;
-pub const SO_LINGER: i32 = 6;
-pub const SO_RCVTIMEO: i32 = 0xa;
-pub const SO_SNDTIMEO: i32 = 0xe;
+// Socket-level options
 pub const SO_BROADCAST: i32 = 1;
+pub const SO_ERROR: i32 = 4;
+pub const SO_KEEPALIVE: i32 = 5;
+pub const SO_LINGER: i32 = 6;
+pub const SO_OOBINLINE: i32 = 7;
+pub const SO_RCVBUF: i32 = 8;
+pub const SO_RCVTIMEO: i32 = 10;
+pub const SO_REUSEADDR: i32 = 11;
+pub const SO_SNDBUF: i32 = 12;
+pub const SO_SNDTIMEO: i32 = 14;
+pub const SO_TYPE: i32 = 15;
+// Protocol-level socket options may begin with this value
+pub const __SO_PROTOCOL: i32 = 16;
+// Values for the 'how' argument of shutdown()
+pub const SHUT_RD: i32 = 1;
+pub const SHUT_WR: i32 = 2;
+pub const SHUT_RDWR: i32 = 3;
+// The maximum backlog queue length
+pub const SOMAXCONN: i32 = 8;
 
 // netinet/tcp.h
-pub const TCP_NODELAY: i32 = 0x10;
+pub const TCP_NODELAY: i32 = __SO_PROTOCOL + 0;
+pub const TCP_KEEPIDLE: i32 = __SO_PROTOCOL + 1;
+pub const TCP_KEEPINTVL: i32 = __SO_PROTOCOL + 2;
+pub const TCP_KEEPCNT: i32 = __SO_PROTOCOL + 3;
+pub const TCP_MAXSEG: i32 = __SO_PROTOCOL + 4;
 
 // nuttx/fs/ioctl.h
 pub const FIONBIO: i32 = 0x30a;
 
 // unistd.h
-pub const STDIN_FILENO: i32 = 0;
-pub const STDOUT_FILENO: i32 = 1;
-pub const STDERR_FILENO: i32 = 2;
 pub const _SC_PAGESIZE: i32 = 0x36;
 pub const _SC_THREAD_STACK_MIN: i32 = 0x58;
 pub const _SC_GETPW_R_SIZE_MAX: i32 = 0x25;
+pub const _SC_HOST_NAME_MAX: i32 = 0x26;
+
+// sys/eventfd.h
+pub const EFD_NONBLOCK: i32 = O_NONBLOCK;
+pub const EFD_CLOEXEC: i32 = O_CLOEXEC;
 
 // signal.h
-pub const SIGPIPE: i32 = 13;
+pub const SIGHUP: c_int = 1;
+pub const SIGINT: c_int = 2;
+pub const SIGQUIT: c_int = 3;
+pub const SIGILL: c_int = 4;
+pub const SIGTRAP: c_int = 5;
+pub const SIGABRT: c_int = 6;
+pub const SIGBUS: c_int = 7;
+pub const SIGFPE: c_int = 8;
+pub const SIGKILL: c_int = 9;
+pub const SIGUSR1: c_int = 10;
+pub const SIGSEGV: c_int = 11;
+pub const SIGUSR2: c_int = 12;
+pub const SIGPIPE: c_int = 13;
+pub const SIGALRM: c_int = 14;
+pub const SIGTERM: c_int = 15;
+pub const SIGSTKFLT: c_int = 16;
+pub const SIGCHLD: c_int = 17;
+pub const SIGCONT: c_int = 18;
+pub const SIGSTOP: c_int = 19;
+pub const SIGTSTP: c_int = 20;
+pub const SIGTTIN: c_int = 21;
+pub const SIGTTOU: c_int = 22;
+pub const SIGURG: c_int = 23;
+pub const SIGXCPU: c_int = 24;
+pub const SIGXFSZ: c_int = 25;
+pub const SIGVTALRM: c_int = 26;
+pub const SIGPROF: c_int = 27;
+pub const SIGWINCH: c_int = 28;
+pub const SIGIO: c_int = 29;
+pub const SIGPOLL: c_int = SIGIO;
+pub const SIGPWR: c_int = 30;
+pub const SIGSYS: c_int = 31;
 
 // pthread.h
 pub const PTHREAD_MUTEX_NORMAL: i32 = 0;
 
 // netinet/in.h
-pub const IP_TTL: i32 = 0x1e;
-pub const IPV6_V6ONLY: i32 = 0x17;
-pub const IPV6_JOIN_GROUP: i32 = 0x11;
-pub const IPV6_LEAVE_GROUP: i32 = 0x12;
-pub const IP_MULTICAST_LOOP: i32 = 0x13;
-pub const IPV6_MULTICAST_LOOP: i32 = 0x15;
-pub const IP_MULTICAST_TTL: i32 = 0x12;
-pub const IP_ADD_MEMBERSHIP: i32 = 0x14;
-pub const IP_DROP_MEMBERSHIP: i32 = 0x15;
+// SOL_IP protocol-level socket options.
+pub const IP_MULTICAST_IF: i32 = __SO_PROTOCOL + 1;
+pub const IP_MULTICAST_TTL: i32 = __SO_PROTOCOL + 2;
+pub const IP_MULTICAST_LOOP: i32 = __SO_PROTOCOL + 3;
+pub const IP_ADD_MEMBERSHIP: i32 = __SO_PROTOCOL + 4;
+pub const IP_DROP_MEMBERSHIP: i32 = __SO_PROTOCOL + 5;
+pub const IP_ADD_SOURCE_MEMBERSHIP: i32 = __SO_PROTOCOL + 8;
+pub const IP_DROP_SOURCE_MEMBERSHIP: i32 = __SO_PROTOCOL + 9;
+pub const IP_TOS: i32 = __SO_PROTOCOL + 13;
+pub const IP_TTL: i32 = __SO_PROTOCOL + 14;
+// SOL_IPV6 protocol-level socket options.
+pub const IPV6_JOIN_GROUP: i32 = __SO_PROTOCOL + 1;
+pub const IPV6_LEAVE_GROUP: i32 = __SO_PROTOCOL + 2;
+pub const IPV6_MULTICAST_HOPS: i32 = __SO_PROTOCOL + 3;
+pub const IPV6_MULTICAST_IF: i32 = __SO_PROTOCOL + 4;
+pub const IPV6_MULTICAST_LOOP: i32 = __SO_PROTOCOL + 5;
+pub const IPV6_UNICAST_HOPS: i32 = __SO_PROTOCOL + 6;
+pub const IPV6_V6ONLY: i32 = __SO_PROTOCOL + 7;
+pub const IPV6_RECVHOPLIMIT: i32 = __SO_PROTOCOL + 11;
 
 extern "C" {
+    pub fn __errno() -> *mut c_int;
     pub fn bind(sockfd: i32, addr: *const sockaddr, addrlen: socklen_t) -> i32;
     pub fn ioctl(fd: i32, request: i32, ...) -> i32;
     pub fn dirfd(dirp: *mut DIR) -> i32;
@@ -557,8 +676,24 @@ extern "C" {
     pub fn clock_gettime(clockid: clockid_t, tp: *mut timespec) -> i32;
     pub fn futimens(fd: i32, times: *const timespec) -> i32;
     pub fn pthread_condattr_setclock(attr: *mut pthread_condattr_t, clock_id: clockid_t) -> i32;
-    pub fn pthread_set_name_np(thread: pthread_t, name: *const c_char) -> i32;
     pub fn pthread_setname_np(thread: pthread_t, name: *const c_char) -> i32;
     pub fn pthread_getname_np(thread: pthread_t, name: *mut c_char, len: usize) -> i32;
     pub fn getrandom(buf: *mut c_void, buflen: usize, flags: u32) -> isize;
+    pub fn arc4random() -> u32;
+    pub fn arc4random_buf(bytes: *mut c_void, nbytes: usize);
+    // string.h
+    pub fn strerror_r(errnum: c_int, buf: *mut c_char, buflen: size_t) -> c_int;
+    // sys/socket.h
+    pub fn accept4(
+        sockfd: c_int,
+        addr: *mut sockaddr,
+        addrlen: *mut socklen_t,
+        flags: c_int,
+    ) -> c_int;
+    pub fn recvmsg(sockfd: c_int, msg: *mut msghdr, flags: c_int) -> ssize_t;
+    pub fn sendmsg(sockfd: c_int, msg: *const msghdr, flags: c_int) -> ssize_t;
+    // sys/eventfd.h
+    pub fn eventfd(count: c_uint, flags: c_int) -> c_int;
+    // unistd.h
+    pub fn pipe2(fds: *mut c_int, flags: c_int) -> c_int;
 }

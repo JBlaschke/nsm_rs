@@ -2,14 +2,13 @@
 // called LICENSE at the top level of the ICU4X source tree
 // (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use icu_collections::codepointtrie::CodePointTrie;
 
 #[path = "tries/mod.rs"]
 mod tries;
 
-#[cfg(feature = "bench")]
 mod sample_str_lng {
     // "eng" is all ASCII
     pub const ENG: &str = "Universal Declaration of Human Rights";
@@ -39,7 +38,6 @@ fn get_trie_small() -> CodePointTrie<'static, u8> {
     .unwrap()
 }
 
-#[cfg(feature = "bench")]
 fn get_trie_fast() -> CodePointTrie<'static, u8> {
     CodePointTrie::try_new(
         tries::gc_fast::HEADER,
@@ -62,7 +60,6 @@ fn overview_bench(c: &mut Criterion) {
         });
     });
 
-    #[cfg(feature = "bench")]
     c.bench_function("cpt/get_range", |b| {
         b.iter(|| {
             black_box(&s)
@@ -74,7 +71,6 @@ fn overview_bench(c: &mut Criterion) {
         });
     });
 
-    #[cfg(feature = "bench")]
     {
         let cpt_fast = get_trie_fast();
         lang_bench(c, &cpt_small, "small/eng", sample_str_lng::ENG);
@@ -90,7 +86,6 @@ fn overview_bench(c: &mut Criterion) {
     }
 }
 
-#[cfg(feature = "bench")]
 fn lang_bench(c: &mut Criterion, cpt: &CodePointTrie<u8>, lid: &str, sample_str: &str) {
     let bench_name = format!("cpt/get/{lid}");
     let s = one_hundred_code_points(sample_str);

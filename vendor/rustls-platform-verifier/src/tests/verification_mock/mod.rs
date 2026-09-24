@@ -15,19 +15,27 @@
 
 #![cfg(all(
     any(windows, unix, target_os = "android"),
-    not(target_os = "ios"),
-    not(target_os = "tvos")
+    // These OSes require a simulator runtime and bundle.
+    not(target_os = "tvos"),
+    not(target_os = "watchos"),
+    not(target_os = "visionos")
 ))]
 
-use super::TestCase;
-use crate::tests::{assert_cert_error_eq, ensure_global_state, verification_time};
-use crate::verification::{EkuError, Verifier};
-use rustls::client::danger::ServerCertVerifier;
-use rustls::pki_types;
-use rustls::{CertificateError, Error as TlsError, OtherError};
 use std::convert::TryFrom;
 use std::net::IpAddr;
+#[cfg(not(any(target_vendor = "apple", windows)))]
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+
+use rustls::client::danger::ServerCertVerifier;
+use rustls::pki_types;
+#[cfg(not(any(target_vendor = "apple", windows)))]
+use rustls::pki_types::{DnsName, ServerName};
+use rustls::{CertificateError, Error as TlsError, OtherError};
+
+use super::TestCase;
+use crate::tests::{assert_cert_error_eq, test_provider, verification_time};
+use crate::verification::{EkuError, Verifier};
 
 macro_rules! mock_root_test_cases {
     { $( $name:ident [ $target:meta ] => $test_case:expr ),+ , } => {
@@ -42,15 +50,15 @@ macro_rules! mock_root_test_cases {
                     super::$name()
                 }
             )+
-
         }
 
         #[cfg(feature = "ffi-testing")]
         pub static ALL_TEST_CASES: &'static [fn()] = &[
             $(
                 #[cfg($target)]
-                $name
-            ),+
+                $name,
+            )+
+
         ];
     };
 
@@ -58,7 +66,9 @@ macro_rules! mock_root_test_cases {
         $(
             #[cfg($target)]
             pub(super) fn $name() {
-                test_with_mock_root(&$test_case);
+                test_with_mock_root(&$test_case, Roots::OnlyExtra);
+                #[cfg(all($target, not(target_os = "android")))]
+                test_with_mock_root(&$test_case, Roots::ExtraAndPlatform);
             }
         )+
     };
@@ -70,7 +80,8 @@ macro_rules! no_error {
     };
 }
 
-const ROOT1: &[u8] = include_bytes!("root1.crt");
+const ROOT1: pki_types::CertificateDer<'static> =
+    pki_types::CertificateDer::from_slice(include_bytes!("root1.crt"));
 const ROOT1_INT1: &[u8] = include_bytes!("root1-int1.crt");
 const ROOT1_INT1_EXAMPLE_COM_GOOD: &[u8] = include_bytes!("root1-int1-ee_example.com-good.crt");
 const ROOT1_INT1_LOCALHOST_IPV4_GOOD: &[u8] = include_bytes!("root1-int1-ee_127.0.0.1-good.crt");
@@ -83,16 +94,21 @@ const LOCALHOST_IPV6: &str = "::1";
 #[cfg(any(test, feature = "ffi-testing"))]
 #[cfg_attr(feature = "ffi-testing", allow(dead_code))]
 pub(super) fn verification_without_mock_root() {
-    ensure_global_state();
+    let crypto_provider = test_provider();
+
     // Since Rustls 0.22 constructing a webpki verifier (like the one backing Verifier on unix
     // systems) without any roots produces `OtherError(NoRootAnchors)` - since our FreeBSD CI
-    // runner fails to find any roots with openssl-probe we need to provide webpki-roots here
+    // runner fails to find any roots with openssl-probe we need to provide webpki-root-certs here
     // or the test will fail with the `OtherError` instead of the expected `CertificateError`.
     #[cfg(target_os = "freebsd")]
-    let verifier = Verifier::new_with_extra_roots(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let verifier = Verifier::new_with_extra_roots(
+        webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().cloned(),
+        crypto_provider,
+    )
+    .unwrap();
 
     #[cfg(not(target_os = "freebsd"))]
-    let verifier = Verifier::new();
+    let verifier = Verifier::new(crypto_provider).unwrap();
 
     let server_name = pki_types::ServerName::try_from(EXAMPLE_COM).unwrap();
     let end_entity = pki_types::CertificateDer::from(ROOT1_INT1_EXAMPLE_COM_GOOD);
@@ -185,7 +201,7 @@ mock_root_test_cases! {
     // Check that self-signed certificates, which may or may not be revokved, do not return any
     // kind of revocation error. It is expected that non-public certificates without revocation information
     // have no revocation checking performed across platforms.
-    revoked_dns [ any(windows, target_os = "android", target_os = "macos") ] => TestCase {
+    revoked_dns [ any(windows, target_os = "android", target_vendor = "apple") ] => TestCase {
         reference_id: EXAMPLE_COM,
         chain: &[include_bytes!("root1-int1-ee_example.com-revoked.crt"), ROOT1_INT1],
         stapled_ocsp: None,
@@ -193,7 +209,7 @@ mock_root_test_cases! {
         expected_result: Ok(()),
         other_error: no_error!(),
     },
-    stapled_revoked_dns [ any(windows, target_os = "android", target_os = "macos") ] => TestCase {
+    stapled_revoked_dns [ any(windows, target_os = "android", target_vendor = "apple") ] => TestCase {
         reference_id: EXAMPLE_COM,
         chain: &[include_bytes!("root1-int1-ee_example.com-revoked.crt"), ROOT1_INT1],
         stapled_ocsp: Some(include_bytes!("root1-int1-ee_example.com-revoked.ocsp")),
@@ -201,7 +217,7 @@ mock_root_test_cases! {
         expected_result: Err(TlsError::InvalidCertificate(CertificateError::Revoked)),
         other_error: no_error!(),
     },
-    stapled_revoked_ipv4 [ any(windows, target_os = "android", target_os = "macos") ] => TestCase {
+    stapled_revoked_ipv4 [ any(windows, target_os = "android", target_vendor = "apple") ] => TestCase {
         reference_id: LOCALHOST_IPV4,
         chain: &[include_bytes!("root1-int1-ee_127.0.0.1-revoked.crt"), ROOT1_INT1],
         stapled_ocsp: Some(include_bytes!("root1-int1-ee_127.0.0.1-revoked.ocsp")),
@@ -209,7 +225,7 @@ mock_root_test_cases! {
         expected_result: Err(TlsError::InvalidCertificate(CertificateError::Revoked)),
         other_error: no_error!(),
     },
-    stapled_revoked_ipv6 [ any(windows, target_os = "android", target_os = "macos") ] => TestCase {
+    stapled_revoked_ipv6 [ any(windows, target_os = "android", target_vendor = "apple") ] => TestCase {
         reference_id: LOCALHOST_IPV6,
         chain: &[include_bytes!("root1-int1-ee_1-revoked.crt"), ROOT1_INT1],
         stapled_ocsp: Some(include_bytes!("root1-int1-ee_1-revoked.ocsp")),
@@ -221,7 +237,7 @@ mock_root_test_cases! {
     // with AIA because there's no AIA issuer field in the certificate).
     // (AIA is an extension that allows downloading of missing data,
     // like missing certificates, during validation; see
-    // https://datatracker.ietf.org/doc/html/rfc5280#section-5.2.7).
+    // https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.2.1).
     ee_only_dns [ any(windows, unix) ] => TestCase {
         reference_id: EXAMPLE_COM,
         chain: &[ROOT1_INT1_EXAMPLE_COM_GOOD],
@@ -252,6 +268,12 @@ mock_root_test_cases! {
         chain: &[ROOT1_INT1_EXAMPLE_COM_GOOD, ROOT1_INT1],
         stapled_ocsp: None,
         verification_time: verification_time(),
+        #[cfg(not(any(target_vendor = "apple", windows)))]
+        expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForNameContext {
+            expected: ServerName::DnsName(DnsName::try_from("example.org").unwrap()),
+            presented: vec!["DnsName(\"example.com\")".to_owned()]
+        })),
+        #[cfg(any(target_vendor = "apple", windows))]
         expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForName)),
         other_error: no_error!(),
     },
@@ -260,6 +282,12 @@ mock_root_test_cases! {
         chain: &[ROOT1_INT1_LOCALHOST_IPV4_GOOD, ROOT1_INT1],
         stapled_ocsp: None,
         verification_time: verification_time(),
+        #[cfg(not(any(target_vendor = "apple", windows)))]
+        expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForNameContext {
+            expected: ServerName::IpAddress(pki_types::IpAddr::V4(Ipv4Addr::from([198, 168, 0, 1]).into())),
+            presented: vec!["IpAddress(127.0.0.1)".to_owned()],
+        })),
+        #[cfg(any(target_vendor = "apple", windows))]
         expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForName)),
         other_error: no_error!(),
     },
@@ -268,6 +296,12 @@ mock_root_test_cases! {
         chain: &[ROOT1_INT1_LOCALHOST_IPV6_GOOD, ROOT1_INT1],
         stapled_ocsp: None,
         verification_time: verification_time(),
+        #[cfg(not(any(target_vendor = "apple", windows)))]
+        expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForNameContext {
+            expected: ServerName::IpAddress(pki_types::IpAddr::V6(Ipv6Addr::from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 198, 168, 0, 1]).into())),
+            presented: vec!["IpAddress(0::1)".to_owned()],
+        })),
+        #[cfg(any(target_vendor = "apple", windows))]
         expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForName)),
         other_error: no_error!(),
     },
@@ -300,11 +334,18 @@ mock_root_test_cases! {
     },
 }
 
-fn test_with_mock_root<E: std::error::Error + PartialEq + 'static>(test_case: &TestCase<E>) {
-    ensure_global_state();
+fn test_with_mock_root<E: std::error::Error + PartialEq + 'static>(
+    test_case: &TestCase<E>,
+    root_src: Roots,
+) {
     log::info!("verifying {:?}", test_case.expected_result);
 
-    let verifier = Verifier::new_with_fake_root(ROOT1); // TODO: time
+    let provider = test_provider();
+    let verifier = match root_src {
+        Roots::OnlyExtra => Verifier::new_with_fake_root(ROOT1, provider), // TODO: time
+        #[cfg(not(target_os = "android"))]
+        Roots::ExtraAndPlatform => Verifier::new_with_extra_roots([ROOT1], provider).unwrap(),
+    };
     let mut chain = test_case
         .chain
         .iter()
@@ -335,4 +376,16 @@ fn test_with_mock_root<E: std::error::Error + PartialEq + 'static>(test_case: &T
         test_case.other_error.as_ref(),
     );
     // TODO: get into specifics of errors returned when it fails.
+}
+
+enum Roots {
+    /// Test with only extra roots, without loading the platform trust store.
+    ///
+    /// We want to keep things reproducible given the background-managed nature of trust roots on platforms.
+    OnlyExtra,
+    /// Test with loading the extra roots and the platform trust store.
+    ///
+    /// Right now, not all platforms are supported.
+    #[cfg(not(target_os = "android"))]
+    ExtraAndPlatform,
 }

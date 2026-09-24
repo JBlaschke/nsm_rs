@@ -11,6 +11,7 @@ use twox_hash::XxHash64;
 const SEED: u64 = 0xaabbccdd;
 
 /// Split the 64bit `hash` into (g, f0, f1).
+///
 /// g denotes the highest 16bits of the hash modulo `m`, and is referred to as first level hash.
 /// (f0, f1) denotes the middle, and lower 24bits of the hash respectively.
 /// (f0, f1) are used to distribute the keys with same g, into distinct slots.
@@ -47,6 +48,7 @@ pub fn compute_index(f: (u32, u32), d: (u32, u32), m: u32) -> Option<usize> {
 
 /// Compute displacements for the given `key_hashes`, which split the keys into distinct slots by a
 /// two-level hashing schema.
+///
 /// Returns a tuple of where the first item is the displacement array and the second item is the
 /// reverse mapping used to permute keys, values into their slots.
 ///
@@ -60,11 +62,21 @@ pub fn compute_index(f: (u32, u32), d: (u32, u32), m: u32) -> Option<usize> {
 /// # Arguments
 ///
 /// * `key_hashes` - [`ExactSizeIterator`] over the hashed key values
-#[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+///
+/// # Panics
+///
+/// Panics if the `key_hashes` iterator claims to have more elements than can fit in a u32.
+#[expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "Documented panic"
+)]
 pub fn compute_displacements(
     key_hashes: impl ExactSizeIterator<Item = u64>,
 ) -> (Vec<(u32, u32)>, Vec<usize>) {
     let len = key_hashes.len();
+    let len_u32 = u32::try_from(len).expect("Hashmap too large for u32");
 
     // A vector to track the size of buckets for sorting.
     let mut bucket_sizes = vec![0; len];
@@ -120,8 +132,8 @@ pub fn compute_displacements(
         // start, end - 1 are always within bounds of `bucket_sizes`
         let buckets = &bucket_flatten[start..end];
 
-        'd0: for d0 in 0..len as u32 {
-            'd1: for d1 in 0..len as u32 {
+        'd0: for d0 in 0..len_u32 {
+            'd1: for d1 in 0..len_u32 {
                 if (d0, d1) == (0, 0) {
                     continue;
                 }
@@ -129,7 +141,7 @@ pub fn compute_displacements(
                 generation += 1;
 
                 for ((_, f0, f1), _) in buckets {
-                    let displacement_idx = compute_index((*f0, *f1), (d0, d1), len as u32).unwrap();
+                    let displacement_idx = compute_index((*f0, *f1), (d0, d1), len_u32).unwrap();
 
                     // displacement_idx is always within bounds
                     if occupied[displacement_idx] || assignments[displacement_idx] == generation {

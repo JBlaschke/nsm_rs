@@ -2,7 +2,7 @@
 
 [![crates.io version](https://img.shields.io/crates/v/rustls-platform-verifier.svg)](https://crates.io/crates/rustls-platform-verifier)
 [![crate documentation](https://docs.rs/rustls-platform-verifier/badge.svg)](https://docs.rs/rustls-platform-verifier)
-![MSRV](https://img.shields.io/badge/rustc-1.64+-blue.svg)
+![MSRV](https://img.shields.io/badge/rustc-1.85+-blue.svg)
 [![crates.io downloads](https://img.shields.io/crates/d/rustls-platform-verifier.svg)](https://crates.io/crates/rustls-platform-verifier)
 ![CI](https://github.com/1Password/rustls-platform-verifier/workflows/CI/badge.svg)
 
@@ -46,51 +46,88 @@ a system CA bundle is unavailable.
 [openssl-probe]: https://github.com/alexcrichton/openssl-probe
 [webpki-roots]: https://github.com/rustls/webpki-roots
 
+## Deployment Considerations
+
+When choosing to use `rustls-platform-verifier` or another trust store option, these differences are important to consider. They
+are primarily about root certificate availability:
+
+| Backend                                         | Updates                         | Roots used                                                                                            | Supports system-local roots  |
+|-------------------------------------------------|---------------------------------|-------------------------------------------------------------------------------------------------------|------------------------------|
+| `rustls-platform-verifier` (non-Linux/BSD)      | Updated by OS                   | System store, with full (dis)trust decisions from every source available.                             | Yes                          |
+| `rustls-native-certs` + `webpki`                | Updated by OS                   | System store, with no (dis)trust decisions. All roots are treated equally regardless of their status. | Yes, with exceptions         |
+| `webpki-roots` + `webpki`                       | Static, manual updates required | Hardcoded Mozilla CA roots, limited support for constrained roots.                                    | No                           |
+
+**In general**: It is the opinion of the `rustls` and `rustls-platform-verifier` teams that this is the best default available for client-side libraries and applications
+making connections to TLS servers when running on common operating systems. This is because it gets both live trust information (new roots, explicit markers, and auto-managed CRLs)
+and better matches the common expectation of apps running on that platform (to use proxies, for example). Otherwise, it becomes your maintenance burden to
+ship updates right away in order to handle increasing numbers of positive and negative trust events in the WebPKI/certificate ecosystem, or risk availability and security concerns.
+
+#### Linux/BSD
+As of the time of writing, `rustls-platform-verifier` on these OSes only loads the trust stores from the OS once upon startup. This is the same behavior as `rustls-native-certs`, but the
+abstraction allows better behavior on the other platforms without extra work for downstreams.
+
+#### Other
+
+Alternatively, there is a clear answer to use static `webpki-roots` in your application instead if you are deploying containerized applications frequently, where root store changes
+will make it to production faster and any possibly used trust root is static by definition.
+
+Even though platform verifiers are sometimes implemented in memory-unsafe languages, it is very unlikely that Rust apps using this library will become a point of weakness.
+This is due to either using a smaller set of servers or just being less exposed then other critical functions of the operating system, default web browser, etc.
+But if your activity is identical or close to one of the following examples that process large amounts of untrusted input, a 100% Rust option like `webpki` is a more secure option: 
+- Seeing how many TLS servers `rustls` with a specific configuration can connect to.
+- Harvesting data from various untrusted TLS endpoints exposed on the internet.
+- Extracting info from a known-evil endpoint.
+- Scanning all TLS certificates on the open internet.
+
+`rustls-platform-verifier` is widely deployed by several applications that use the `rustls` stack, such as 1Password, Bitwarden, Signal, and `rustup`, on a wide set of OSes. 
+This means that it has received lots of exposure to edge cases and has real-world experience/expertise invested into it to ensure optimal compatibility and security.
+
 ## Installation and setup
 On most platforms, no setup should be required beyond adding the dependency via `cargo`:
 ```toml
-rustls-platform-verifier = "0.3"
+rustls-platform-verifier = "0.5"
 ```
 
 To get a rustls `ClientConfig` configured to use the platform verifier use:
 
 ```rust
-let config = rustls_platform_verifier::tls_config();
+use rustls::ClientConfig;
+use rustls_platform_verifier::ConfigVerifierExt;
+let config = ClientConfig::with_platform_verifier();
 ```
 
 This crate will use the [rustls process-default crypto provider](https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html#using-the-per-process-default-cryptoprovider). To construct a `ClientConfig` with a different `CryptoProvider`, use:
 
 ```rust
-let arc_crypto_provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-let config = rustls_platform_verifier::tls_config_with_provider(arc_crypto_provider);
-```
-
-If you want to adapt the configuration, you can build the `ClientConfig` like this:
-
-```rust
-use std::sync::Arc;
 use rustls::ClientConfig;
-use rustls_platform_verifier::Verifier;
-
-let mut config = ClientConfig::builder()
-    .dangerous() // The `Verifier` we're using is actually safe
-    .with_custom_certificate_verifier(Arc::new(Verifier::new()))
+use rustls_platform_verifier::BuilderVerifierExt;
+let arc_crypto_provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+let config = ClientConfig::builder_with_provider(arc_crypto_provider)
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_platform_verifier()
+    .unwrap()
     .with_no_client_auth();
 ```
 
 ### Android
 Some manual setup is required, outside of `cargo`, to use this crate on Android. In order to
 use Android's certificate verifier, the crate needs to call into the JVM. A small Kotlin
-component must be included in your app's build to support `rustls-platform-verifier`.
+component must be included in your app's build to support `rustls-platform-verifier`. If distributing a library, that component will need to be bundled into your release jar
+[as it is not yet available on Maven](https://github.com/rustls/rustls-platform-verifier/issues/115).
 
 #### Gradle Setup
 
 `rustls-platform-verifier` bundles the required native components in the crate, but the project must be setup to locate them
-automatically and correctly. These steps assume you are using `.gradle` Groovy files because they're the most common, but everything
-is 100% applicable to Kotlin script (`.gradle.kts`) configurations too with a few replacements.
+automatically and correctly. These steps assume you are using `.gradle` Groovy files because they're the most common, but if you are using
+Kotlin scripts (`.gradle.kts`) for configuration instead, an example snippet is included towards the end of this section.
 
 Inside of your project's `build.gradle` file, add the following code and Maven repository definition. If applicable, this should only be the one "app" sub-project that
 will actually be using this crate at runtime. With multiple projects running this, your Gradle configuration performance may degrade.
+
+<details>
+
+<summary>App Snippets</summary>
 
 `$PATH_TO_DEPENDENT_CRATE` is the relative path to the Cargo manifest (`Cargo.toml`) of any crate in your workspace that depends on `rustls-platform-verifier` from
 the location of your `build.gradle` file:
@@ -111,7 +148,7 @@ repositories {
 String findRustlsPlatformVerifierProject() {
     def dependencyText = providers.exec {
         it.workingDir = new File("../")
-        commandLine("cargo", "metadata", "--format-version", "1", "--manifest-path", "$PATH_TO_DEPENDENT_CRATE/Cargo.toml")
+        commandLine("cargo", "metadata", "--format-version", "1", "--filter-platform", "aarch64-linux-android", "--manifest-path", "$PATH_TO_DEPENDENT_CRATE/Cargo.toml")
     }.standardOutput.asText.get()
 
     def dependencyJson = new JsonSlurper().parseText(dependencyText)
@@ -125,11 +162,142 @@ Then, wherever you declare your dependencies, add the following:
 implementation "rustls:rustls-platform-verifier:latest.release"
 ```
 
+</details>
+
+<details>
+<summary>Library Snippets</summary>
+    
+```groovy
+import groovy.json.JsonSlurper
+
+// ...Your own script code could be here...
+
+File findRustlsPlatformVerifierClasses() {
+    def dependencyText = providers.exec {
+        it.workingDir = new File("../")
+        commandLine("cargo", "metadata", "--format-version", "1")
+    }.standardOutput.asText.get()
+
+    def dependencyJson = new JsonSlurper().parseText(dependencyText)
+    def manifestFile = file(dependencyJson.packages.find { it.name == "rustls-platform-verifier-android" }.manifest_path)
+    return new File(manifestFile.parentFile, "classes.jar")
+}
+```
+
+Then, wherever you declare your dependencies, add the following:
+```groovy
+implementation files(findRustlsPlatformVerifierClasses())
+```
+
+</details>
+
 Cargo automatically handles finding the downloaded crate in the correct location for your project. It also handles updating the version when
 new releases of `rustls-platform-verifier` are published. If you only use published releases, no extra maintenance should be required.
 
 These script snippets can be tweaked as best suits your project, but the `cargo metadata` invocation must be included so that the Android
 implementation part can be located on-disk.
+
+##### Kotlin and Gradle
+
+<details>
+<summary>Kotlin script App example</summary>
+
+`build.gradle.kts`:
+```kotlin
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+buildscript {
+    dependencies {
+        classpath(libs.kotlinx.serialization.json)
+    }
+}
+
+repositories {
+    rustlsPlatformVerifier()
+}
+
+fun RepositoryHandler.rustlsPlatformVerifier(): MavenArtifactRepository {
+    @Suppress("UnstableApiUsage")
+    val manifestPath = let {
+        val dependencyJson = providers.exec {
+            workingDir = File(project.rootDir, "../")
+            commandLine("cargo", "metadata", "--format-version", "1", "--filter-platform", "aarch64-linux-android", "--manifest-path", "$PATH_TO_DEPENDENT_CRATE/Cargo.toml")
+        }.standardOutput.asText
+
+        val path = Json.decodeFromString<JsonObject>(dependencyJson.get())
+            .getValue("packages")
+            .jsonArray
+            .first { element ->
+                element.jsonObject.getValue("name").jsonPrimitive.content == "rustls-platform-verifier-android"
+            }.jsonObject.getValue("manifest_path").jsonPrimitive.content
+
+        File(path)
+    }
+
+    return maven {
+        url = uri(File(manifestPath.parentFile, "maven").path)
+        metadataSources.artifact()
+    }
+}
+
+dependencies {
+    // `rustls-platform-verifier` is a Rust crate, but it also has a Kotlin component.
+    implementation(libs.rustls.platform.verifier)
+}
+```
+
+`libs.version.toml`:
+```toml
+# We always use the latest release because `cargo` keeps it in sync with the associated Rust crate's version.
+rustls-platform-verifier = { group = "rustls", name = "rustls-platform-verifier", version = "latest.release" }
+```
+</details>
+
+<details>
+<summary>Kotlin script Library example</summary>
+
+`build.gradle.kts`:
+```kotlin
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+buildscript {
+    dependencies {
+        classpath(libs.kotlinx.serialization.json)
+    }
+}
+
+fun findRustlsPlatformVerifierClasses(): File {
+    val dependencyJson = providers.exec {
+        workingDir = File(project.rootDir, "../")
+        commandLine("cargo", "metadata", "--format-version", "1")
+    }.standardOutput.asText
+
+    val path = Json.decodeFromString<JsonObject>(dependencyJson.get())
+        .getValue("packages")
+        .jsonArray
+        .first { element ->
+            element.jsonObject.getValue("name").jsonPrimitive.content == "rustls-platform-verifier-android"
+        }.jsonObject.getValue("manifest_path").jsonPrimitive.content
+
+    val manifestFile = File(path)
+    return File(manifestFile.parentFile, "classes.jar")
+}
+
+dependencies {
+    implementation(files(findRustlsPlatformVerifierClasses()))
+}
+```
+</details>
 
 #### Proguard
 
@@ -182,8 +350,8 @@ a `&'static` reference to something that implements the `android::Runtime` trait
 crate then uses to obtain the access when required to the JVM.
 
 ## Credits
-Made with ❤️ by the [1Password](https://1password.com/) and `rustls` teams. Portions of the Android and Windows implementation
-were adapted and referenced from Chromium's previous verifier implementations as well.
+Made with ❤️ by the [1Password](https://1password.com/) and `rustls` teams. Portions of the Android and Windows verifier
+implementations were adapted and referenced from Chromium's previous verifier implementations as well.
 
 #### License
 

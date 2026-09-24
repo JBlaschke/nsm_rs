@@ -1,13 +1,12 @@
 use alloc::boxed::Box;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::{Debug, Formatter};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use aws_lc_rs::cipher::{
-    DecryptionContext, PaddedBlockDecryptingKey, PaddedBlockEncryptingKey, UnboundCipherKey,
-    AES_256, AES_256_KEY_LEN, AES_CBC_IV_LEN,
+    AES_256, AES_256_KEY_LEN, AES_CBC_IV_LEN, DecryptionContext, PaddedBlockDecryptingKey,
+    PaddedBlockEncryptingKey, UnboundCipherKey,
 };
 use aws_lc_rs::{hmac, iv};
 
@@ -19,6 +18,7 @@ use crate::log::debug;
 use crate::polyfill::try_split_at;
 use crate::rand::GetRandomFailed;
 use crate::server::ProducesTickets;
+use crate::sync::Arc;
 
 /// A concrete, safe ticket creation mechanism.
 pub struct Ticketer {}
@@ -36,24 +36,6 @@ impl Ticketer {
         Ok(Arc::new(crate::ticketer::TicketRotator::new(
             6 * 60 * 60,
             make_ticket_generator,
-        )?))
-    }
-
-    /// Make the recommended `Ticketer`.  This produces tickets
-    /// with a 12 hour life and randomly generated keys.
-    ///
-    /// The `Ticketer` uses the [RFC 5077 §4] "Recommended Ticket Construction",
-    /// using AES 256 for encryption and HMAC-SHA256 for ciphertext authentication.
-    ///
-    /// [RFC 5077 §4]: https://www.rfc-editor.org/rfc/rfc5077#section-4
-    #[cfg(not(feature = "std"))]
-    pub fn new<M: crate::lock::MakeMutex>(
-        time_provider: &'static dyn TimeProvider,
-    ) -> Result<Arc<dyn ProducesTickets>, Error> {
-        Ok(Arc::new(crate::ticketer::TicketSwitcher::new::<M>(
-            6 * 60 * 60,
-            make_ticket_generator,
-            time_provider,
         )?))
     }
 }
@@ -203,7 +185,7 @@ impl ProducesTickets for Rfc5077Ticketer {
             .algorithm()
             .digest_algorithm()
             .output_len();
-        let (enc_state, mac) = try_split_at(ciphertext, ciphertext.len() - tag_len)?;
+        let (enc_state, mac) = try_split_at(ciphertext, ciphertext.len().checked_sub(tag_len)?)?;
 
         // Reconstitute the HMAC data to verify the tag.
         let mut hmac_data =
@@ -397,6 +379,20 @@ mod tests {
     }
 
     #[test]
+    fn refuses_decrypt_truncated_ciphertext() {
+        let t = make_ticket_generator().unwrap();
+        let cipher = t.encrypt(b"hello world").unwrap();
+        assert_eq!(t.decrypt(&cipher), Some(b"hello world".to_vec()));
+
+        // a truncation is rejected at any length; lengths that leave fewer
+        // bytes than the trailing tag after the key_name and iv prefix
+        // exercise the final split.
+        for len in 0..cipher.len() {
+            assert_eq!(t.decrypt(&cipher[..len]), None);
+        }
+    }
+
+    #[test]
     fn rfc5077ticketer_is_debug_and_producestickets() {
         use alloc::format;
 
@@ -404,7 +400,7 @@ mod tests {
 
         let t = make_ticket_generator().unwrap();
 
-        assert_eq!(format!("{:?}", t), "Rfc5077Ticketer { lifetime: 43200 }");
+        assert_eq!(format!("{t:?}"), "Rfc5077Ticketer { lifetime: 43200 }");
         assert!(t.enabled());
         assert_eq!(t.lifetime(), 43200);
     }

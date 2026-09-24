@@ -1,16 +1,5 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2014, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <gtest/gtest.h>
 
@@ -26,6 +15,8 @@
 #include "../internal.h"
 #include "../test/test_util.h"
 #include "internal.h"
+
+std::string GetTestData(const char *path);
 
 // kPKCS7NSS contains the certificate chain of mail.google.com, as saved by NSS
 // using the Chrome UI.
@@ -812,11 +803,9 @@ static void TestCertReparse(const uint8_t *der_bytes, size_t der_len) {
   const uint8_t *ptr = der_bytes;
   bssl::UniquePtr<PKCS7> pkcs7_obj(d2i_PKCS7(nullptr, &ptr, der_len));
   ASSERT_TRUE(pkcs7_obj);
-  if (is_ber) {
-    EXPECT_EQ(ptr, der_bytes + CBS_len(&der_conv_out));
-  } else {
-    EXPECT_EQ(ptr, der_bytes + der_len);
-  }
+  // |ASN1_item_d2i| natively handles BER, so the pointer always advances by
+  // the full input length regardless of whether the input is BER or DER.
+  EXPECT_EQ(ptr, der_bytes + der_len);
   bssl::UniquePtr<PKCS7> pkcs7_dup(PKCS7_dup(pkcs7_obj.get()));
   ASSERT_TRUE(pkcs7_dup);
   EXPECT_EQ(OBJ_obj2nid(pkcs7_obj.get()->type),
@@ -1421,6 +1410,9 @@ TEST(PKCS7Test, GettersSetters) {
   ASSERT_TRUE(psig);
   ASSERT_TRUE(pdig);
 
+  // Negative lengths not valid
+  EXPECT_FALSE(d2i_PKCS7(nullptr, &p7_der, -1));
+
   bssl::UniquePtr<PKCS7> p7_dup(PKCS7_dup(p7.get()));
   ASSERT_TRUE(p7_dup);
   EXPECT_TRUE(PKCS7_type_is_signed(p7_dup.get()));
@@ -1573,6 +1565,32 @@ TEST(PKCS7Test, GettersSetters) {
   EXPECT_TRUE(PKCS7_add_recipient_info(p7.get(), p7ri));
 }
 
+TEST(PKCS7Test, SetTypeChangeType) {
+  // Regression: |PKCS7_set_type| must free any existing content with the
+  // destructor matching the *current* |p7->type| before installing the new
+  // type, otherwise a later call frees the prior union member through the
+  // wrong destructor. ASAN should flag any misuse.
+  bssl::UniquePtr<PKCS7> p7(PKCS7_new());
+  ASSERT_TRUE(p7);
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_signed));
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_digest));
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_data));
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_signedAndEnveloped));
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_enveloped));
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_encrypted));
+  EXPECT_TRUE(PKCS7_type_is_encrypted(p7.get()));
+
+  // Also cover the default arm: a PKCS7 whose current content is |d.other|
+  // (e.g. parsed with an unrecognized content OID) must be freed via
+  // |ASN1_TYPE_free| before installing a known type.
+  p7.reset(PKCS7_new());
+  ASSERT_TRUE(p7);
+  p7->d.other = ASN1_TYPE_new();
+  ASSERT_TRUE(p7->d.other);
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_signed));
+  EXPECT_TRUE(PKCS7_type_is_signed(p7.get()));
+}
+
 TEST(PKCS7Test, DataInitFinal) {
   bssl::UniquePtr<PKCS7> p7;
   bssl::UniquePtr<BIO> bio, bio_in;
@@ -1699,7 +1717,8 @@ TEST(PKCS7Test, TestEnveloped) {
   // NOTE: we make |buf| larger than |pt_len| in case padding gets added.
   // without the extra room, we sometimes overflow into the next variable on the
   // stack.
-  uint8_t buf[pt_len + EVP_MAX_BLOCK_LENGTH], decrypted[pt_len + EVP_MAX_BLOCK_LENGTH];
+  uint8_t buf[pt_len + EVP_MAX_BLOCK_LENGTH];
+  uint8_t decrypted[pt_len + EVP_MAX_BLOCK_LENGTH];
 
   OPENSSL_cleanse(buf, sizeof(buf));
   OPENSSL_memset(buf, 'A', pt_len);
@@ -1828,9 +1847,9 @@ TEST(PKCS7Test, TestEnveloped) {
   // expectation. Ideally we'd find a way to access the padded plaintext and
   // account for this deterministically by checking the random "padding" and
   // adusting accordingly.
-  const size_t max_decrypt =
-    pt_len + EVP_CIPHER_block_size(EVP_aes_128_cbc());
-  const size_t decrypted_len = (size_t)BIO_read(bio.get(), decrypted, sizeof(decrypted));
+  const size_t max_decrypt = pt_len + EVP_CIPHER_block_size(EVP_aes_128_cbc());
+  const size_t decrypted_len =
+      (size_t)BIO_read(bio.get(), decrypted, sizeof(decrypted));
   ASSERT_LE(decrypted_len, sizeof(decrypted));
   if (decrypted_len > pt_len) {
     EXPECT_LT(max_decrypt - 4, decrypted_len);
@@ -1938,6 +1957,10 @@ TEST(PKCS7Test, TestSigned) {
                       /*flags*/ 0));
   ASSERT_TRUE(p7);
   EXPECT_TRUE(PKCS7_type_is_signed(p7.get()));
+
+  STACK_OF(X509) *signers = PKCS7_get0_signers(p7.get(), certs.get(), 0);
+  EXPECT_TRUE(signers);
+  sk_X509_free(signers);
   EXPECT_FALSE(PKCS7_is_detached(p7.get()));
 
   // attached, check |outdata|
@@ -2031,4 +2054,579 @@ TEST(PKCS7Test, TestSigned) {
   bio_out.reset(BIO_new(BIO_s_mem()));
   EXPECT_FALSE(PKCS7_verify(p7.get(), certs.get(), store.get(), bio_in.get(),
                             bio_out.get(), /*flags*/ 0));
+}
+
+// Regression test: PKCS7_verify with detached data and multiple digest
+// algorithms must free all intermediate digest BIOs, not just the head.
+TEST(PKCS7Test, VerifyDetachedMultiDigestNoLeak) {
+  // Generate two distinct ECDSA key-pairs and leaf certificates so that each
+  // signer can use a different digest algorithm.
+  bssl::UniquePtr<EC_KEY> root_ec(EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
+  ASSERT_TRUE(root_ec);
+  ASSERT_TRUE(EC_KEY_generate_key(root_ec.get()));
+  bssl::UniquePtr<EVP_PKEY> root_pkey(EVP_PKEY_new());
+  ASSERT_TRUE(EVP_PKEY_set1_EC_KEY(root_pkey.get(), root_ec.get()));
+
+  bssl::UniquePtr<EC_KEY> leaf1_ec(EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
+  ASSERT_TRUE(leaf1_ec);
+  ASSERT_TRUE(EC_KEY_generate_key(leaf1_ec.get()));
+  bssl::UniquePtr<EVP_PKEY> leaf1_pkey(EVP_PKEY_new());
+  ASSERT_TRUE(EVP_PKEY_set1_EC_KEY(leaf1_pkey.get(), leaf1_ec.get()));
+
+  bssl::UniquePtr<EC_KEY> leaf2_ec(EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
+  ASSERT_TRUE(leaf2_ec);
+  ASSERT_TRUE(EC_KEY_generate_key(leaf2_ec.get()));
+  bssl::UniquePtr<EVP_PKEY> leaf2_pkey(EVP_PKEY_new());
+  ASSERT_TRUE(EVP_PKEY_set1_EC_KEY(leaf2_pkey.get(), leaf2_ec.get()));
+
+  bssl::UniquePtr<ASN1_TIME> not_before(ASN1_TIME_set_posix(nullptr, 0L));
+  bssl::UniquePtr<ASN1_TIME> not_after(
+      ASN1_TIME_set_posix(nullptr, INT64_C(253402300799)));
+
+  bssl::UniquePtr<X509> root =
+      MakeTestCert("Root", "Root", root_pkey.get(), /*is_ca=*/true);
+  ASSERT_TRUE(root);
+  ASSERT_TRUE(X509_set_notBefore(root.get(), not_before.get()));
+  ASSERT_TRUE(X509_set_notAfter(root.get(), not_after.get()));
+  ASSERT_TRUE(X509_sign(root.get(), root_pkey.get(), EVP_sha256()));
+
+  bssl::UniquePtr<X509> leaf1 =
+      MakeTestCert("Root", "Leaf1", leaf1_pkey.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf1);
+  ASSERT_TRUE(X509_set_notBefore(leaf1.get(), not_before.get()));
+  ASSERT_TRUE(X509_set_notAfter(leaf1.get(), not_after.get()));
+  ASSERT_TRUE(X509_sign(leaf1.get(), root_pkey.get(), EVP_sha256()));
+
+  bssl::UniquePtr<X509> leaf2 =
+      MakeTestCert("Root", "Leaf2", leaf2_pkey.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf2);
+  ASSERT_TRUE(X509_set_notBefore(leaf2.get(), not_before.get()));
+  ASSERT_TRUE(X509_set_notAfter(leaf2.get(), not_after.get()));
+  ASSERT_TRUE(X509_sign(leaf2.get(), root_pkey.get(), EVP_sha256()));
+
+  // Build a PKCS7 signed structure with two signers using *different* digest
+  // algorithms. This causes PKCS7_dataInit to create two digest BIOs.
+  bssl::UniquePtr<PKCS7> p7(PKCS7_new());
+  ASSERT_TRUE(p7);
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_signed));
+  ASSERT_TRUE(PKCS7_content_new(p7.get(), NID_pkcs7_data));
+
+  // Signer 1: SHA-256
+  PKCS7_SIGNER_INFO *si1 = PKCS7_SIGNER_INFO_new();
+  ASSERT_TRUE(si1);
+  ASSERT_TRUE(
+      PKCS7_SIGNER_INFO_set(si1, leaf1.get(), leaf1_pkey.get(), EVP_sha256()));
+  ASSERT_TRUE(PKCS7_add_signer(p7.get(), si1));
+  ASSERT_TRUE(PKCS7_add_certificate(p7.get(), leaf1.get()));
+
+  // Signer 2: SHA-384 (different digest => second digest BIO in chain)
+  PKCS7_SIGNER_INFO *si2 = PKCS7_SIGNER_INFO_new();
+  ASSERT_TRUE(si2);
+  ASSERT_TRUE(
+      PKCS7_SIGNER_INFO_set(si2, leaf2.get(), leaf2_pkey.get(), EVP_sha384()));
+  ASSERT_TRUE(PKCS7_add_signer(p7.get(), si2));
+  ASSERT_TRUE(PKCS7_add_certificate(p7.get(), leaf2.get()));
+
+  // Make it a detached signature.
+  ASN1_OCTET_STRING_free(p7->d.sign->contents->d.data);
+  p7->d.sign->contents->d.data = NULL;
+
+  // The signatures don't need to be valid for this leak test -- the leak
+  // happens during teardown regardless of verification outcome. Just add dummy
+  // signer info entries so PKCS7_get_signer_info returns them and the code
+  // path that builds the BIO chain in PKCS7_dataInit is reached.
+
+  // Call PKCS7_verify with detached indata. The BIO chain teardown is where
+  // intermediate digest BIOs are leaked.
+  uint8_t buf[64];
+  OPENSSL_memset(buf, 'A', sizeof(buf));
+  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+  ASSERT_TRUE(X509_STORE_add_cert(store.get(), root.get()));
+
+  bssl::UniquePtr<BIO> indata(BIO_new_mem_buf(buf, sizeof(buf)));
+  ASSERT_TRUE(indata);
+  bssl::UniquePtr<BIO> outdata(BIO_new(BIO_s_mem()));
+  ASSERT_TRUE(outdata);
+
+  // Verification will fail (signatures are not computed), but the BIO chain
+  // teardown still runs to exercise the leak.
+  PKCS7_verify(p7.get(), nullptr, store.get(), indata.get(), outdata.get(),
+               PKCS7_NOVERIFY);
+}
+
+TEST(PKCS7Test, PKCS7PrintNoop) {
+  bssl::UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
+  bssl::UniquePtr<PKCS7> p7(PKCS7_new());
+  ASSERT_TRUE(PKCS7_print_ctx(bio.get(), p7.get(), 0, nullptr));
+
+  const uint8_t *contents;
+  size_t len;
+  ASSERT_TRUE(BIO_mem_contents(bio.get(), &contents, &len));
+  EXPECT_EQ(Bytes(contents, len), Bytes("PKCS7 printing is not supported"));
+}
+
+TEST(PKCS7Test, SetDetached) {
+  bssl::UniquePtr<PKCS7> p7(PKCS7_new());
+  // |PKCS7_set_detached| does not work on an uninitialized |PKCS7|.
+  EXPECT_FALSE(PKCS7_set_detached(p7.get(), 0));
+  EXPECT_FALSE(PKCS7_set_detached(p7.get(), 1));
+  EXPECT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_signed));
+  EXPECT_TRUE(PKCS7_type_is_signed(p7.get()));
+
+  PKCS7 *p7_internal = PKCS7_new();
+  EXPECT_TRUE(PKCS7_set_type(p7_internal, NID_pkcs7_data));
+  EXPECT_TRUE(PKCS7_type_is_data(p7_internal));
+  EXPECT_TRUE(PKCS7_set_content(p7.get(), p7_internal));
+
+  // Access the |p7|'s internal contents to verify that |PKCS7_set_detached|
+  // has the right behavior.
+  EXPECT_TRUE(p7.get()->d.sign->contents->d.data);
+  EXPECT_TRUE(PKCS7_set_detached(p7.get(), 0));
+  EXPECT_TRUE(p7.get()->d.sign->contents->d.data);
+  EXPECT_FALSE(PKCS7_set_detached(p7.get(), 2));
+  EXPECT_TRUE(p7.get()->d.sign->contents->d.data);
+  // data is "detached" when |PKCS7_set_detached| is set with 1.
+  EXPECT_TRUE(PKCS7_set_detached(p7.get(), 1));
+  EXPECT_FALSE(p7.get()->d.sign->contents->d.data);
+}
+
+TEST(PKCS7Test, PKCS7SignedAttributes) {
+  // This file was generated with the following command:
+  // openssl smime -sign -in input.txt -signer crypto/ocsp/aws/ca_cert.pem
+  //        -inkey crypto/ocsp/aws/ca_key.pem -out signed.p7s -outform PEM
+  //        -nodetach -md sha512
+  //
+  // Files with signed attributes aren't generatable with AWS-LC for now, as
+  // |PKCS7_NOATTR| is always assumed with |PKCS7_sign|. See |PKCS7_sign|
+  // for more details.
+  static const char kPKCS7SignedAttributes[] = R"(
+-----BEGIN PKCS7-----
+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
+-----END PKCS7-----
+)";
+
+  // Timestamp for March 11, 2025.
+  static const int64_t kReferencePKCS7Time = 1741824000;
+
+  const bssl::UniquePtr<BIO> bio(
+      BIO_new_mem_buf(kPKCS7SignedAttributes, strlen(kPKCS7SignedAttributes)));
+  ASSERT_TRUE(bio);
+  bssl::UniquePtr<PKCS7> pkcs7(
+      PEM_read_bio_PKCS7(bio.get(), nullptr, nullptr, nullptr));
+  ASSERT_TRUE(pkcs7);
+  ASSERT_TRUE(PKCS7_type_is_signed(pkcs7.get()));
+  STACK_OF(X509) *signers = PKCS7_get0_signers(pkcs7.get(), nullptr, 0);
+  EXPECT_TRUE(signers);
+  sk_X509_free(signers);
+
+  // Set up trust store for verification.
+  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+  bssl::UniquePtr<X509> ca_cert(CertFromPEM(
+      GetTestData(std::string("crypto/ocsp/test/aws/ca_cert.pem").c_str())
+          .c_str()));
+  ASSERT_TRUE(X509_STORE_add_cert(store.get(), ca_cert.get()));
+
+  // Set a valid time to avoid time bomb in tests.
+  X509_VERIFY_PARAM *param = X509_STORE_get0_param(store.get());
+  X509_VERIFY_PARAM_set_time_posix(param, kReferencePKCS7Time);
+
+  bssl::UniquePtr<BIO> out(BIO_new(BIO_s_mem()));
+  EXPECT_TRUE(PKCS7_verify(pkcs7.get(), nullptr, store.get(), nullptr,
+                           out.get(), /*flags*/ 0));
+
+  // Run |PKCS7_verify| again to check that we're consuming a copy of the
+  // underlying |EVP_MD_CTX|.
+  EXPECT_TRUE(PKCS7_verify(pkcs7.get(), nullptr, store.get(), nullptr,
+                           out.get(), /*flags*/ 0));
+}
+
+TEST(PKCS7Test, PKCS7SignedAttributesRuby) {
+  // The following test file was taken from ruby/openssl's pkcs7 tests.
+  static const char kPKCS7Ruby[] = R"(
+-----BEGIN PKCS7-----
+MIIHSwYJKoZIhvcNAQcCoIIHPDCCBzgCAQExCzAJBgUrDgMCGgUAMIIDiAYJKoZI
+hvcNAQcBoIIDeQSCA3UwgAYJKoZIhvcNAQcDoIAwgAIBADGCARAwggEMAgEAMHUw
+cDEQMA4GA1UECgwHZXhhbXBsZTEXMBUGA1UEAwwOVEFSTUFDIFJPT1QgQ0ExIjAg
+BgkqhkiG9w0BCQEWE3NvbWVvbmVAZXhhbXBsZS5vcmcxCzAJBgNVBAYTAlVTMRIw
+EAYDVQQHDAlUb3duIEhhbGwCAWYwDQYJKoZIhvcNAQEBBQAEgYBspXXse8ZhG1FE
+E3PVAulbvrdR52FWPkpeLvSjgEkYzTiUi0CC3poUL1Ku5mOlavWAJgoJpFICDbvc
+N4ZNDCwOhnzoI9fMGmm1gvPQy15BdhhZRo9lP7Ga/Hg2APKT0/0yhPsmJ+w+u1e7
+OoJEVeEZ27x3+u745bGEcu8of5th6TCABgkqhkiG9w0BBwEwFAYIKoZIhvcNAwcE
+CBNs2U5mMsd/oIAEggIQU6cur8QBz02/4eMpHdlU9IkyrRMiaMZ/ky9zecOAjnvY
+d2jZqS7RhczpaNJaSli3GmDsKrF+XqE9J58s9ScGqUigzapusTsxIoRUPr7Ztb0a
+pg8VWDipAsuw7GfEkgx868sV93uC4v6Isfjbhd+JRTFp/wR1kTi7YgSXhES+RLUW
+gQbDIDgEQYxJ5U951AJtnSpjs9za2ZkTdd8RSEizJK0bQ1vqLoApwAVgZqluATqQ
+AHSDCxhweVYw6+y90B9xOrqPC0eU7Wzryq2+Raq5ND2Wlf5/N11RQ3EQdKq/l5Te
+ijp9PdWPlkUhWVoDlOFkysjk+BE+7AkzgYvz9UvBjmZsMsWqf+KsZ4S8/30ndLzu
+iucsu6eOnFLLX8DKZxV6nYffZOPzZZL8hFBcE7PPgSdBEkazMrEBXq1j5mN7exbJ
+NOA5uGWyJNBMOCe+1JbxG9UeoqvCCTHESxEeDu7xR3NnSOD47n7cXwHr81YzK2zQ
+5oWpP3C8jzI7tUjLd1S0Z3Psd17oaCn+JOfUtuB0nc3wfPF/WPo0xZQodWxp2/Cl
+EltR6qr1zf5C7GwmLzBZ6bHFAIT60/JzV0/56Pn8ztsRFtI4cwaBfTfvnwi8/sD9
+/LYOMY+/b6UDCUSR7RTN7XfrtAqDEzSdzdJkOWm1jvM8gkLmxpZdvxG3ZvDYnEQE
+5Nq+un5nAny1wf3rWierBAjE5ntiAmgs5AAAAAAAAAAAAACgggHqMIIB5jCCAU+g
+AwIBAgIBATANBgkqhkiG9w0BAQUFADAvMS0wKwYDVQQDEyQwQUM5RjAyNi1EQ0VB
+LTRDMTItOTEyNy1DMEZEN0QyQThCNUEwHhcNMTIxMDE5MDk0NTQ3WhcNMTMxMDE5
+MDk0NTQ3WjAvMS0wKwYDVQQDEyQwQUM5RjAyNi1EQ0VBLTRDMTItOTEyNy1DMEZE
+N0QyQThCNUEwgZ8wDQYJKoZIhvcNAQEBBQADgY0AMIGJAoGBALTsTNyGIsKvyw56
+WI3Gll/RmjsupkrdEtPbx7OjS9MEgyhOAf9+u6CV0LJGHpy7HUeROykF6xpbSdCm
+Mr6kNObl5N0ljOb8OmV4atKjmGg1rWawDLyDQ9Dtuby+dzfHtzAzP+J/3ZoOtSqq
+AHVTnCclU1pm/uHN0HZ5nL5iLJTvAgMBAAGjEjAQMA4GA1UdDwEB/wQEAwIFoDAN
+BgkqhkiG9w0BAQUFAAOBgQA8K+BouEV04HRTdMZd3akjTQOm6aEGW4nIRnYIf8ZV
+mvUpLirVlX/unKtJinhGisFGpuYLMpemx17cnGkBeLCQRvHQjC+ho7l8/LOGheMS
+nvu0XHhvmJtRbm8MKHhogwZqHFDnXonvjyqhnhEtK5F2Fimcce3MoF2QtEe0UWv/
+8DGCAaowggGmAgEBMDQwLzEtMCsGA1UEAxMkMEFDOUYwMjYtRENFQS00QzEyLTkx
+MjctQzBGRDdEMkE4QjVBAgEBMAkGBSsOAwIaBQCggc0wEgYKYIZIAYb4RQEJAjEE
+EwIxOTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0x
+MjEwMTkwOTQ1NDdaMCAGCmCGSAGG+EUBCQUxEgQQ2EFUJdQNwQDxclIQ8qNyYzAj
+BgkqhkiG9w0BCQQxFgQUy8GFXPpAwRJUT3rdvNC9Pn+4eoswOAYKYIZIAYb4RQEJ
+BzEqEygwRkU3QzJEQTVEMDc2NzFFOTcxNDlCNUE3MDRCMERDNkM4MDYwRDJBMA0G
+CSqGSIb3DQEBAQUABIGAWUNdzvU2iiQOtihBwF0h48Nnw/2qX8uRjg6CVTOMcGji
+BxjUMifEbT//KJwljshl4y3yBLqeVYLOd04k6aKSdjgdZnrnUPI6p5tL5PfJkTAE
+L6qflZ9YCU5erE4T5U98hCQBMh4nOYxgaTjnZzhpkKQuEiKq/755cjzTzlI/eok=
+-----END PKCS7-----
+)";
+
+  // The test has an expected output. Check that we output the same contents
+  // as OpenSSL.
+  static const char kPKCS7RubyOpenSSLOutput[] =
+      R"(-----BEGIN PKCS7-----
+MIIDawYJKoZIhvcNAQcDoIIDXDCCA1gCAQAxggEQMIIBDAIBADB1MHAxEDAOBgNV
+BAoMB2V4YW1wbGUxFzAVBgNVBAMMDlRBUk1BQyBST09UIENBMSIwIAYJKoZIhvcN
+AQkBFhNzb21lb25lQGV4YW1wbGUub3JnMQswCQYDVQQGEwJVUzESMBAGA1UEBwwJ
+VG93biBIYWxsAgFmMA0GCSqGSIb3DQEBAQUABIGAbKV17HvGYRtRRBNz1QLpW763
+UedhVj5KXi70o4BJGM04lItAgt6aFC9SruZjpWr1gCYKCaRSAg273DeGTQwsDoZ8
+6CPXzBpptYLz0MteQXYYWUaPZT+xmvx4NgDyk9P9MoT7JifsPrtXuzqCRFXhGdu8
+d/ru+OWxhHLvKH+bYekwggI9BgkqhkiG9w0BBwEwFAYIKoZIhvcNAwcECBNs2U5m
+Msd/gIICGFOnLq/EAc9Nv+HjKR3ZVPSJMq0TImjGf5Mvc3nDgI572Hdo2aku0YXM
+6WjSWkpYtxpg7Cqxfl6hPSefLPUnBqlIoM2qbrE7MSKEVD6+2bW9GqYPFVg4qQLL
+sOxnxJIMfOvLFfd7guL+iLH424XfiUUxaf8EdZE4u2IEl4REvkS1FoEGwyA4BEGM
+SeVPedQCbZ0qY7Pc2tmZE3XfEUhIsyStG0Nb6i6AKcAFYGapbgE6kAB0gwsYcHlW
+MOvsvdAfcTq6jwtHlO1s68qtvkWquTQ9lpX+fzddUUNxEHSqv5eU3oo6fT3Vj5ZF
+IVlaA5ThZMrI5PgRPuwJM4GL8/VLwY5mbDLFqn/irGeEvP99J3S87ornLLunjpxS
+y1/AymcVep2H32Tj82WS/IRQXBOzz4EnQRJGszKxAV6tY+Zje3sWyTTgObhlsiTQ
+TDgnvtSW8RvVHqKrwgkxxEsRHg7u8UdzZ0jg+O5+3F8B6/NWMyts0OaFqT9wvI8y
+O7VIy3dUtGdz7Hde6Ggp/iTn1LbgdJ3N8Hzxf1j6NMWUKHVsadvwpRJbUeqq9c3+
+QuxsJi8wWemxxQCE+tPyc1dP+ej5/M7bERbSOHMGgX03758IvP7A/fy2DjGPv2+l
+AwlEke0Uze1367QKgxM0nc3SZDlptY7zPIJC5saWXb8Rt2bw2JxEBOTavrp+ZwJ8
+tcH961onq8Tme2ICaCzk
+-----END PKCS7-----
+)";
+
+  const bssl::UniquePtr<BIO> bio(
+      BIO_new_mem_buf(kPKCS7Ruby, strlen(kPKCS7Ruby)));
+  ASSERT_TRUE(bio);
+  bssl::UniquePtr<PKCS7> pkcs7(
+      PEM_read_bio_PKCS7(bio.get(), nullptr, nullptr, nullptr));
+  ASSERT_TRUE(pkcs7);
+  ASSERT_TRUE(PKCS7_type_is_signed(pkcs7.get()));
+
+  // Verify the file how Ruby's tests do it.
+  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+  bssl::UniquePtr<BIO> out(BIO_new(BIO_s_mem()));
+  EXPECT_TRUE(PKCS7_verify(pkcs7.get(), nullptr, store.get(), nullptr,
+                           out.get(), /*flags*/ PKCS7_NOVERIFY));
+
+  // The following is bit wonky with the pkcs7 bytes being read and rewritten,
+  // but that's how Ruby's underlying PKCS7 test gets the PEM output.
+  BUF_MEM *buf;
+  BIO_get_mem_ptr(out.get(), &buf);
+  bssl::UniquePtr<BIO> out2(BIO_new_mem_buf(buf->data, buf->length));
+  bssl::UniquePtr<PKCS7> new_pk7(d2i_PKCS7_bio(out2.get(), nullptr));
+  ASSERT_TRUE(new_pk7);
+
+  bssl::UniquePtr<BIO> out3(BIO_new(BIO_s_mem()));
+  ASSERT_TRUE(PEM_write_bio_PKCS7(out3.get(), new_pk7.get()));
+  BIO_get_mem_ptr(out3.get(), &buf);
+  EXPECT_EQ(Bytes(buf->data, buf->length), Bytes(kPKCS7RubyOpenSSLOutput));
+}
+
+
+static const unsigned char test_data[] = {0x30, 0x02, 0x01, 0x02};
+
+static bssl::UniquePtr<PKCS7> pkcs7_with_other(const unsigned char *data,
+                                               int data_len) {
+  bssl::UniquePtr<PKCS7> p7(PKCS7_new());
+  if (!p7) {
+    return nullptr;
+  }
+
+  bssl::UniquePtr<ASN1_STRING> seq(ASN1_STRING_new());
+  if (!seq || !ASN1_STRING_set(seq.get(), data, data_len)) {
+    return nullptr;
+  }
+
+  // Set up the ASN.1 structure
+  p7->d.other = ASN1_TYPE_new();
+  if (!p7->d.other) {
+    return nullptr;
+  }
+
+  ASN1_TYPE_set(p7->d.other, V_ASN1_OCTET_STRING, seq.release());
+
+  return p7;
+}
+
+TEST(PKCS7Test, OtherFieldMemoryLeak) {
+  // Set up the ASN.1 structure
+  // |p7->type| is intentionally undefined. OpenSSL frees all contents whether
+  // it's defined or not.
+  bssl::UniquePtr<PKCS7> p7(pkcs7_with_other(test_data, sizeof(test_data)));
+
+  ASSERT_EQ(p7->d.other->type, V_ASN1_OCTET_STRING);
+  EXPECT_EQ(p7->d.other->value.sequence->length,
+            static_cast<int>(sizeof(test_data)));
+  EXPECT_EQ(OPENSSL_memcmp(p7->d.other->value.sequence->data, test_data,
+                           sizeof(test_data)),
+            0);
+}
+
+TEST(PKCS7Test, SerdeOtherField) {
+  // Create PKCS7 and required ASN.1 structures. |p7->type | needs to be defined
+  // to be properly serialized.
+  bssl::UniquePtr<PKCS7> p7(pkcs7_with_other(test_data, sizeof(test_data)));
+  p7->type = OBJ_nid2obj(NID_pkcs7);
+
+  // Serialize the original object. This should echo back the original saved
+  // bytes.
+  uint8_t *bytes = nullptr;
+  int bytes_len = i2d_PKCS7(p7.get(), &bytes);
+  ASSERT_GT(bytes_len, 0);
+  bssl::UniquePtr<uint8_t> free_bytes(bytes);
+
+  const uint8_t *ptr = bytes;
+  bssl::UniquePtr<PKCS7> pkcs7_obj(d2i_PKCS7(nullptr, &ptr, bytes_len));
+  ASSERT_TRUE(pkcs7_obj);
+  ASSERT_EQ(p7->d.other->type, V_ASN1_OCTET_STRING);
+  EXPECT_EQ(p7->d.other->value.sequence->length,
+            static_cast<int>(sizeof(test_data)));
+  EXPECT_EQ(OPENSSL_memcmp(p7->d.other->value.sequence->data, test_data,
+                           sizeof(test_data)),
+            0);
+}
+
+// Test for signature bypass when authenticated attributes contain a
+// malformed attribute that causes ASN.1 re-encoding to fail.
+TEST(PKCS7Test, SignatureBypassWithMalformedAuthAttr) {
+  const unsigned char original_data[] = "Original legitimate content";
+  const size_t original_len = sizeof(original_data) - 1;
+  const unsigned char malicious_data[] = "MALICIOUS MODIFIED CONTENT!";
+  const size_t malicious_len = sizeof(malicious_data) - 1;
+
+  // Generate RSA key pair
+  bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
+  ASSERT_TRUE(pkey);
+  bssl::UniquePtr<EVP_PKEY_CTX> pkey_ctx(
+      EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr));
+  ASSERT_TRUE(pkey_ctx);
+  ASSERT_TRUE(EVP_PKEY_keygen_init(pkey_ctx.get()));
+  ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_keygen_bits(pkey_ctx.get(), 2048));
+  EVP_PKEY *pkey_raw = nullptr;
+  ASSERT_TRUE(EVP_PKEY_keygen(pkey_ctx.get(), &pkey_raw));
+  pkey.reset(pkey_raw);
+
+  // Create self-signed certificate
+  bssl::UniquePtr<X509> cert(X509_new());
+  ASSERT_TRUE(cert);
+  ASSERT_TRUE(X509_set_version(cert.get(), 2));
+  ASSERT_TRUE(ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), 1));
+  X509_gmtime_adj(X509_get_notBefore(cert.get()), 0);
+  X509_gmtime_adj(X509_get_notAfter(cert.get()), 31536000L);
+  ASSERT_TRUE(X509_set_pubkey(cert.get(), pkey.get()));
+  X509_NAME *name = X509_get_subject_name(cert.get());
+  ASSERT_TRUE(X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                          (const unsigned char *)"Test",
+                                          -1, -1, 0));
+  ASSERT_TRUE(X509_set_issuer_name(cert.get(), name));
+  ASSERT_TRUE(X509_sign(cert.get(), pkey.get(), EVP_sha256()));
+
+  // Set up trust store
+  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+  ASSERT_TRUE(store);
+  ASSERT_TRUE(X509_STORE_add_cert(store.get(), cert.get()));
+
+  // Compute SHA-256 digest of original data
+  unsigned char md[SHA256_DIGEST_LENGTH];
+  SHA256(original_data, original_len, md);
+
+  // Create the PKCS7 SignedData structure
+  bssl::UniquePtr<PKCS7> p7(PKCS7_new());
+  ASSERT_TRUE(p7);
+  ASSERT_TRUE(PKCS7_set_type(p7.get(), NID_pkcs7_signed));
+  ASSERT_TRUE(PKCS7_content_new(p7.get(), NID_pkcs7_data));
+
+  // Set the content payload
+  ASSERT_TRUE(ASN1_OCTET_STRING_set(p7->d.sign->contents->d.data,
+                                     original_data, (int)original_len));
+
+  // Add SHA-256 to the digest algorithms set
+  X509_ALGOR *alg = X509_ALGOR_new();
+  ASSERT_TRUE(alg);
+  ASSERT_TRUE(
+      X509_ALGOR_set0(alg, OBJ_nid2obj(NID_sha256), V_ASN1_NULL, nullptr));
+  ASSERT_TRUE(sk_X509_ALGOR_push(p7->d.sign->md_algs, alg));
+
+  // Create and configure SIGNER_INFO
+  PKCS7_SIGNER_INFO *sinfo = PKCS7_SIGNER_INFO_new();
+  ASSERT_TRUE(sinfo);
+  ASSERT_TRUE(
+      PKCS7_SIGNER_INFO_set(sinfo, cert.get(), pkey.get(), EVP_sha256()));
+
+  // Build authenticated attributes: contentType + messageDigest
+  sinfo->auth_attr = sk_X509_ATTRIBUTE_new_null();
+  ASSERT_TRUE(sinfo->auth_attr);
+
+  // Add contentType attribute (pkcs7-data)
+  ASN1_OBJECT *content_type_obj = OBJ_dup(OBJ_nid2obj(NID_pkcs7_data));
+  ASSERT_TRUE(content_type_obj);
+  X509_ATTRIBUTE *ct_attr = X509_ATTRIBUTE_create(
+      NID_pkcs9_contentType, V_ASN1_OBJECT, content_type_obj);
+  ASSERT_TRUE(ct_attr);
+  ASSERT_TRUE(sk_X509_ATTRIBUTE_push(sinfo->auth_attr, ct_attr));
+
+  // Add messageDigest attribute
+  ASN1_OCTET_STRING *digest_os = ASN1_OCTET_STRING_new();
+  ASSERT_TRUE(digest_os);
+  ASSERT_TRUE(ASN1_OCTET_STRING_set(digest_os, md, SHA256_DIGEST_LENGTH));
+  X509_ATTRIBUTE *md_attr = X509_ATTRIBUTE_create(
+      NID_pkcs9_messageDigest, V_ASN1_OCTET_STRING, digest_os);
+  ASSERT_TRUE(md_attr);
+  ASSERT_TRUE(sk_X509_ATTRIBUTE_push(sinfo->auth_attr, md_attr));
+
+  // DER-encode the authenticated attributes for signing
+  unsigned char *attr_der = nullptr;
+  int attr_der_len = ASN1_item_i2d((ASN1_VALUE *)sinfo->auth_attr, &attr_der,
+                                    ASN1_ITEM_rptr(PKCS7_ATTR_VERIFY));
+  ASSERT_GT(attr_der_len, 0);
+  ASSERT_TRUE(attr_der);
+
+  // Sign the DER-encoded authenticated attributes
+  bssl::UniquePtr<EVP_MD_CTX> md_ctx(EVP_MD_CTX_new());
+  ASSERT_TRUE(md_ctx);
+  ASSERT_TRUE(EVP_DigestSignInit(md_ctx.get(), nullptr, EVP_sha256(), nullptr,
+                                  pkey.get()));
+  ASSERT_TRUE(EVP_DigestSignUpdate(md_ctx.get(), attr_der, attr_der_len));
+
+  size_t sig_len = 0;
+  ASSERT_TRUE(EVP_DigestSignFinal(md_ctx.get(), nullptr, &sig_len));
+  unsigned char *sig =
+      (unsigned char *)OPENSSL_malloc(sig_len);
+  ASSERT_TRUE(sig);
+  ASSERT_TRUE(EVP_DigestSignFinal(md_ctx.get(), sig, &sig_len));
+
+  // Set the signature on the signer info
+  ASSERT_TRUE(
+      ASN1_OCTET_STRING_set(sinfo->enc_digest, sig, (int)sig_len));
+  OPENSSL_free(sig);
+  OPENSSL_free(attr_der);
+
+  // Attach signer info and certificate to the PKCS7
+  ASSERT_TRUE(sk_PKCS7_SIGNER_INFO_push(p7->d.sign->signer_info, sinfo));
+  ASSERT_TRUE(PKCS7_add_certificate(p7.get(), cert.get()));
+
+  // Verify the original (unmodified) message succeeds
+  bssl::UniquePtr<BIO> out_bio(BIO_new(BIO_s_mem()));
+  ASSERT_TRUE(out_bio);
+  EXPECT_TRUE(PKCS7_verify(p7.get(), nullptr, store.get(), nullptr,
+                            out_bio.get(), /*flags*/ 0));
+
+  // Now tamper with the message to attempt bypass
+
+  // Get the signer info back for modification
+  STACK_OF(PKCS7_SIGNER_INFO) *sinfos = PKCS7_get_signer_info(p7.get());
+  ASSERT_TRUE(sinfos);
+  ASSERT_GT(sk_PKCS7_SIGNER_INFO_num(sinfos), (size_t)0);
+  PKCS7_SIGNER_INFO *sinfo_ptr = sk_PKCS7_SIGNER_INFO_value(sinfos, 0);
+  ASSERT_TRUE(sinfo_ptr);
+
+  // Modify the content to malicious data
+  ASSERT_TRUE(PKCS7_type_is_signed(p7.get()));
+  ASSERT_TRUE(p7->d.sign && p7->d.sign->contents);
+  ASSERT_EQ(OBJ_obj2nid(p7->d.sign->contents->type), NID_pkcs7_data);
+  ASSERT_TRUE(ASN1_OCTET_STRING_set(p7->d.sign->contents->d.data,
+                                     malicious_data, (int)malicious_len));
+
+  // Update the messageDigest attribute to match the malicious content
+  unsigned char new_md[SHA256_DIGEST_LENGTH];
+  SHA256(malicious_data, malicious_len, new_md);
+  ASN1_TYPE *md_type =
+      PKCS7_get_signed_attribute(sinfo_ptr, NID_pkcs9_messageDigest);
+  ASSERT_TRUE(md_type);
+  ASSERT_EQ(md_type->type, V_ASN1_OCTET_STRING);
+  ASSERT_TRUE(ASN1_OCTET_STRING_set(md_type->value.octet_string, new_md,
+                                     SHA256_DIGEST_LENGTH));
+
+  // Add a malformed attribute whose ASN1_OBJECT has zero length.
+  // This causes ASN1_item_i2d() to fail with ASN1_R_ILLEGAL_OBJECT when
+  // pkcs7_signature_verify() tries to re-encode auth_attr for signature
+  // verification.
+  ASN1_OCTET_STRING *bad_os = ASN1_OCTET_STRING_new();
+  ASSERT_TRUE(bad_os);
+  ASSERT_TRUE(
+      ASN1_OCTET_STRING_set(bad_os, (const unsigned char *)"test", 4));
+  X509_ATTRIBUTE *bad_attr = X509_ATTRIBUTE_create(
+      NID_id_smime_aa_signingCertificate, V_ASN1_OCTET_STRING, bad_os);
+  ASSERT_TRUE(bad_attr);
+
+  // Create an ASN1_OBJECT with zero-length OID data. When ASN1_item_i2d
+  // tries to encode this, i2d_ASN1_OBJECT returns -1 because length <= 0,
+  // which makes the overall encoding fail safely.
+  bssl::UniquePtr<ASN1_OBJECT> empty_obj(
+      ASN1_OBJECT_create(NID_undef, nullptr, 0, nullptr, nullptr));
+  ASSERT_TRUE(empty_obj);
+  ASSERT_TRUE(X509_ATTRIBUTE_set1_object(bad_attr, empty_obj.get()));
+
+  ASSERT_TRUE(sk_X509_ATTRIBUTE_push(sinfo_ptr->auth_attr, bad_attr));
+
+  // Verify that the tampered message is correctly rejected
+  out_bio.reset(BIO_new(BIO_s_mem()));
+  ASSERT_TRUE(out_bio);
+  EXPECT_FALSE(PKCS7_verify(p7.get(), nullptr, store.get(), nullptr,
+                             out_bio.get(), /*flags*/ 0));
 }

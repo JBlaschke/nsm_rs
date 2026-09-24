@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DestinationUnreachable","EchoReply","EchoRequest","NeighborAdvert","NeighborSolicit","PacketTooBig","ParameterProblem","Redirect","RouterAdvert","RouterSolicit","TimeExceeded"]};

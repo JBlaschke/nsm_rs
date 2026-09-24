@@ -1,11 +1,6 @@
 # Copyright 2021-2023 The OpenSSL Project Authors. All Rights Reserved.
 # Copyright (c) 2021, Intel Corporation. All Rights Reserved.
-#
-# Licensed under the Apache License 2.0 (the "License").  You may not use
-# this file except in compliance with the License.  You can obtain a copy
-# in the file LICENSE in the source distribution or at
-# https://www.openssl.org/source/license.html
-#
+# SPDX-License-Identifier: Apache-2.0
 #
 # Originally written by Sergey Kirillov and Andrey Matyukov
 # Intel Corporation
@@ -350,9 +345,12 @@ $code.=<<___;
 ___
 }
 
+# Keep the disabled output non-empty. Some NASM versions reject an object
+# with no sections (nasm.us bug 3392738), and NASM 2.16.01 crashes while
+# generating CodeView debug information for an empty section.
 $code.=<<___;
-#ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
 .text
+#ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
 
 .globl  rsaz_amm52x30_x1_ifma256
 .type   rsaz_amm52x30_x1_ifma256,\@function,5
@@ -820,20 +818,29 @@ rsaz_avx_handler:
     .rva    .LSEH_info_rsaz_amm52x30_x2_ifma256
 
 .section    .xdata
-.align  8
+.align  4
 .LSEH_info_rsaz_amm52x30_x1_ifma256:
     .byte   9,0,0,0
     .rva    rsaz_avx_handler
     .rva    .Lrsaz_amm52x30_x1_ifma256_body,.Lrsaz_amm52x30_x1_ifma256_epilogue
+.align	4
 .LSEH_info_rsaz_amm52x30_x2_ifma256:
     .byte   9,0,0,0
     .rva    rsaz_avx_handler
     .rva    .Lrsaz_amm52x30_x2_ifma256_body,.Lrsaz_amm52x30_x2_ifma256_epilogue
 
 #endif
+#ifdef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+.byte 0
+#endif
 ___
 } else {
-$code.="#endif";
+$code.=<<___;
+#endif
+#ifdef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+.byte 0
+#endif
+___
 }
 
 }}} else {{{                # fallback for old assembler

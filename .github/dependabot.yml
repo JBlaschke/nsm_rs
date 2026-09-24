@@ -1,0 +1,23 @@
+# Dependabot keeps the GitHub Actions and the Cargo dependencies current.
+#
+# Cargo pull requests change Cargo.toml and Cargo.lock only. Because the
+# dependencies are vendored (docs/PLAN.md, decision D1), such a pull request
+# fails CI until someone checks it out, runs `cargo vendor`, and pushes the
+# vendor/ change (see CONTRIBUTING.md, "Changing dependencies").
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        update-types: ["minor", "patch"]

@@ -1,142 +1,16 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
- */
-/* ====================================================================
- * Copyright (c) 1998-2007 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
-/* ====================================================================
- * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
- * ECC cipher suite support in OpenSSL originally developed by
- * SUN MICROSYSTEMS, INC., and contributed to the OpenSSL project.
- */
-/* ====================================================================
- * Copyright 2005 Nokia. All rights reserved.
- *
- * The portions of the attached software ("Contribution") is developed by
- * Nokia Corporation and is licensed pursuant to the OpenSSL open source
- * license.
- *
- * The Contribution, originally written by Mika Kousa and Pasi Eronen of
- * Nokia Corporation, consists of the "PSK" (Pre-Shared Key) ciphersuites
- * support (see RFC 4279) to OpenSSL.
- *
- * No patent licenses or other rights except those expressly stated in
- * the OpenSSL open source license shall be deemed granted or received
- * expressly, by implication, estoppel, or otherwise.
- *
- * No assurances are provided by Nokia that the Contribution does not
- * infringe the patent or other intellectual property rights of any third
- * party or that the license provides you with all the necessary rights
- * to make use of the Contribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. IN
- * ADDITION TO THE DISCLAIMERS INCLUDED IN THE LICENSE, NOKIA
- * SPECIFICALLY DISCLAIMS ANY LIABILITY FOR CLAIMS BROUGHT BY YOU OR ANY
- * OTHER ENTITY BASED ON INFRINGEMENT OF INTELLECTUAL PROPERTY RIGHTS OR
- * OTHERWISE. */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
+// Copyright (c) 1998-2007 The OpenSSL Project.  All rights reserved.
+// Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
+// Copyright 2005 Nokia. All rights reserved.
+//
+// ECC cipher suite support in OpenSSL originally developed by
+// SUN MICROSYSTEMS, INC., and contributed to the OpenSSL project.
+//
+// The Contribution, originally written by Mika Kousa and Pasi Eronen of
+// Nokia Corporation, consists of the "PSK" (Pre-Shared Key) ciphersuites
+// support (see RFC 4279) to OpenSSL.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/ssl.h>
 
@@ -1037,7 +911,7 @@ static bool ssl_cipher_process_rulestr(const char *rule_str,
   uint32_t alg_mkey, alg_auth, alg_enc, alg_mac;
   uint16_t min_version;
   const char *l, *buf;
-  int rule;
+
   bool multi, skip_rule, in_group = false, has_group = false;
   size_t j, buf_len;
   uint32_t cipher_id;
@@ -1045,6 +919,7 @@ static bool ssl_cipher_process_rulestr(const char *rule_str,
 
   l = rule_str;
   for (;;) {
+    int rule = CIPHER_ADD;
     ch = *l;
 
     if (ch == '\0') {
@@ -1062,7 +937,6 @@ static bool ssl_cipher_process_rulestr(const char *rule_str,
       }
 
       if (ch == '|') {
-        rule = CIPHER_ADD;
         l++;
         continue;
       } else if (!OPENSSL_isalnum(ch)) {
@@ -1089,8 +963,6 @@ static bool ssl_cipher_process_rulestr(const char *rule_str,
       has_group = true;
       l++;
       continue;
-    } else {
-      rule = CIPHER_ADD;
     }
 
     // If preference groups are enabled, the only legal operator is +.
@@ -1232,6 +1104,84 @@ static bool is_known_default_alias_keyword_filter_rule(const char *rule,
   }
   *matched_rule_length = 0;
   return false;
+}
+
+int update_cipher_list(UniquePtr<SSLCipherPreferenceList> &dst,
+                       UniquePtr<SSLCipherPreferenceList> &ciphers,
+                       UniquePtr<SSLCipherPreferenceList> &tls13_ciphers) {
+  bssl::UniquePtr<STACK_OF(SSL_CIPHER)> tmp_cipher_list;
+  size_t num_removed_tls13_ciphers = 0, num_added_tls13_ciphers = 0;
+  Array<bool> updated_in_group_flags;
+
+  if (ciphers && ciphers->ciphers) {
+    tmp_cipher_list.reset(sk_SSL_CIPHER_dup(ciphers->ciphers.get()));
+  } else {
+    tmp_cipher_list.reset(sk_SSL_CIPHER_new_null());
+  }
+
+  if (tmp_cipher_list == nullptr) {
+    return 0;
+  }
+
+  // Delete any existing TLSv1.3 ciphersuites. These will be first in the list
+  while (sk_SSL_CIPHER_num(tmp_cipher_list.get()) > 0 &&
+         SSL_CIPHER_get_min_version(sk_SSL_CIPHER_value(tmp_cipher_list.get(), 0))
+         == TLS1_3_VERSION) {
+    sk_SSL_CIPHER_delete(tmp_cipher_list.get(), 0);
+    num_removed_tls13_ciphers++;
+  }
+
+  size_t num_updated_tls12_ciphers = sk_SSL_CIPHER_num(tmp_cipher_list.get());
+
+  // Add any configure tls 1.3 ciphersuites
+  if (tls13_ciphers && tls13_ciphers->ciphers) {
+    STACK_OF(SSL_CIPHER) *tls13_cipher_stack = tls13_ciphers->ciphers.get();
+    num_added_tls13_ciphers = sk_SSL_CIPHER_num(tls13_cipher_stack);
+    for (int i = sk_SSL_CIPHER_num(tls13_cipher_stack) - 1; i >= 0; i--) {
+      const SSL_CIPHER *tls13_cipher = sk_SSL_CIPHER_value(tls13_cipher_stack, i);
+      if (!sk_SSL_CIPHER_unshift(tmp_cipher_list.get(), tls13_cipher)) {
+        return 0;
+      }
+    }
+  }
+
+
+  if (!updated_in_group_flags.Init(num_added_tls13_ciphers +
+                                   num_updated_tls12_ciphers)) {
+    return 0;
+  }
+  std::fill(updated_in_group_flags.begin(), updated_in_group_flags.end(),
+           false);
+
+  // Copy in_group_flags from |ctx->tls13_cipher_list|
+  if (tls13_ciphers && tls13_ciphers->in_group_flags) {
+    const auto& tls13_flags = tls13_ciphers->in_group_flags;
+    // Ensure value of last element in |in_group_flags| is 0. The last cipher
+    // in a list must be the end of any group in that list.
+    if (tls13_flags[num_added_tls13_ciphers - 1] != 0) {
+      tls13_flags[num_added_tls13_ciphers - 1] = false;
+    }
+    for (size_t i = 0; i < num_added_tls13_ciphers; i++) {
+      updated_in_group_flags[i] = tls13_flags[i];
+    }
+  }
+
+  // Copy remaining in_group_flags from |ctx->cipher_list|
+  if (ciphers && ciphers->in_group_flags) {
+    for (size_t i = 0; i < num_updated_tls12_ciphers; i++) {
+      updated_in_group_flags[i + num_added_tls13_ciphers] =
+        ciphers->in_group_flags[i + num_removed_tls13_ciphers];
+    }
+  }
+
+  Span<const bool> flags_span(updated_in_group_flags.data(), updated_in_group_flags.size());
+  UniquePtr<SSLCipherPreferenceList> new_list = MakeUnique<SSLCipherPreferenceList>();
+  if (!new_list || !new_list->Init(std::move(tmp_cipher_list), flags_span)) {
+    return 0;
+  }
+
+  dst = std::move(new_list);
+  return 1;
 }
 
 bool ssl_create_cipher_list(UniquePtr<SSLCipherPreferenceList> *out_cipher_list,
@@ -1378,6 +1328,8 @@ int ssl_get_certificate_slot_index(const EVP_PKEY *pkey) {
       return SSL_PKEY_ECC;
     case EVP_PKEY_ED25519:
       return SSL_PKEY_ED25519;
+    case EVP_PKEY_PQDSA:
+      return SSL_PKEY_PQDSA;
     default:
       return -1;
   }
@@ -1391,6 +1343,11 @@ uint32_t ssl_cipher_auth_mask_for_key(const EVP_PKEY *key) {
     case EVP_PKEY_ED25519:
       // Ed25519 keys in TLS 1.2 repurpose the ECDSA ciphers.
       return SSL_aECDSA;
+    case EVP_PKEY_PQDSA:
+      // ML-DSA is TLS 1.3 only and is not used for TLS <= 1.2 cipher-auth
+      // selection. TLS 1.3 paths gate on |SSL_aGENERIC| in
+      // |tls12_pkey_supports_cipher_auth| instead.
+      return 0;
     default:
       return 0;
   }

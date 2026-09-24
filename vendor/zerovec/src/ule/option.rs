@@ -5,7 +5,7 @@
 use super::*;
 use core::cmp::Ordering;
 use core::marker::PhantomData;
-use core::mem::{self, MaybeUninit};
+use core::mem::MaybeUninit;
 
 /// This type is the [`ULE`] type for `Option<U>` where `U` is a [`ULE`] type
 ///
@@ -54,8 +54,8 @@ impl<U: Copy> OptionULE<U> {
     }
 }
 
-impl<U: Copy + core::fmt::Debug> core::fmt::Debug for OptionULE<U> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<U: Copy + fmt::Debug> fmt::Debug for OptionULE<U> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.get().fmt(f)
     }
 }
@@ -67,29 +67,29 @@ impl<U: Copy + core::fmt::Debug> core::fmt::Debug for OptionULE<U> {
 ///    zeroed or valid-T byte sequences to fill it)
 //  2. OptionULE is aligned to 1 byte.
 //     (achieved by `#[repr(C, packed)]` on a struct containing only ULE fields, in the context of this impl)
-//  3. The impl of validate_byte_slice() returns an error if any byte is not valid.
-//  4. The impl of validate_byte_slice() returns an error if there are extra bytes.
+//  3. The impl of validate_bytes() returns an error if any byte is not valid.
+//  4. The impl of validate_bytes() returns an error if there are extra bytes.
 //  5. The other ULE methods use the default impl.
 //  6. OptionULE byte equality is semantic equality by relying on the ULE equality
 //     invariant on the subfields
 unsafe impl<U: ULE> ULE for OptionULE<U> {
-    fn validate_byte_slice(bytes: &[u8]) -> Result<(), ZeroVecError> {
-        let size = mem::size_of::<Self>();
+    fn validate_bytes(bytes: &[u8]) -> Result<(), UleError> {
+        let size = size_of::<Self>();
         if bytes.len() % size != 0 {
-            return Err(ZeroVecError::length::<Self>(bytes.len()));
+            return Err(UleError::length::<Self>(bytes.len()));
         }
         for chunk in bytes.chunks(size) {
-            #[allow(clippy::indexing_slicing)] // `chunk` will have enough bytes to fit Self
+            #[expect(clippy::indexing_slicing)] // `chunk` will have enough bytes to fit Self
             match chunk[0] {
                 // https://doc.rust-lang.org/reference/types/boolean.html
                 // Rust booleans are always size 1, align 1 values with valid bit patterns 0x0 or 0x1
                 0 => {
                     if !chunk[1..].iter().all(|x| *x == 0) {
-                        return Err(ZeroVecError::parse::<Self>());
+                        return Err(UleError::parse::<Self>());
                     }
                 }
-                1 => U::validate_byte_slice(&chunk[1..])?,
-                _ => return Err(ZeroVecError::parse::<Self>()),
+                1 => U::validate_bytes(&chunk[1..])?,
+                _ => return Err(UleError::parse::<Self>()),
             }
         }
         Ok(())
@@ -150,7 +150,7 @@ impl<U: VarULE + ?Sized> OptionVarULE<U> {
         if self.1 {
             unsafe {
                 // Safety: byte field is a valid T if boolean field is true
-                Some(U::from_byte_slice_unchecked(&self.2))
+                Some(U::from_bytes_unchecked(&self.2))
             }
         } else {
             None
@@ -158,8 +158,8 @@ impl<U: VarULE + ?Sized> OptionVarULE<U> {
     }
 }
 
-impl<U: VarULE + ?Sized + core::fmt::Debug> core::fmt::Debug for OptionVarULE<U> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<U: VarULE + ?Sized + fmt::Debug> fmt::Debug for OptionVarULE<U> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.as_ref().fmt(f)
     }
 }
@@ -168,35 +168,39 @@ impl<U: VarULE + ?Sized + core::fmt::Debug> core::fmt::Debug for OptionVarULE<U>
 //  1. OptionVarULE<T> does not include any uninitialized or padding bytes
 //     (achieved by being repr(C, packed) on ULE types)
 //  2. OptionVarULE<T> is aligned to 1 byte (achieved by being repr(C, packed) on ULE types)
-//  3. The impl of `validate_byte_slice()` returns an error if any byte is not valid.
-//  4. The impl of `validate_byte_slice()` returns an error if the slice cannot be used in its entirety
-//  5. The impl of `from_byte_slice_unchecked()` returns a reference to the same data.
+//  3. The impl of `validate_bytes()` returns an error if any byte is not valid.
+//  4. The impl of `validate_bytes()` returns an error if the slice cannot be used in its entirety
+//  5. The impl of `from_bytes_unchecked()` returns a reference to the same data.
 //  6. All other methods are defaulted
 //  7. OptionVarULE<T> byte equality is semantic equality (achieved by being an aggregate)
 unsafe impl<U: VarULE + ?Sized> VarULE for OptionVarULE<U> {
     #[inline]
-    fn validate_byte_slice(slice: &[u8]) -> Result<(), ZeroVecError> {
+    fn validate_bytes(slice: &[u8]) -> Result<(), UleError> {
         if slice.is_empty() {
-            return Err(ZeroVecError::length::<Self>(slice.len()));
+            return Err(UleError::length::<Self>(slice.len()));
         }
-        #[allow(clippy::indexing_slicing)] // slice already verified to be nonempty
+        #[expect(clippy::indexing_slicing)] // slice already verified to be nonempty
         match slice[0] {
             // https://doc.rust-lang.org/reference/types/boolean.html
             // Rust booleans are always size 1, align 1 values with valid bit patterns 0x0 or 0x1
             0 => {
                 if slice.len() != 1 {
-                    Err(ZeroVecError::length::<Self>(slice.len()))
+                    Err(UleError::length::<Self>(slice.len()))
                 } else {
                     Ok(())
                 }
             }
-            1 => U::validate_byte_slice(&slice[1..]),
-            _ => Err(ZeroVecError::parse::<Self>()),
+            1 => U::validate_bytes(&slice[1..]),
+            _ => Err(UleError::parse::<Self>()),
         }
     }
 
     #[inline]
-    unsafe fn from_byte_slice_unchecked(bytes: &[u8]) -> &Self {
+    unsafe fn from_bytes_unchecked(bytes: &[u8]) -> &Self {
+        debug_assert!(
+            !bytes.is_empty(),
+            "Bytes must be nonempty by OptionVarULE validation invariants"
+        );
         let entire_struct_as_slice: *const [u8] =
             ::core::ptr::slice_from_raw_parts(bytes.as_ptr(), bytes.len() - 1);
         &*(entire_struct_as_slice as *const Self)
@@ -224,7 +228,7 @@ where
         }
     }
 
-    #[allow(clippy::indexing_slicing)] // This method is allowed to panic when lengths are invalid
+    #[expect(clippy::indexing_slicing)] // This method is allowed to panic when lengths are invalid
     fn encode_var_ule_write(&self, dst: &mut [u8]) {
         if let Some(ref inner) = *self {
             debug_assert!(
@@ -260,5 +264,19 @@ impl<U: VarULE + ?Sized + PartialOrd> PartialOrd for OptionVarULE<U> {
 impl<U: VarULE + ?Sized + Ord> Ord for OptionVarULE<U> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.as_ref().cmp(&other.as_ref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic]
+    fn test_option_varule_underflow() {
+        unsafe {
+            let _ = OptionVarULE::<str>::from_bytes_unchecked(&[]);
+        }
     }
 }

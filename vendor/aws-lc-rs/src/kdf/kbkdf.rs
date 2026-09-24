@@ -3,14 +3,11 @@
 
 #![allow(clippy::module_name_repetitions)]
 
-use aws_lc::KBKDF_ctr_hmac;
-use aws_lc::EVP_MD;
+use crate::aws_lc::{KBKDF_ctr_hmac, EVP_MD};
 
-use crate::{
-    digest::{match_digest_type, AlgorithmID},
-    error::Unspecified,
-    ptr::ConstPointer,
-};
+use crate::digest::{match_digest_type, AlgorithmID};
+use crate::error::Unspecified;
+use crate::ptr::ConstPointer;
 
 /// KBKDF in Counter Mode with HMAC-SHA224
 #[allow(dead_code)]
@@ -64,7 +61,7 @@ impl KbkdfCtrHmacAlgorithm {
     }
 
     #[must_use]
-    fn get_evp_md(&self) -> ConstPointer<EVP_MD> {
+    fn get_evp_md(&self) -> ConstPointer<'_, EVP_MD> {
         match_digest_type(match self.id {
             KbkdfCtrHmacAlgorithmId::Sha224 => &AlgorithmID::SHA224,
             KbkdfCtrHmacAlgorithmId::Sha256 => &AlgorithmID::SHA256,
@@ -136,7 +133,7 @@ pub fn kbkdf_ctr_hmac(
         KBKDF_ctr_hmac(
             output.as_mut_ptr(),
             out_len,
-            *evp_md,
+            evp_md.as_const_ptr(),
             secret.as_ptr(),
             secret.len(),
             info.as_ptr(),

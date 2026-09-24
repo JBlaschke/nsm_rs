@@ -1,11 +1,17 @@
 use crate::backend::c;
 use crate::backend::conv::borrowed_fd;
-use crate::backend::fd::{AsFd, AsRawFd, BorrowedFd, LibcFd};
+use crate::backend::fd::{AsFd, AsRawFd as _, BorrowedFd, LibcFd};
 #[cfg(windows)]
 use crate::backend::fd::{AsSocket, RawFd};
+use crate::ffi;
 use bitflags::bitflags;
 use core::fmt;
 use core::marker::PhantomData;
+
+#[cfg(not(target_os = "horizon"))]
+pub(crate) type RawPollFlags = ffi::c_short;
+#[cfg(target_os = "horizon")]
+pub(crate) type RawPollFlags = ffi::c_int;
 
 bitflags! {
     /// `POLL*` flags for use with [`poll`].
@@ -13,7 +19,7 @@ bitflags! {
     /// [`poll`]: crate::event::poll
     #[repr(transparent)]
     #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-    pub struct PollFlags: c::c_short {
+    pub struct PollFlags: RawPollFlags {
         /// `POLLIN`
         const IN = c::POLLIN;
         /// `POLLPRI`

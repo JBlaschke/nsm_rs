@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["clock_getres","clock_gettime"],"struct":["ClockId"]};

@@ -1,5 +1,106 @@
 # Releases
 
+## 2.14.2 (2026-09-04)
+
+- Fix item hygiene in map and set macros. Previously, an internal `const CAP`
+  could shadow the same name in the caller's namespace.
+- Allow `const` initialization of empty `indexmap_with_default!` and
+  `indexset_with_default!`. The hasher may also be omitted if it's inferrable.
+
+## 2.14.1 (2026-08-28)
+
+- Simplify comparisons where `Equivalent` isn't needed (`Q = K`).
+- Unify index assertions for bounds checks.
+- Fix (or `expect`) clippy lints.
+
+## 2.14.0 (2026-04-09)
+
+- **MSRV**: Rust 1.85.0 or later is now required.
+- Updated the `hashbrown` dependency to 0.17.
+- Made more `map::Slice` methods `const`: `new_mut`, `first_mut`, `last_mut`,
+  `split_at_mut`, `split_at_mut_checked`, `split_first_mut`, `split_last_mut`
+
+## 2.13.1 (2026-04-02)
+
+- Made some `Slice` methods `const`:
+  - `map::Slice::{first,last,split_at,split_at_checked,split_first,split_last}`
+  - `set::Slice::{first,last,split_at,split_at_checked,split_first,split_last}`
+
+## 2.13.0 (2026-01-07)
+
+- Implemented `Clone` for `IntoKeys` and `IntoValues`.
+- Added `map::Slice::split_at_checked` and `split_at_mut_checked`.
+- Added `set::Slice::split_at_checked`.
+
+## 2.12.1 (2025-11-20)
+
+- Simplified a lot of internals using `hashbrown`'s new bucket API.
+
+## 2.12.0 (2025-10-17)
+
+- **MSRV**: Rust 1.82.0 or later is now required.
+- Updated the `hashbrown` dependency to 0.16 alone.
+- Error types now implement `core::error::Error`.
+- Added `pop_if` methods to `IndexMap` and `IndexSet`, similar to the
+  method for `Vec` added in Rust 1.86.
+
+## 2.11.4 (2025-09-18)
+
+- Updated the `hashbrown` dependency to a range allowing 0.15 or 0.16.
+
+## 2.11.3 (2025-09-15)
+
+- Make the minimum `serde` version only apply when "serde" is enabled.
+
+## 2.11.2 (2025-09-15)
+
+- Switched the "serde" feature to depend on `serde_core`, improving build
+  parallelism in cases where other dependents have enabled "serde/derive".
+
+## 2.11.1 (2025-09-08)
+
+- Added a `get_key_value_mut` method to `IndexMap`.
+- Removed the unnecessary `Ord` bound on `insert_sorted_by` methods.
+
+## 2.11.0 (2025-08-22)
+
+- Added `insert_sorted_by` and `insert_sorted_by_key` methods to `IndexMap`,
+  `IndexSet`, and `VacantEntry`, like customizable versions of `insert_sorted`.
+- Added `is_sorted`, `is_sorted_by`, and `is_sorted_by_key` methods to
+  `IndexMap` and `IndexSet`, as well as their `Slice` counterparts.
+- Added `sort_by_key` and `sort_unstable_by_key` methods to `IndexMap` and
+  `IndexSet`, as well as parallel counterparts.
+- Added `replace_index` methods to `IndexMap`, `IndexSet`, and `VacantEntry`
+  to replace the key (or set value) at a given index.
+- Added optional `sval` serialization support.
+
+## 2.10.0 (2025-06-26)
+
+- Added `extract_if` methods to `IndexMap` and `IndexSet`, similar to the
+  methods for `HashMap` and `HashSet` with ranges like `Vec::extract_if`.
+- Added more `#[track_caller]` annotations to functions that may panic.
+
+## 2.9.0 (2025-04-04)
+
+- Added a `get_disjoint_mut` method to `IndexMap`, matching Rust 1.86's
+  `HashMap` method.
+- Added a `get_disjoint_indices_mut` method to `IndexMap` and `map::Slice`,
+  matching Rust 1.86's `get_disjoint_mut` method on slices.
+- Deprecated the `borsh` feature in favor of their own `indexmap` feature,
+  solving a cyclic dependency that occurred via `borsh-derive`.
+
+## 2.8.0 (2025-03-10)
+
+- Added `indexmap_with_default!` and `indexset_with_default!` to be used with
+  alternative hashers, especially when using the crate without `std`.
+- Implemented `PartialEq` between each `Slice` and `[]`/arrays.
+- Removed the internal `rustc-rayon` feature and dependency.
+
+## 2.7.1 (2025-01-19)
+
+- Added `#[track_caller]` to functions that may panic.
+- Improved memory reservation for `insert_entry`.
+
 ## 2.7.0 (2024-11-30)
 
 - Added methods `Entry::insert_entry` and `VacantEntry::insert_entry`, returning

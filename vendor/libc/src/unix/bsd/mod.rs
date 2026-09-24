@@ -7,6 +7,9 @@ pub type socklen_t = u32;
 pub type sa_family_t = u8;
 pub type pthread_t = crate::uintptr_t;
 pub type nfds_t = c_uint;
+#[cfg(target_os = "dragonfly")]
+pub type regoff_t = c_int;
+#[cfg(not(target_os = "dragonfly"))]
 pub type regoff_t = off_t;
 
 s! {
@@ -57,7 +60,7 @@ s! {
         pub ifa_netmask: *mut crate::sockaddr,
         pub ifa_dstaddr: *mut crate::sockaddr,
         pub ifa_data: *mut c_void,
-        #[cfg(target_os = "netbsd")]
+        #[cfg(any(target_os = "dragonfly", target_os = "netbsd"))]
         pub ifa_addrflags: c_uint,
     }
 
@@ -72,20 +75,6 @@ s! {
             any(target_os = "freebsd", target_os = "dragonfly")
         )))]
         fds_bits: [i32; FD_SETSIZE as usize / 32],
-    }
-
-    pub struct tm {
-        pub tm_sec: c_int,
-        pub tm_min: c_int,
-        pub tm_hour: c_int,
-        pub tm_mday: c_int,
-        pub tm_mon: c_int,
-        pub tm_year: c_int,
-        pub tm_wday: c_int,
-        pub tm_yday: c_int,
-        pub tm_isdst: c_int,
-        pub tm_gmtoff: c_long,
-        pub tm_zone: *mut c_char,
     }
 
     pub struct msghdr {
@@ -131,9 +120,6 @@ s! {
         pub flag: *mut c_int,
         pub val: c_int,
     }
-}
-
-s_no_extra_traits! {
     pub struct sockaddr_un {
         pub sun_len: u8,
         pub sun_family: sa_family_t,
@@ -164,95 +150,6 @@ s_no_extra_traits! {
     }
 }
 
-cfg_if! {
-    if #[cfg(feature = "extra_traits")] {
-        impl PartialEq for sockaddr_un {
-            fn eq(&self, other: &sockaddr_un) -> bool {
-                self.sun_len == other.sun_len
-                    && self.sun_family == other.sun_family
-                    && self
-                        .sun_path
-                        .iter()
-                        .zip(other.sun_path.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-
-        impl Eq for sockaddr_un {}
-
-        impl fmt::Debug for sockaddr_un {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sockaddr_un")
-                    .field("sun_len", &self.sun_len)
-                    .field("sun_family", &self.sun_family)
-                    // FIXME: .field("sun_path", &self.sun_path)
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for sockaddr_un {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.sun_len.hash(state);
-                self.sun_family.hash(state);
-                self.sun_path.hash(state);
-            }
-        }
-
-        impl PartialEq for utsname {
-            fn eq(&self, other: &utsname) -> bool {
-                self.sysname
-                    .iter()
-                    .zip(other.sysname.iter())
-                    .all(|(a, b)| a == b)
-                    && self
-                        .nodename
-                        .iter()
-                        .zip(other.nodename.iter())
-                        .all(|(a, b)| a == b)
-                    && self
-                        .release
-                        .iter()
-                        .zip(other.release.iter())
-                        .all(|(a, b)| a == b)
-                    && self
-                        .version
-                        .iter()
-                        .zip(other.version.iter())
-                        .all(|(a, b)| a == b)
-                    && self
-                        .machine
-                        .iter()
-                        .zip(other.machine.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-
-        impl Eq for utsname {}
-
-        impl fmt::Debug for utsname {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("utsname")
-                    // FIXME: .field("sysname", &self.sysname)
-                    // FIXME: .field("nodename", &self.nodename)
-                    // FIXME: .field("release", &self.release)
-                    // FIXME: .field("version", &self.version)
-                    // FIXME: .field("machine", &self.machine)
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for utsname {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.sysname.hash(state);
-                self.nodename.hash(state);
-                self.release.hash(state);
-                self.version.hash(state);
-                self.machine.hash(state);
-            }
-        }
-    }
-}
-
 pub const LC_ALL: c_int = 0;
 pub const LC_COLLATE: c_int = 1;
 pub const LC_CTYPE: c_int = 2;
@@ -269,7 +166,10 @@ pub const FIOASYNC: c_ulong = 0x8004667d;
 pub const FIOSETOWN: c_ulong = 0x8004667c;
 pub const FIOGETOWN: c_ulong = 0x4004667b;
 
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PATH_MAX: c_int = 1024;
+
 pub const MAXPATHLEN: c_int = PATH_MAX;
 
 pub const IOV_MAX: c_int = 1024;
@@ -490,57 +390,32 @@ pub const POLLWRNORM: c_short = 0x004;
 pub const POLLRDBAND: c_short = 0x080;
 pub const POLLWRBAND: c_short = 0x100;
 
-pub const BIOCGBLEN: c_ulong = 0x40044266;
-pub const BIOCSBLEN: c_ulong = 0xc0044266;
-pub const BIOCFLUSH: c_uint = 0x20004268;
-pub const BIOCPROMISC: c_uint = 0x20004269;
-pub const BIOCGDLT: c_ulong = 0x4004426a;
-pub const BIOCGETIF: c_ulong = 0x4020426b;
-pub const BIOCSETIF: c_ulong = 0x8020426c;
-pub const BIOCGSTATS: c_ulong = 0x4008426f;
-pub const BIOCIMMEDIATE: c_ulong = 0x80044270;
-pub const BIOCVERSION: c_ulong = 0x40044271;
-pub const BIOCGHDRCMPLT: c_ulong = 0x40044274;
-pub const BIOCSHDRCMPLT: c_ulong = 0x80044275;
-pub const SIOCGIFADDR: c_ulong = 0xc0206921;
+cfg_if! {
+    // Not yet implemented on NetBSD
+    if #[cfg(not(any(target_os = "netbsd")))] {
+        pub const BIOCGBLEN: c_ulong = 0x40044266;
+        pub const BIOCSBLEN: c_ulong = 0xc0044266;
+        pub const BIOCFLUSH: c_uint = 0x20004268;
+        pub const BIOCPROMISC: c_uint = 0x20004269;
+        pub const BIOCGDLT: c_ulong = 0x4004426a;
+        pub const BIOCGETIF: c_ulong = 0x4020426b;
+        pub const BIOCSETIF: c_ulong = 0x8020426c;
+        pub const BIOCGSTATS: c_ulong = 0x4008426f;
+        pub const BIOCIMMEDIATE: c_ulong = 0x80044270;
+        pub const BIOCVERSION: c_ulong = 0x40044271;
+        pub const BIOCGHDRCMPLT: c_ulong = 0x40044274;
+        pub const BIOCSHDRCMPLT: c_ulong = 0x80044275;
+        pub const SIOCGIFADDR: c_ulong = 0xc0206921;
+    }
+}
 
-pub const REG_BASIC: c_int = 0o0000;
-pub const REG_EXTENDED: c_int = 0o0001;
-pub const REG_ICASE: c_int = 0o0002;
-pub const REG_NOSUB: c_int = 0o0004;
-pub const REG_NEWLINE: c_int = 0o0010;
-pub const REG_NOSPEC: c_int = 0o0020;
-pub const REG_PEND: c_int = 0o0040;
-pub const REG_DUMP: c_int = 0o0200;
-
-pub const REG_NOMATCH: c_int = 1;
-pub const REG_BADPAT: c_int = 2;
-pub const REG_ECOLLATE: c_int = 3;
-pub const REG_ECTYPE: c_int = 4;
-pub const REG_EESCAPE: c_int = 5;
-pub const REG_ESUBREG: c_int = 6;
-pub const REG_EBRACK: c_int = 7;
-pub const REG_EPAREN: c_int = 8;
-pub const REG_EBRACE: c_int = 9;
-pub const REG_BADBR: c_int = 10;
-pub const REG_ERANGE: c_int = 11;
-pub const REG_ESPACE: c_int = 12;
-pub const REG_BADRPT: c_int = 13;
-pub const REG_EMPTY: c_int = 14;
-pub const REG_ASSERT: c_int = 15;
-pub const REG_INVARG: c_int = 16;
-pub const REG_ATOI: c_int = 255;
-pub const REG_ITOA: c_int = 0o0400;
-
-pub const REG_NOTBOL: c_int = 0o00001;
-pub const REG_NOTEOL: c_int = 0o00002;
-pub const REG_STARTEND: c_int = 0o00004;
-pub const REG_TRACE: c_int = 0o00400;
-pub const REG_LARGE: c_int = 0o01000;
-pub const REG_BACKR: c_int = 0o02000;
-
-pub const TIOCCBRK: c_uint = 0x2000747a;
-pub const TIOCSBRK: c_uint = 0x2000747b;
+cfg_if! {
+    // Redefined in `new/apple`
+    if #[cfg(not(target_vendor = "apple"))] {
+        pub const TIOCCBRK: c_uint = 0x2000747a;
+        pub const TIOCSBRK: c_uint = 0x2000747b;
+    }
+}
 
 pub const PRIO_PROCESS: c_int = 0;
 pub const PRIO_PGRP: c_int = 1;
@@ -594,59 +469,57 @@ pub const RTAX_AUTHOR: c_int = 6;
 pub const RTAX_BRD: c_int = 7;
 
 f! {
-    pub fn CMSG_FIRSTHDR(mhdr: *const crate::msghdr) -> *mut cmsghdr {
-        if (*mhdr).msg_controllen as usize >= mem::size_of::<cmsghdr>() {
-            (*mhdr).msg_control as *mut cmsghdr
+    pub unsafe fn CMSG_FIRSTHDR(mhdr: *const crate::msghdr) -> *mut cmsghdr {
+        if (*mhdr).msg_controllen as usize >= size_of::<cmsghdr>() {
+            (*mhdr).msg_control.cast()
         } else {
-            core::ptr::null_mut()
+            ptr::null_mut()
         }
     }
 
-    pub fn FD_CLR(fd: c_int, set: *mut fd_set) -> () {
-        let bits = mem::size_of_val(&(*set).fds_bits[0]) * 8;
+    pub unsafe fn FD_CLR(fd: c_int, set: *mut fd_set) -> () {
+        let bits = size_of_val(&(*set).fds_bits[0]) * 8;
         let fd = fd as usize;
         (*set).fds_bits[fd / bits] &= !(1 << (fd % bits));
         return;
     }
 
-    pub fn FD_ISSET(fd: c_int, set: *const fd_set) -> bool {
-        let bits = mem::size_of_val(&(*set).fds_bits[0]) * 8;
+    pub unsafe fn FD_ISSET(fd: c_int, set: *const fd_set) -> bool {
+        let bits = size_of_val(&(*set).fds_bits[0]) * 8;
         let fd = fd as usize;
         return ((*set).fds_bits[fd / bits] & (1 << (fd % bits))) != 0;
     }
 
-    pub fn FD_SET(fd: c_int, set: *mut fd_set) -> () {
-        let bits = mem::size_of_val(&(*set).fds_bits[0]) * 8;
+    pub unsafe fn FD_SET(fd: c_int, set: *mut fd_set) -> () {
+        let bits = size_of_val(&(*set).fds_bits[0]) * 8;
         let fd = fd as usize;
         (*set).fds_bits[fd / bits] |= 1 << (fd % bits);
         return;
     }
 
-    pub fn FD_ZERO(set: *mut fd_set) -> () {
-        for slot in (*set).fds_bits.iter_mut() {
-            *slot = 0;
-        }
+    pub unsafe fn FD_ZERO(set: *mut fd_set) -> () {
+        (*set).fds_bits.fill(0);
     }
 }
 
 safe_f! {
-    pub {const} fn WTERMSIG(status: c_int) -> c_int {
+    pub const safe fn WTERMSIG(status: c_int) -> c_int {
         status & 0o177
     }
 
-    pub {const} fn WIFEXITED(status: c_int) -> bool {
+    pub const safe fn WIFEXITED(status: c_int) -> bool {
         (status & 0o177) == 0
     }
 
-    pub {const} fn WEXITSTATUS(status: c_int) -> c_int {
-        status >> 8
+    pub const safe fn WEXITSTATUS(status: c_int) -> c_int {
+        (status >> 8) & 0x00ff
     }
 
-    pub {const} fn WCOREDUMP(status: c_int) -> bool {
+    pub const safe fn WCOREDUMP(status: c_int) -> bool {
         (status & 0o200) != 0
     }
 
-    pub {const} fn QCMD(cmd: c_int, type_: c_int) -> c_int {
+    pub const safe fn QCMD(cmd: c_int, type_: c_int) -> c_int {
         (cmd << 8) | (type_ & 0x00ff)
     }
 }
@@ -817,6 +690,7 @@ extern "C" {
     )]
     #[cfg_attr(target_os = "netbsd", link_name = "__sigaltstack14")]
     pub fn sigaltstack(ss: *const stack_t, oss: *mut stack_t) -> c_int;
+    #[cfg_attr(target_os = "netbsd", link_name = "__sigsuspend14")]
     pub fn sigsuspend(mask: *const crate::sigset_t) -> c_int;
     pub fn sem_close(sem: *mut sem_t) -> c_int;
     pub fn getdtablesize() -> c_int;
@@ -891,6 +765,7 @@ extern "C" {
         all(target_os = "freebsd", any(freebsd12, freebsd11, freebsd10)),
         link_name = "wait4@FBSD_1.0"
     )]
+    #[cfg_attr(target_os = "netbsd", link_name = "__wait450")]
     pub fn wait4(
         pid: crate::pid_t,
         status: *mut c_int,
@@ -901,11 +776,13 @@ extern "C" {
         all(target_os = "macos", target_arch = "x86"),
         link_name = "getitimer$UNIX2003"
     )]
+    #[cfg_attr(target_os = "netbsd", link_name = "__getitimer50")]
     pub fn getitimer(which: c_int, curr_value: *mut crate::itimerval) -> c_int;
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "setitimer$UNIX2003"
     )]
+    #[cfg_attr(target_os = "netbsd", link_name = "__setitimer50")]
     pub fn setitimer(
         which: c_int,
         new_value: *const crate::itimerval,
@@ -965,6 +842,11 @@ extern "C" {
         timeptr: *const crate::tm,
         locale: crate::locale_t,
     ) -> size_t;
+
+    #[cfg_attr(target_os = "netbsd", link_name = "__devname50")]
+    pub fn devname(dev: crate::dev_t, mode_t: crate::mode_t) -> *mut c_char;
+
+    pub fn issetugid() -> c_int;
 }
 
 cfg_if! {

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["IcmpCodes"],"struct":["MutableTimeExceededPacket","TimeExceeded","TimeExceededIterable","TimeExceededPacket"]};

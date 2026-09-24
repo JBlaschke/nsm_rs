@@ -1,14 +1,18 @@
 #[cfg(feature = "ffi-testing")]
 pub mod ffi;
 
-use std::error::Error as StdError;
 use std::time::Duration;
+use std::{error::Error as StdError, sync::Arc};
 
 mod verification_real_world;
 
 mod verification_mock;
 
-use rustls::{pki_types, CertificateError, Error as TlsError, Error::InvalidCertificate};
+use rustls::{
+    crypto::CryptoProvider,
+    pki_types, CertificateError,
+    Error::{self as TlsError, InvalidCertificate},
+};
 
 struct TestCase<'a, E: StdError> {
     /// The name of the server we're connecting to.
@@ -58,10 +62,10 @@ pub fn assert_cert_error_eq<E: StdError + PartialEq + 'static>(
 /// we know the test certificates are valid. This must be updated if the mock certificates
 /// are regenerated.
 pub(crate) fn verification_time() -> pki_types::UnixTime {
-    // Monday, August 5th, 2024 19:50:24 UTC
-    pki_types::UnixTime::since_unix_epoch(Duration::from_secs(1_722_887_424))
+    // Wed, 8 April 2026 12:03 UTC
+    pki_types::UnixTime::since_unix_epoch(Duration::from_secs(1_775_649_786))
 }
 
-fn ensure_global_state() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+fn test_provider() -> Arc<CryptoProvider> {
+    Arc::new(rustls::crypto::ring::default_provider())
 }

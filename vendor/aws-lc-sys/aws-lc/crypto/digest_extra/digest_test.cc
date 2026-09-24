@@ -1,16 +1,5 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2014, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <stdint.h>
 #include <stdio.h>
@@ -28,6 +17,7 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/md4.h>
+#include <openssl/rand.h>
 #include <openssl/md5.h>
 #include <openssl/nid.h>
 #include <openssl/obj.h>
@@ -36,6 +26,7 @@
 
 #include "../fipsmodule/md5/internal.h"
 #include "../fipsmodule/sha/internal.h"
+#include "../keccak/internal.h"
 #include "../internal.h"
 #include "../test/test_util.h"
 
@@ -71,6 +62,7 @@ static const MD shake128 = { "shake128", &EVP_shake128, nullptr, &SHAKE128};
 static const MD shake256 = { "shake256", &EVP_shake256, nullptr, &SHAKE256};
 static const MD md5_sha1 = { "MD5-SHA1", &EVP_md5_sha1, nullptr, nullptr };
 static const MD blake2b256 = { "BLAKE2b-256", &EVP_blake2b256, nullptr, nullptr };
+static const MD keccak256 = { "KECCAK-256", &EVP_keccak256, &Keccak256, nullptr };
 static const MD md_null = { "NULL", &EVP_md_null, nullptr, nullptr };
 
 struct DigestTestVector {
@@ -234,6 +226,16 @@ static const DigestTestVector kTestVectors[] = {
     {sha3_512, "\x0c\xe9\xf8\xc3\xa9\x90\xc2\x68\xf3\x4e\xfd\x9b\xef\xdb\x0f\x7c\x4e\xf8\x46\x6c\xfd\xb0\x11\x71\xf8\xde\x70\xdc\x5f\xef\xa9\x2a\xcb\xe9\x3d\x29\xe2\xac\x1a\x5c\x29\x79\x12\x9f\x1a\xb0\x8c\x0e\x77\xde\x79\x24\xdd\xf6\x8a\x20\x9c\xdf\xa0\xad\xc6\x2f\x85\xc1\x86\x37\xd9\xc6\xb3\x3f\x4f\xf8",
     1, "b018a20fcf831dde290e4fb18c56342efe138472cbe142da6b77eea4fce52588c04c808eb32912faa345245a850346faec46c3a16d39bd2e1ddb1816bc57d2da"},
 
+    // Keccak-256 tests (Ethereum-style, original 0x01 padding). Reproducible
+    // by anyone using e.g. eth_utils.keccak() or pycryptodome with
+    // digest_bits=256. NOT FIPS, no OID.
+    {keccak256, "", 1,
+     "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"},
+    {keccak256, "abc", 1,
+     "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"},
+    {keccak256, "The quick brown fox jumps over the lazy dog", 1,
+     "4d741b6f1eb29cb2a9b9911c82f56fa8d73b04959d3d9d222895df6c0b28aa15"},
+
     // SHAKE128 XOF tests, from NIST.
     // http://csrc.nist.gov/groups/STM/cavp/secure-hashing.html
     // NOTE: the |repeat| field in this struct denotes output length for XOF digests.
@@ -357,6 +359,7 @@ static void TestDigest(const DigestTestVector *test) {
     }
     ASSERT_TRUE(DoFinal(test, copy.get(), digest.get(), &digest_len));
     CompareDigest(test, digest.get(), digest_len);
+    ctx.Reset();
 
     // Move the digest with half the input provided.
     ASSERT_TRUE(EVP_DigestInit_ex(ctx.get(), test->md.func(), nullptr));
@@ -398,6 +401,15 @@ TEST(DigestTest, Getters) {
   EXPECT_EQ(nullptr, EVP_get_digestbyname("nonsense"));
   EXPECT_EQ(EVP_sha512(), EVP_get_digestbyname("SHA512"));
   EXPECT_EQ(EVP_sha512(), EVP_get_digestbyname("sha512"));
+  EXPECT_EQ(EVP_md4(), EVP_get_digestbyname("md4"));
+  EXPECT_EQ(EVP_md4(), EVP_get_digestbyname("MD4"));
+
+  // Keccak-256 is registered by name only (no OID), matching OpenSSL 3.x's
+  // "KECCAK-256" provider name. Lookup via either casing must work; lookup
+  // by NID does not (the digest's type is NID_undef).
+  EXPECT_EQ(EVP_keccak256(), EVP_get_digestbyname("KECCAK-256"));
+  EXPECT_EQ(EVP_keccak256(), EVP_get_digestbyname("keccak-256"));
+  EXPECT_EQ(NID_undef, EVP_MD_type(EVP_keccak256()));
 
   EXPECT_EQ(EVP_sha512(), EVP_get_digestbynid(NID_sha512));
   EXPECT_EQ(nullptr, EVP_get_digestbynid(NID_sha512WithRSAEncryption));

@@ -1,110 +1,6 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
- */
-/* ====================================================================
- * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com). */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
+// Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/bn.h>
 
@@ -124,10 +20,11 @@
 
 #if !defined(OPENSSL_NO_ASM) &&                          \
     (defined(OPENSSL_LINUX) || defined(OPENSSL_APPLE) || \
-     defined(OPENSSL_OPENBSD) || defined(OPENSSL_FREEBSD)) &&                        \
+     defined(OPENSSL_OPENBSD) || defined(OPENSSL_FREEBSD) || \
+     defined(OPENSSL_NETBSD) ) &&                        \
     defined(OPENSSL_AARCH64) && defined(OPENSSL_BN_ASM_MONT)
 
-#include "../../../third_party/s2n-bignum/include/s2n-bignum_aws-lc.h"
+#include "../../../third_party/s2n-bignum/s2n-bignum_aws-lc.h"
 
 #define BN_MONTGOMERY_S2N_BIGNUM_CAPABLE 1
 
@@ -137,11 +34,14 @@ OPENSSL_INLINE int montgomery_use_s2n_bignum(unsigned int num) {
   // (2) num (which is the number of words) is multiplie of 8, because
   //     s2n-bignum's bignum_emontredc_8n requires it, and
   // (3) The word size is 64 bits.
+  // (4) CPU has NEON.
   assert(S2NBIGNUM_KSQR_16_32_TEMP_NWORDS <= S2NBIGNUM_KMUL_32_64_TEMP_NWORDS &&
          S2NBIGNUM_KSQR_32_64_TEMP_NWORDS <= S2NBIGNUM_KMUL_32_64_TEMP_NWORDS &&
          S2NBIGNUM_KMUL_16_32_TEMP_NWORDS <= S2NBIGNUM_KMUL_32_64_TEMP_NWORDS);
   assert(BN_BITS2 == 64);
-  return !CRYPTO_is_ARMv8_wide_multiplier_capable() && (num % 8 == 0);
+  return !CRYPTO_is_ARMv8_wide_multiplier_capable() &&
+          (num % 8 == 0) &&
+          CRYPTO_is_NEON_capable();
 }
 
 #else
@@ -454,7 +354,7 @@ err:
 // are equivalent to the arguments of bn_mul_mont.
 // montgomery_s2n_bignum_mul_mont works only if num is a multiple of 8.
 // montgomery_use_s2n_bignum(num) must be called in advance to check this
-// condition.
+// condition, as well as other s2n-bignum requirements.
 // For num = 32 or num = 16, this uses faster primitives in s2n-bignum.
 // montgomery_s2n_bignum_mul_mont allocates S2NBIGNUM_KMUL_32_64_TEMP_NWORDS +
 // 2 * BN_MONTGOMERY_MAX_WORDS uint64_t words at the stack.
@@ -477,34 +377,23 @@ static void montgomery_s2n_bignum_mul_mont(BN_ULONG *rp, const BN_ULONG *ap,
   uint64_t w = n0[0];
 
   if (num == 32) {
-    if (CRYPTO_is_NEON_capable()) {
-      if (ap == bp)
-        bignum_ksqr_32_64_neon(mulres, ap, t);
-      else
-        bignum_kmul_32_64_neon(mulres, ap, bp, t);
+    if (ap == bp) {
+      bignum_ksqr_32_64(mulres, ap, t);
     } else {
-      if (ap == bp)
-        bignum_ksqr_32_64(mulres, ap, t);
-      else
-        bignum_kmul_32_64(mulres, ap, bp, t);
+      bignum_kmul_32_64(mulres, ap, bp, t);
     }
   } else if (num == 16) {
-    if (CRYPTO_is_NEON_capable()) {
-      if (ap == bp)
-        bignum_ksqr_16_32_neon(mulres, ap, t);
-      else
-        bignum_kmul_16_32_neon(mulres, ap, bp, t);
+    if (ap == bp) {
+      bignum_ksqr_16_32(mulres, ap, t);
     } else {
-      if (ap == bp)
-        bignum_ksqr_16_32(mulres, ap, t);
-      else
-        bignum_kmul_16_32(mulres, ap, bp, t);
+      bignum_kmul_16_32(mulres, ap, bp, t);
     }
   } else {
-    if (ap == bp)
+    if (ap == bp) {
       bignum_sqr(num * 2, mulres, num, ap);
-    else
+    } else {
       bignum_mul(num * 2, mulres, num, ap, num, bp);
+    }
   }
 
   // Do montgomery reduction. We follow the definition of montgomery reduction
@@ -518,9 +407,7 @@ static void montgomery_s2n_bignum_mul_mont(BN_ULONG *rp, const BN_ULONG *ap,
   //    A. The result of step 1 >= 2^(64*num), meaning that bignum_emontredc_8n
   //       returned 1. Since m is less than 2^(64*num), (result of step 1) >= m holds.
   //    B. The result of step 1 fits in 2^(64*num), and the result >= m.
-  uint64_t c = CRYPTO_is_NEON_capable() ? 
-               bignum_emontredc_8n_neon(num, mulres, np, w) :
-               bignum_emontredc_8n(num, mulres, np, w); // c: case A
+  uint64_t c = bignum_emontredc_8n(num, mulres, np, w); // c: case A
   c |= bignum_ge(num, mulres + num, num, np);  // c: case B
   // Optionally subtract and store the result at rp
   bignum_optsub(num, rp, mulres + num, c, np);
@@ -637,14 +524,14 @@ void bn_mod_mul_montgomery_small(BN_ULONG *r, const BN_ULONG *a,
 int bn_mul_mont(BN_ULONG *rp, const BN_ULONG *ap, const BN_ULONG *bp,
                 const BN_ULONG *np, const BN_ULONG *n0, size_t num)
 {
-#if !defined(MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX)
+#if !defined(MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2)
   if (ap == bp && bn_sqr8x_mont_capable(num)) {
     return bn_sqr8x_mont(rp, ap, bn_mulx_adx_capable(), np, n0, num);
   }
   if (bn_mulx4x_mont_capable(num)) {
     return bn_mulx4x_mont(rp, ap, bp, np, n0, num);
   }
-#endif // !defined(MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX)
+#endif // !defined(MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2)
   if (bn_mul4x_mont_capable(num)) {
     return bn_mul4x_mont(rp, ap, bp, np, n0, num);
   }

@@ -4,7 +4,7 @@
 
 //! ULE impls for tuples.
 //!
-//! Rust does not guarantee the layout of tuples, so ZeroVec defines its own tuple ULE types.
+//! Rust does not guarantee the layout of tuples, so [`ZeroVec`](crate::ZeroVec) defines its own tuple ULE types.
 //!
 //! Impls are defined for tuples of up to 6 elements. For longer tuples, use a custom struct
 //! with [`#[make_ule]`](crate::make_ule).
@@ -25,7 +25,6 @@
 
 use super::*;
 use core::fmt;
-use core::mem;
 
 macro_rules! tuple_ule {
     ($name:ident, $len:literal, [ $($t:ident $i:tt),+ ]) => {
@@ -39,25 +38,25 @@ macro_rules! tuple_ule {
         //     (achieved by `#[repr(C, packed)]` on a struct containing only ULE fields)
         //  2. TupleULE is aligned to 1 byte.
         //     (achieved by `#[repr(C, packed)]` on a struct containing only ULE fields)
-        //  3. The impl of validate_byte_slice() returns an error if any byte is not valid.
-        //  4. The impl of validate_byte_slice() returns an error if there are extra bytes.
+        //  3. The impl of validate_bytes() returns an error if any byte is not valid.
+        //  4. The impl of validate_bytes() returns an error if there are extra bytes.
         //  5. The other ULE methods use the default impl.
         //  6. TupleULE byte equality is semantic equality by relying on the ULE equality
         //     invariant on the subfields
         unsafe impl<$($t: ULE),+> ULE for $name<$($t),+> {
-            fn validate_byte_slice(bytes: &[u8]) -> Result<(), ZeroVecError> {
-                // expands to: 0size + mem::size_of::<A>() + mem::size_of::<B>();
-                let ule_bytes = 0usize $(+ mem::size_of::<$t>())+;
+            fn validate_bytes(bytes: &[u8]) -> Result<(), UleError> {
+                // expands to: 0size + size_of::<A>() + size_of::<B>();
+                let ule_bytes = 0usize $(+ size_of::<$t>())+;
                 if bytes.len() % ule_bytes != 0 {
-                    return Err(ZeroVecError::length::<Self>(bytes.len()));
+                    return Err(UleError::length::<Self>(bytes.len()));
                 }
                 for chunk in bytes.chunks(ule_bytes) {
                     let mut i = 0;
                     $(
                         let j = i;
-                        i += mem::size_of::<$t>();
-                        #[allow(clippy::indexing_slicing)] // length checked
-                        <$t>::validate_byte_slice(&chunk[j..i])?;
+                        i += size_of::<$t>();
+                        #[expect(clippy::indexing_slicing)] // length checked
+                        <$t>::validate_bytes(&chunk[j..i])?;
                     )+
                 }
                 Ok(())
@@ -117,6 +116,7 @@ macro_rules! tuple_ule {
 
         impl<$($t: ULE),+> Copy for $name<$($t),+> {}
 
+        #[cfg(feature = "alloc")]
         impl<'a, $($t: Ord + AsULE + 'static),+> crate::map::ZeroMapKV<'a> for ($($t),+) {
             type Container = crate::ZeroVec<'a, ($($t),+)>;
             type Slice = crate::ZeroSlice<($($t),+)>;
@@ -138,12 +138,12 @@ fn test_pairule_validate() {
     let vec: Vec<(u32, char)> = vec![(1, 'a'), (1234901, '啊'), (100, 'अ')];
     let zerovec: ZeroVec<(u32, char)> = vec.iter().copied().collect();
     let bytes = zerovec.as_bytes();
-    let zerovec2 = ZeroVec::parse_byte_slice(bytes).unwrap();
+    let zerovec2 = ZeroVec::parse_bytes(bytes).unwrap();
     assert_eq!(zerovec, zerovec2);
 
     // Test failed validation with a correctly sized but differently constrained tuple
     // Note: 1234901 is not a valid char
-    let zerovec3 = ZeroVec::<(char, u32)>::parse_byte_slice(bytes);
+    let zerovec3 = ZeroVec::<(char, u32)>::parse_bytes(bytes);
     assert!(zerovec3.is_err());
 }
 
@@ -153,12 +153,12 @@ fn test_tripleule_validate() {
     let vec: Vec<(u32, char, i8)> = vec![(1, 'a', -5), (1234901, '啊', 3), (100, 'अ', -127)];
     let zerovec: ZeroVec<(u32, char, i8)> = vec.iter().copied().collect();
     let bytes = zerovec.as_bytes();
-    let zerovec2 = ZeroVec::parse_byte_slice(bytes).unwrap();
+    let zerovec2 = ZeroVec::parse_bytes(bytes).unwrap();
     assert_eq!(zerovec, zerovec2);
 
     // Test failed validation with a correctly sized but differently constrained tuple
     // Note: 1234901 is not a valid char
-    let zerovec3 = ZeroVec::<(char, i8, u32)>::parse_byte_slice(bytes);
+    let zerovec3 = ZeroVec::<(char, i8, u32)>::parse_bytes(bytes);
     assert!(zerovec3.is_err());
 }
 
@@ -169,11 +169,11 @@ fn test_quadule_validate() {
         vec![(1, 'a', -5, 3), (1234901, '啊', 3, 11), (100, 'अ', -127, 0)];
     let zerovec: ZeroVec<(u32, char, i8, u16)> = vec.iter().copied().collect();
     let bytes = zerovec.as_bytes();
-    let zerovec2 = ZeroVec::parse_byte_slice(bytes).unwrap();
+    let zerovec2 = ZeroVec::parse_bytes(bytes).unwrap();
     assert_eq!(zerovec, zerovec2);
 
     // Test failed validation with a correctly sized but differently constrained tuple
     // Note: 1234901 is not a valid char
-    let zerovec3 = ZeroVec::<(char, i8, u16, u32)>::parse_byte_slice(bytes);
+    let zerovec3 = ZeroVec::<(char, i8, u16, u32)>::parse_bytes(bytes);
     assert!(zerovec3.is_err());
 }

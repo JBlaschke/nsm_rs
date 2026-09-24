@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/asn1.h>
 
@@ -63,9 +10,9 @@
 #include <openssl/err.h>
 #include <openssl/mem.h>
 
+#include "../bytestring/internal.h"
 #include "../internal.h"
 #include "internal.h"
-#include "../bytestring/internal.h"
 
 
 // Cross-module errors from crypto/x509/i2d_pr.c.
@@ -114,9 +61,21 @@ OPENSSL_DECLARE_ERROR_REASON(ASN1, UNSUPPORTED_TYPE)
 
 static void asn1_put_length(unsigned char **pp, int length);
 
-int asn1_get_object_maybe_indefinite(const unsigned char **inp, long *out_len,
-                                     int *out_tag, int *out_class, long in_len,
-                                     int indefinite_ok) {
+// |ASN1_get_object| parses an ASN.1 header, including tag, class, and length
+// information. The tag number is written to |*out_tag|. The class is written to
+// |*out_class|. If the tag is not indefinite, the content length is written to
+// |*out_len|. If the tag indicates the indefinite form, |*out_len| is set to 0.
+// |inp| is advanced past the header in the input buffer.
+//
+// Indefinite-length encoding and universal tags are always allowed to align
+// with OpenSSL behavior.
+//
+// The return value may have the following bits set:
+//   * 0x80: error occurred while parsing.
+//   * 0x20: the encoding is constructed, not primitive.
+//   * 0x01: indefinite-length constructed encoding.
+int ASN1_get_object(const unsigned char **inp, long *out_len, int *out_tag,
+                    int *out_class, long in_len) {
   if (in_len < 0) {
     OPENSSL_PUT_ERROR(ASN1, ASN1_R_HEADER_TOO_LONG);
     return 0x80;
@@ -137,8 +96,8 @@ int asn1_get_object_maybe_indefinite(const unsigned char **inp, long *out_len,
   int ber_found_temp;
   if (!cbs_get_any_asn1_element(&cbs, &body, &tag, &header_len, &ber_found_temp,
                                 &indefinite, /*ber_ok=*/1,
-                                /*universal_tag_ok=*/indefinite_ok) ||
-      (indefinite && !indefinite_ok) || !CBS_skip(&body, header_len) ||
+                                /*universal_tag_ok=*/1) ||
+      !CBS_skip(&body, header_len) ||
       // Bound the length to comfortably fit in an int. Lengths in this
       // module often switch between int and long without overflow checks.
       CBS_len(&body) > INT_MAX / 2) {
@@ -166,12 +125,6 @@ int asn1_get_object_maybe_indefinite(const unsigned char **inp, long *out_len,
   *out_tag = tag_number;
   *out_class = tag_class;
   return constructed;
-}
-
-int ASN1_get_object(const unsigned char **inp, long *out_len, int *out_tag,
-                    int *out_class, long in_len) {
-  return asn1_get_object_maybe_indefinite(inp, out_len, out_tag, out_class, in_len,
-    /*indefinite_ok=*/1);
 }
 
 // class 0 is constructed constructed == 2 for indefinite length constructed

@@ -8,7 +8,7 @@
 //!     3. [Arg Attributes](#arg-attributes)
 //!     4. [ValueEnum Attributes](#valueenum-attributes)
 //!     5. [Possible Value Attributes](#possible-value-attributes)
-//! 3. [Arg Types](#arg-types)
+//! 3. [Field Types](#field-types)
 //! 4. [Doc Comments](#doc-comments)
 //! 5. [Mixing Builder and Derive APIs](#mixing-builder-and-derive-apis)
 //! 6. [Tips](#tips)
@@ -81,9 +81,7 @@
 //!     Variant1,
 //! }
 //!
-//! fn main() {
-//!     let cli = Cli::parse();
-//! }
+//! let cli = Cli::parse();
 //! ```
 //!
 //! Traits:
@@ -163,6 +161,20 @@
 //!   - When not present: [Doc comment](#doc-comments) if there is a blank line, else nothing
 //!   - When present without a value: [Doc comment](#doc-comments)
 //! - `verbatim_doc_comment`: Minimizes pre-processing when converting doc comments to [`about`][crate::Command::about] / [`long_about`][crate::Command::long_about]
+//! - `defer = <bool_literal>`: Delay argument construction for an enum's subcommands with
+//!   [`Command::defer`][crate::Command::defer]. Available on [`Parser`][crate::Parser] and
+//!   [`Subcommand`][crate::Subcommand] enum containers.
+//!   - When not present: `false`, or `true` with the `unstable-v5` feature.
+//!   - Subcommand names and attributes on the variants are applied eagerly, so their descriptions
+//!     are available in the parent's help. Arguments and groups in named variants, and the entire
+//!     [`Args::augment_args`][crate::Args::augment_args] call for newtype variants, are deferred.
+//!   - Put metadata needed by the parent's help on the enum variants. Metadata from an `Args`
+//!     container or its flattened fields is applied when the subcommand is built, and can then
+//!     override metadata on the variant.
+//!   - Flattened and nested `Subcommand` enums use their own `defer` setting. The setting is not
+//!     inherited by those enums and does not defer their registration in the parent.
+//!   - Call [`Command::build`][crate::Command::build] before inspecting deferred arguments or
+//!     nested commands. Parsing builds the selected commands automatically.
 //! - `next_display_order`: [`Command::next_display_order`][crate::Command::next_display_order]
 //! - `next_help_heading`: [`Command::next_help_heading`][crate::Command::next_help_heading]
 //!   - When `flatten`ing [`Args`][crate::Args], this is scoped to just the args in this struct and any struct `flatten`ed into it
@@ -194,8 +206,8 @@
 //!   [`Subcommand`][crate::Subcommand])
 //!   - When `Option<T>`, the subcommand becomes optional
 //!
-//! See [Configuring the Parser][_tutorial::chapter_1] and
-//! [Subcommands][_tutorial::chapter_2#subcommands] from the tutorial.
+//! See [Configuring the Parser][_tutorial#configuring-the-parser] and
+//! [Subcommands][_tutorial#subcommands] from the tutorial.
 //!
 //! ### ArgGroup Attributes
 //!
@@ -215,11 +227,14 @@
 //! - For `struct`s, [`multiple = true`][crate::ArgGroup::multiple] is implied
 //! - `enum` support is tracked at [#2621](https://github.com/clap-rs/clap/issues/2621)
 //!
-//! See [Argument Relations][_tutorial::chapter_3#argument-relations] from the tutorial.
+//! See [Argument Relations][_tutorial#argument-relations] from the tutorial.
 //!
 //! ### Arg Attributes
 //!
 //! These correspond to a [`Arg`][crate::Arg].
+//! The default state for a field without attributes is to be a positional argument with [behavior
+//! inferred from the field type](#arg-types).
+//! `#[arg(...)]` attributes allow overriding or extending those defaults.
 //!
 //! **Raw attributes:**  Any [`Arg` method][crate::Arg] can also be used as an attribute, see [Terminology](#terminology) for syntax.
 //! - e.g. `#[arg(num_args(..=3))]` would translate to `arg.num_args(..=3)`
@@ -266,7 +281,7 @@
 //!   - Requires field arg to be of type `Vec<T>` and `T` to implement `std::convert::Into<OsString>` or `#[arg(value_enum)]`
 //!   - `<expr>` must implement `IntoIterator<T>`
 //!
-//! See [Adding Arguments][_tutorial::chapter_2] and [Validation][_tutorial::chapter_3] from the
+//! See [Adding Arguments][_tutorial#adding-arguments] and [Validation][_tutorial#validation] from the
 //! tutorial.
 //!
 //! ### ValueEnum Attributes
@@ -275,7 +290,7 @@
 //!   - When not present: `"kebab-case"`
 //!   - Available values: `"camelCase"`, `"kebab-case"`, `"PascalCase"`, `"SCREAMING_SNAKE_CASE"`, `"snake_case"`, `"lower"`, `"UPPER"`, `"verbatim"`
 //!
-//! See [Enumerated values][_tutorial::chapter_3#enumerated-values] from the tutorial.
+//! See [Enumerated values][_tutorial#enumerated-values] from the tutorial.
 //!
 //! ### Possible Value Attributes
 //!
@@ -291,9 +306,18 @@
 //!   - When not present: [Doc comment summary](#doc-comments)
 //! - `skip`: Ignore this variant
 //!
-//! ## Arg Types
+//! ## Field Types
 //!
-//! `clap` assumes some intent based on the type used:
+//! `clap` assumes some intent based on the type used.
+//!
+//! ### Subcommand Types
+//!
+//! | Type                  | Effect              | Implies                                                   |
+//! |-----------------------|---------------------|-----------------------------------------------------------|
+//! | `Option<T>`           | optional subcommand |                                                           |
+//! | `T`                   | required subcommand | `.subcommand_required(true).arg_required_else_help(true)` |
+//!
+//! ### Arg Types
 //!
 //! | Type                  | Effect                                               | Implies                                                     | Notes |
 //! |-----------------------|------------------------------------------------------|-------------------------------------------------------------|-------|
@@ -308,7 +332,7 @@
 //! | `Option<Vec<Vec<T>>>` | `0..` occurrences of argument, grouped by occurrence | `.action(ArgAction::Append).required(false)`  | requires `unstable-v5` |
 //!
 //! In addition, [`.value_parser(value_parser!(T))`][crate::value_parser!] is called for each
-//! field.
+//! field in the absence of a [`#[arg(value_parser)]` attribute](#arg-attributes).
 //!
 //! Notes:
 //! - For custom type behavior, you can override the implied attributes/settings and/or set additional ones
@@ -510,6 +534,7 @@
 //!   [`Command::debug_assert`][crate::Command::debug_assert] in a test
 //!   ([example][_tutorial#testing])
 //! - Always remember to [document](#doc-comments) args and commands with `#![deny(missing_docs)]`
+//!   or `#[deny(clippy::missing_docs_in_private_items)]`
 
 // Point people here that search for attributes that don't exist in the derive (a subset of magic
 // attributes)

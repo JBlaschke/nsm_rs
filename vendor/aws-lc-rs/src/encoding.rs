@@ -4,25 +4,24 @@
 //! Serialization formats
 
 use crate::buffer::Buffer;
-use paste::paste;
 
 macro_rules! generated_encodings {
-    ($($name:ident),*) => { paste! {
+    ($(($name:ident, $name_type:ident)),*) => {
         use core::fmt::{Debug, Error, Formatter};
         use core::ops::Deref;
         mod buffer_type {
             $(
-                pub struct [<$name Type>] {
+                pub struct $name_type {
                     _priv: (),
                 }
             )*
         }
         $(
             /// Serialized bytes
-            pub struct $name<'a>(Buffer<'a, buffer_type::[<$name Type>]>);
+            pub struct $name<'a>(Buffer<'a, buffer_type::$name_type>);
 
             impl<'a> Deref for $name<'a> {
-                type Target = Buffer<'a, buffer_type::[<$name Type>]>;
+                type Target = Buffer<'a, buffer_type::$name_type>;
 
                 fn deref(&self) -> &Self::Target {
                     &self.0
@@ -46,24 +45,26 @@ macro_rules! generated_encodings {
                 }
             }
 
-            impl<'a> From<Buffer<'a, buffer_type::[<$name Type>]>> for $name<'a> {
-                fn from(value: Buffer<'a, buffer_type::[<$name Type>]>) -> Self {
+            impl<'a> From<Buffer<'a, buffer_type::$name_type>> for $name<'a> {
+                fn from(value: Buffer<'a, buffer_type::$name_type>) -> Self {
                     Self(value)
                 }
             }
         )*
-    }}
+    }
 }
 pub(crate) use generated_encodings;
 generated_encodings!(
-    EcPrivateKeyBin,
-    EcPrivateKeyRfc5915Der,
-    EcPublicKeyUncompressedBin,
-    EcPublicKeyCompressedBin,
-    PublicKeyX509Der,
-    Curve25519SeedBin,
-    Pkcs8V1Der,
-    Pkcs8V2Der
+    (Curve25519SeedBin, Curve25519SeedBinType),
+    (EcPrivateKeyBin, EcPrivateKeyBinType),
+    (EcPrivateKeyRfc5915Der, EcPrivateKeyRfc5915DerType),
+    (EcPublicKeyCompressedBin, EcPublicKeyCompressedBinType),
+    (EcPublicKeyUncompressedBin, EcPublicKeyUncompressedBinType),
+    (Pkcs8V1Der, Pkcs8V1DerType),
+    (Pkcs8V2Der, Pkcs8V2DerType),
+    (PqdsaPrivateKeyRaw, PqdsaPrivateKeyRawType),
+    (PqdsaSeedRaw, PqdsaSeedRawType),
+    (PublicKeyX509Der, PublicKeyX509DerType)
 );
 
 /// Trait for types that can be serialized into a DER format.
@@ -82,4 +83,13 @@ pub trait AsBigEndian<T> {
     /// # Errors
     /// Returns Unspecified if serialization fails.
     fn as_be_bytes(&self) -> Result<T, crate::error::Unspecified>;
+}
+
+/// Trait for values that can be serialized into a raw format
+pub trait AsRawBytes<T> {
+    /// Serializes into a raw format.
+    ///
+    /// # Errors
+    /// Returns Unspecified if serialization fails.
+    fn as_raw_bytes(&self) -> Result<T, crate::error::Unspecified>;
 }

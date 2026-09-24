@@ -1,15 +1,12 @@
 //! Code signing services.
 
-use std::fmt::Debug;
-use std::mem::MaybeUninit;
-use std::str::FromStr;
-
 use core_foundation::base::{TCFType, TCFTypeRef, ToVoid};
 use core_foundation::data::CFDataRef;
 use core_foundation::dictionary::CFMutableDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::url::CFURL;
+use core_foundation::{declare_TCFType, impl_TCFType};
 use libc::pid_t;
 use security_framework_sys::code_signing::{
     kSecCSBasicValidateOnly, kSecCSCheckAllArchitectures, kSecCSCheckGatekeeperArchitectures,
@@ -24,6 +21,9 @@ use security_framework_sys::code_signing::{
     SecStaticCodeCheckValidity, SecStaticCodeCreateWithPath, SecStaticCodeGetTypeID,
     SecStaticCodeRef,
 };
+use std::fmt::Debug;
+use std::mem::MaybeUninit;
+use std::str::FromStr;
 
 use crate::{cvt, Result};
 
@@ -224,10 +224,10 @@ impl SecCode {
     /// If `host` is `None` then the code signing root of trust (currently, the
     // system kernel) should be used as the code host.
     pub fn copy_guest_with_attribues(
-        host: Option<&SecCode>,
+        host: Option<&Self>,
         attrs: &GuestAttributes,
         flags: Flags,
-    ) -> Result<SecCode> {
+    ) -> Result<Self> {
         let mut code = MaybeUninit::uninit();
 
         let host = match host {
@@ -243,7 +243,7 @@ impl SecCode {
                 code.as_mut_ptr(),
             ))?;
 
-            Ok(SecCode::wrap_under_create_rule(code.assume_init()))
+            Ok(Self::wrap_under_create_rule(code.assume_init()))
         }
     }
 
@@ -426,7 +426,7 @@ mod test {
 
         enum OpaqueTaskName {}
 
-        extern "C" {
+        unsafe extern "C" {
             fn mach_task_self() -> *const OpaqueTaskName;
             fn task_info(
                 task_name: *const OpaqueTaskName,

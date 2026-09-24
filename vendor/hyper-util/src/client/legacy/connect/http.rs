@@ -1,12 +1,11 @@
 use std::error::Error as StdError;
 use std::fmt;
-use std::future::Future;
 use std::io;
 use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
-use std::task::{self, Poll};
+use std::task::{self, Poll, ready};
 use std::time::Duration;
 
 use futures_util::future::Either;
@@ -17,7 +16,7 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::Sleep;
 use tracing::{debug, trace, warn};
 
-use super::dns::{self, resolve, GaiResolver, Resolve};
+use super::dns::{self, GaiResolver, Resolve, resolve};
 use super::{Connected, Connection};
 use crate::rt::TokioIo;
 
@@ -78,6 +77,18 @@ struct Config {
     recv_buffer_size: Option<usize>,
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     interface: Option<String>,
+    #[cfg(any(
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "solaris",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+    ))]
+    interface: Option<std::ffi::CString>,
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    mark: Option<u32>,
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     tcp_user_timeout: Option<Duration>,
 }
@@ -104,52 +115,92 @@ impl TcpKeepaliveConfig {
         if let Some(retries) = self.retries {
             ka = Self::ka_with_retries(ka, retries, &mut dirty)
         };
-        if dirty {
-            Some(ka)
-        } else {
-            None
-        }
+        if dirty { Some(ka) } else { None }
     }
 
-    #[cfg(not(any(
-        target_os = "aix",
-        target_os = "openbsd",
-        target_os = "redox",
-        target_os = "solaris"
-    )))]
+    #[cfg(
+        // See https://docs.rs/socket2/0.5.8/src/socket2/lib.rs.html#511-525
+        any(
+            target_os = "android",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "fuchsia",
+            target_os = "illumos",
+            target_os = "ios",
+            target_os = "visionos",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "netbsd",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "windows",
+        )
+    )]
     fn ka_with_interval(ka: TcpKeepalive, interval: Duration, dirty: &mut bool) -> TcpKeepalive {
         *dirty = true;
         ka.with_interval(interval)
     }
 
-    #[cfg(any(
-        target_os = "aix",
-        target_os = "openbsd",
-        target_os = "redox",
-        target_os = "solaris"
+    #[cfg(not(
+         // See https://docs.rs/socket2/0.5.8/src/socket2/lib.rs.html#511-525
+        any(
+            target_os = "android",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "fuchsia",
+            target_os = "illumos",
+            target_os = "ios",
+            target_os = "visionos",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "netbsd",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "windows",
+        )
     ))]
     fn ka_with_interval(ka: TcpKeepalive, _: Duration, _: &mut bool) -> TcpKeepalive {
         ka // no-op as keepalive interval is not supported on this platform
     }
 
-    #[cfg(not(any(
-        target_os = "aix",
-        target_os = "openbsd",
-        target_os = "redox",
-        target_os = "solaris",
-        target_os = "windows"
-    )))]
+    #[cfg(
+        // See https://docs.rs/socket2/0.5.8/src/socket2/lib.rs.html#557-570
+        any(
+            target_os = "android",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "fuchsia",
+            target_os = "illumos",
+            target_os = "ios",
+            target_os = "visionos",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "netbsd",
+            target_os = "tvos",
+            target_os = "watchos",
+        )
+    )]
     fn ka_with_retries(ka: TcpKeepalive, retries: u32, dirty: &mut bool) -> TcpKeepalive {
         *dirty = true;
         ka.with_retries(retries)
     }
 
-    #[cfg(any(
-        target_os = "aix",
-        target_os = "openbsd",
-        target_os = "redox",
-        target_os = "solaris",
-        target_os = "windows"
+    #[cfg(not(
+        // See https://docs.rs/socket2/0.5.8/src/socket2/lib.rs.html#557-570
+        any(
+            target_os = "android",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "fuchsia",
+            target_os = "illumos",
+            target_os = "ios",
+            target_os = "visionos",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "netbsd",
+            target_os = "tvos",
+            target_os = "watchos",
+        )
     ))]
     fn ka_with_retries(ka: TcpKeepalive, _: u32, _: &mut bool) -> TcpKeepalive {
         ka // no-op as keepalive retries is not supported on this platform
@@ -168,7 +219,7 @@ impl HttpConnector {
 impl<R> HttpConnector<R> {
     /// Construct a new HttpConnector.
     ///
-    /// Takes a [`Resolver`](crate::client::connect::dns#resolvers-are-services) to handle DNS lookups.
+    /// Takes a [`Resolver`](crate::client::legacy::connect::dns#resolvers-are-services) to handle DNS lookups.
     pub fn new_with_resolver(resolver: R) -> HttpConnector<R> {
         HttpConnector {
             config: Arc::new(Config {
@@ -182,8 +233,21 @@ impl<R> HttpConnector<R> {
                 reuse_address: false,
                 send_buffer_size: None,
                 recv_buffer_size: None,
-                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                #[cfg(any(
+                    target_os = "android",
+                    target_os = "fuchsia",
+                    target_os = "illumos",
+                    target_os = "ios",
+                    target_os = "linux",
+                    target_os = "macos",
+                    target_os = "solaris",
+                    target_os = "tvos",
+                    target_os = "visionos",
+                    target_os = "watchos",
+                ))]
                 interface: None,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                mark: None,
                 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 tcp_user_timeout: None,
             }),
@@ -309,23 +373,76 @@ impl<R> HttpConnector<R> {
         self
     }
 
-    /// Sets the value for the `SO_BINDTODEVICE` option on this socket.
+    /// Sets the name of the interface to bind sockets produced by this
+    /// connector.
+    ///
+    /// On Linux, this sets the `SO_BINDTODEVICE` option on this socket (see
+    /// [`man 7 socket`] for details). On macOS (and macOS-derived systems like
+    /// iOS), illumos, and Solaris, this will instead use the `IP_BOUND_IF`
+    /// socket option (see [`man 7p ip`]).
     ///
     /// If a socket is bound to an interface, only packets received from that particular
     /// interface are processed by the socket. Note that this only works for some socket
-    /// types, particularly AF_INET sockets.
+    /// types, particularly `AF_INET`` sockets.
     ///
     /// On Linux it can be used to specify a [VRF], but the binary needs
     /// to either have `CAP_NET_RAW` or to be run as root.
     ///
-    /// This function is only available on Android、Fuchsia and Linux.
+    /// This function is only available on the following operating systems:
+    /// - Linux, including Android
+    /// - Fuchsia
+    /// - illumos and Solaris
+    /// - macOS, iOS, visionOS, watchOS, and tvOS
     ///
     /// [VRF]: https://www.kernel.org/doc/Documentation/networking/vrf.txt
-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    /// [`man 7 socket`]: https://man7.org/linux/man-pages/man7/socket.7.html
+    /// [`man 7p ip`]: https://docs.oracle.com/cd/E86824_01/html/E54777/ip-7p.html
+    #[cfg(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "solaris",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+    ))]
     #[inline]
     pub fn set_interface<S: Into<String>>(&mut self, interface: S) -> &mut Self {
-        self.config_mut().interface = Some(interface.into());
+        let interface = interface.into();
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+        {
+            self.config_mut().interface = Some(interface);
+        }
+        #[cfg(not(any(target_os = "android", target_os = "fuchsia", target_os = "linux")))]
+        {
+            let interface = std::ffi::CString::new(interface)
+                .expect("interface name should not have nulls in it");
+            self.config_mut().interface = Some(interface);
+        }
         self
+    }
+
+    /// Sets the mark on sockets produced by this connector.
+    ///
+    /// This sets the `SO_MARK` option on the socket (see [`man 7 socket`]
+    /// for details). The mark can be matched by policy routing rules and
+    /// packet filters.
+    ///
+    /// Setting the mark requires the binary to either have `CAP_NET_ADMIN`
+    /// or to be run as root.
+    ///
+    /// This function is only available on the following operating systems:
+    /// - Linux, including Android
+    /// - Fuchsia
+    ///
+    /// [`man 7 socket`]: https://man7.org/linux/man-pages/man7/socket.7.html
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    #[inline]
+    pub fn set_mark(&mut self, mark: Option<u32>) {
+        self.config_mut().mark = mark;
     }
 
     /// Sets the value of the TCP_USER_TIMEOUT option on the socket.
@@ -366,7 +483,7 @@ where
     type Future = HttpConnecting<R>;
 
     fn poll_ready(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        futures_util::ready!(self.resolver.poll_ready(cx)).map_err(ConnectError::dns)?;
+        ready!(self.resolver.poll_ready(cx)).map_err(ConnectError::dns)?;
         Poll::Ready(Ok(()))
     }
 
@@ -390,13 +507,15 @@ fn get_host_port<'u>(config: &Config, dst: &'u Uri) -> Result<(&'u str, u16), Co
     if config.enforce_http {
         if dst.scheme() != Some(&Scheme::HTTP) {
             return Err(ConnectError {
-                msg: INVALID_NOT_HTTP.into(),
+                msg: INVALID_NOT_HTTP,
+                addr: None,
                 cause: None,
             });
         }
     } else if dst.scheme().is_none() {
         return Err(ConnectError {
-            msg: INVALID_MISSING_SCHEME.into(),
+            msg: INVALID_MISSING_SCHEME,
+            addr: None,
             cause: None,
         });
     }
@@ -405,9 +524,10 @@ fn get_host_port<'u>(config: &Config, dst: &'u Uri) -> Result<(&'u str, u16), Co
         Some(s) => s,
         None => {
             return Err(ConnectError {
-                msg: INVALID_MISSING_HOST.into(),
+                msg: INVALID_MISSING_HOST,
+                addr: None,
                 cause: None,
-            })
+            });
         }
     };
     let port = match dst.port() {
@@ -432,7 +552,7 @@ where
         let config = &self.config;
 
         let (host, port) = get_host_port(config, &dst)?;
-        let host = host.trim_start_matches('[').trim_end_matches(']');
+        let host = crate::client::strip_ipv6_brackets(host);
 
         // If the host is already an IP addr (v4 or v6),
         // skip resolving the dns and start connecting right away.
@@ -475,6 +595,20 @@ impl Connection for TcpStream {
         } else {
             connected
         }
+    }
+}
+
+#[cfg(unix)]
+impl Connection for tokio::net::UnixStream {
+    fn connected(&self) -> Connected {
+        Connected::new()
+    }
+}
+
+#[cfg(windows)]
+impl Connection for tokio::net::windows::named_pipe::NamedPipeClient {
+    fn connected(&self) -> Connected {
+        Connected::new()
     }
 }
 
@@ -529,18 +663,19 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
 // Not publicly exported (so missing_docs doesn't trigger).
 pub struct ConnectError {
-    msg: Box<str>,
+    msg: &'static str,
+    addr: Option<SocketAddr>,
     cause: Option<Box<dyn StdError + Send + Sync>>,
 }
 
 impl ConnectError {
-    fn new<S, E>(msg: S, cause: E) -> ConnectError
+    fn new<E>(msg: &'static str, cause: E) -> ConnectError
     where
-        S: Into<Box<str>>,
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
         ConnectError {
-            msg: msg.into(),
+            msg,
+            addr: None,
             cause: Some(cause.into()),
         }
     }
@@ -552,9 +687,8 @@ impl ConnectError {
         ConnectError::new("dns error", cause)
     }
 
-    fn m<S, E>(msg: S) -> impl FnOnce(E) -> ConnectError
+    fn m<E>(msg: &'static str) -> impl FnOnce(E) -> ConnectError
     where
-        S: Into<Box<str>>,
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
         move |cause| ConnectError::new(msg, cause)
@@ -563,26 +697,21 @@ impl ConnectError {
 
 impl fmt::Debug for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(ref cause) = self.cause {
-            f.debug_tuple("ConnectError")
-                .field(&self.msg)
-                .field(cause)
-                .finish()
-        } else {
-            self.msg.fmt(f)
+        let mut b = f.debug_tuple("ConnectError");
+        b.field(&self.msg);
+        if let Some(ref addr) = self.addr {
+            b.field(addr);
         }
+        if let Some(ref cause) = self.cause {
+            b.field(cause);
+        }
+        b.finish()
     }
 }
 
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.msg)?;
-
-        if let Some(ref cause) = self.cause {
-            write!(f, ": {}", cause)?;
-        }
-
-        Ok(())
+        f.write_str(self.msg)
     }
 }
 
@@ -660,9 +789,13 @@ impl ConnectingTcpRemote {
                     debug!("connected to {}", addr);
                     return Ok(tcp);
                 }
-                Err(e) => {
+                Err(mut e) => {
                     trace!("connect error for {}: {:?}", addr, e);
-                    err = Some(e);
+                    e.addr = Some(addr);
+                    // only return the first error, we assume it's the most relevant
+                    if err.is_none() {
+                        err = Some(e);
+                    }
                 }
             }
         }
@@ -731,12 +864,65 @@ fn connect(
         }
     }
 
-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     // That this only works for some socket types, particularly AF_INET sockets.
+    #[cfg(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "solaris",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+    ))]
     if let Some(interface) = &config.interface {
+        // On Linux-like systems, set the interface to bind using
+        // `SO_BINDTODEVICE`.
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         socket
             .bind_device(Some(interface.as_bytes()))
             .map_err(ConnectError::m("tcp bind interface error"))?;
+
+        // On macOS-like and Solaris-like systems, we instead use `IP_BOUND_IF`.
+        // This socket option desires an integer index for the interface, so we
+        // must first determine the index of the requested interface name using
+        // `if_nametoindex`.
+        #[cfg(any(
+            target_os = "illumos",
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "solaris",
+            target_os = "tvos",
+            target_os = "visionos",
+            target_os = "watchos",
+        ))]
+        {
+            let idx = unsafe { libc::if_nametoindex(interface.as_ptr()) };
+            let idx = std::num::NonZeroU32::new(idx).ok_or_else(|| {
+                // If the index is 0, check errno and return an I/O error.
+                ConnectError::new(
+                    "error converting interface name to index",
+                    io::Error::last_os_error(),
+                )
+            })?;
+            // Different setsockopt calls are necessary depending on whether the
+            // address is IPv4 or IPv6.
+            match addr {
+                SocketAddr::V4(_) => socket.bind_device_by_index_v4(Some(idx)),
+                SocketAddr::V6(_) => socket.bind_device_by_index_v6(Some(idx)),
+            }
+            .map_err(ConnectError::m("tcp bind interface error"))?;
+        }
+    }
+
+    // On Linux-like systems, set the packet mark using `SO_MARK`.
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    if let Some(mark) = config.mark {
+        socket
+            .set_mark(mark)
+            .map_err(ConnectError::m("tcp set_mark error"))?;
     }
 
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -754,24 +940,8 @@ fn connect(
     )
     .map_err(ConnectError::m("tcp bind local error"))?;
 
-    #[cfg(unix)]
-    let socket = unsafe {
-        // Safety: `from_raw_fd` is only safe to call if ownership of the raw
-        // file descriptor is transferred. Since we call `into_raw_fd` on the
-        // socket2 socket, it gives up ownership of the fd and will not close
-        // it, so this is safe.
-        use std::os::unix::io::{FromRawFd, IntoRawFd};
-        TcpSocket::from_raw_fd(socket.into_raw_fd())
-    };
-    #[cfg(windows)]
-    let socket = unsafe {
-        // Safety: `from_raw_socket` is only safe to call if ownership of the raw
-        // Windows SOCKET is transferred. Since we call `into_raw_socket` on the
-        // socket2 socket, it gives up ownership of the SOCKET and will not close
-        // it, so this is safe.
-        use std::os::windows::io::{FromRawSocket, IntoRawSocket};
-        TcpSocket::from_raw_socket(socket.into_raw_socket())
-    };
+    // Convert the `Socket` to a Tokio `TcpSocket`.
+    let socket = TcpSocket::from_std_stream(socket.into());
 
     if config.reuse_address {
         if let Err(e) = socket.set_reuseaddr(true) {
@@ -810,14 +980,9 @@ impl ConnectingTcp<'_> {
         match self.fallback {
             None => self.preferred.connect(self.config).await,
             Some(mut fallback) => {
-                let preferred_fut = self.preferred.connect(self.config);
-                futures_util::pin_mut!(preferred_fut);
-
-                let fallback_fut = fallback.remote.connect(self.config);
-                futures_util::pin_mut!(fallback_fut);
-
-                let fallback_delay = fallback.delay;
-                futures_util::pin_mut!(fallback_delay);
+                let preferred_fut = pin!(self.preferred.connect(self.config));
+                let fallback_fut = pin!(fallback.remote.connect(self.config));
+                let fallback_delay = pin!(fallback.delay);
 
                 let (result, future) =
                     match futures_util::future::select(preferred_fut, fallback_delay).await {
@@ -878,7 +1043,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(miri, ignore)]
     async fn test_errors_enforce_http() {
         let dst = "https://example.domain/foo/bar?baz".parse().unwrap();
         let connector = HttpConnector::new();
@@ -922,7 +1086,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(miri, ignore)]
     async fn test_errors_missing_scheme() {
         let dst = "example.domain".parse().unwrap();
         let mut connector = HttpConnector::new();
@@ -942,7 +1105,7 @@ mod tests {
         let (bind_ip_v4, bind_ip_v6) = get_local_ips();
         let server4 = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = server4.local_addr().unwrap().port();
-        let server6 = TcpListener::bind(&format!("[::1]:{}", port)).unwrap();
+        let server6 = TcpListener::bind(format!("[::1]:{port}")).unwrap();
 
         let assert_client_ip = |dst: String, server: TcpListener, expected_ip: IpAddr| async move {
             let mut connector = HttpConnector::new();
@@ -962,11 +1125,11 @@ mod tests {
         };
 
         if let Some(ip) = bind_ip_v4 {
-            assert_client_ip(format!("http://127.0.0.1:{}", port), server4, ip.into()).await;
+            assert_client_ip(format!("http://127.0.0.1:{port}"), server4, ip.into()).await;
         }
 
         if let Some(ip) = bind_ip_v6 {
-            assert_client_ip(format!("http://[::1]:{}", port), server6, ip.into()).await;
+            assert_client_ip(format!("http://[::1]:{port}"), server6, ip.into()).await;
         }
     }
 
@@ -983,7 +1146,7 @@ mod tests {
         let server4 = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = server4.local_addr().unwrap().port();
 
-        let server6 = TcpListener::bind(&format!("[::1]:{}", port)).unwrap();
+        let server6 = TcpListener::bind(format!("[::1]:{port}")).unwrap();
 
         let assert_interface_name =
             |dst: String,
@@ -1006,14 +1169,14 @@ mod tests {
             };
 
         assert_interface_name(
-            format!("http://127.0.0.1:{}", port),
+            format!("http://127.0.0.1:{port}"),
             server4,
             interface.clone(),
             interface.clone(),
         )
         .await;
         assert_interface_name(
-            format!("http://[::1]:{}", port),
+            format!("http://[::1]:{port}"),
             server6,
             interface.clone(),
             interface.clone(),
@@ -1028,12 +1191,12 @@ mod tests {
         use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
         use std::time::{Duration, Instant};
 
-        use super::dns;
         use super::ConnectingTcp;
+        use super::dns;
 
         let server4 = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = server4.local_addr().unwrap();
-        let _server6 = TcpListener::bind(&format!("[::1]:{}", addr.port())).unwrap();
+        let _server6 = TcpListener::bind(format!("[::1]:{}", addr.port())).unwrap();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1137,7 +1300,7 @@ mod tests {
                 .block_on(async move {
                     let addrs = hosts
                         .iter()
-                        .map(|host| (host.clone(), addr.port()).into())
+                        .map(|host| (*host, addr.port()).into())
                         .collect();
                     let cfg = Config {
                         local_address_ipv4: None,
@@ -1156,6 +1319,22 @@ mod tests {
                             target_os = "linux"
                         ))]
                         interface: None,
+                        #[cfg(any(
+                            target_os = "illumos",
+                            target_os = "ios",
+                            target_os = "macos",
+                            target_os = "solaris",
+                            target_os = "tvos",
+                            target_os = "visionos",
+                            target_os = "watchos",
+                        ))]
+                        interface: None,
+                        #[cfg(any(
+                            target_os = "android",
+                            target_os = "fuchsia",
+                            target_os = "linux"
+                        ))]
+                        mark: None,
                         #[cfg(any(
                             target_os = "android",
                             target_os = "fuchsia",
@@ -1234,8 +1413,10 @@ mod tests {
 
     #[test]
     fn tcp_keepalive_time_config() {
-        let mut kac = TcpKeepaliveConfig::default();
-        kac.time = Some(Duration::from_secs(60));
+        let kac = TcpKeepaliveConfig {
+            time: Some(Duration::from_secs(60)),
+            ..Default::default()
+        };
         if let Some(tcp_keepalive) = kac.into_tcpkeepalive() {
             assert!(format!("{tcp_keepalive:?}").contains("time: Some(60s)"));
         } else {
@@ -1246,8 +1427,10 @@ mod tests {
     #[cfg(not(any(target_os = "openbsd", target_os = "redox", target_os = "solaris")))]
     #[test]
     fn tcp_keepalive_interval_config() {
-        let mut kac = TcpKeepaliveConfig::default();
-        kac.interval = Some(Duration::from_secs(1));
+        let kac = TcpKeepaliveConfig {
+            interval: Some(Duration::from_secs(1)),
+            ..Default::default()
+        };
         if let Some(tcp_keepalive) = kac.into_tcpkeepalive() {
             assert!(format!("{tcp_keepalive:?}").contains("interval: Some(1s)"));
         } else {
@@ -1263,8 +1446,10 @@ mod tests {
     )))]
     #[test]
     fn tcp_keepalive_retries_config() {
-        let mut kac = TcpKeepaliveConfig::default();
-        kac.retries = Some(3);
+        let kac = TcpKeepaliveConfig {
+            retries: Some(3),
+            ..Default::default()
+        };
         if let Some(tcp_keepalive) = kac.into_tcpkeepalive() {
             assert!(format!("{tcp_keepalive:?}").contains("retries: Some(3)"));
         } else {

@@ -1,16 +1,5 @@
-/* Copyright (c) 2018, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2018, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <openssl/base.h>
 
@@ -31,6 +20,7 @@
 #include "fipsmodule/cpucap/internal.h"
 #include "fipsmodule/modes/internal.h"
 #include "fipsmodule/bn/rsaz_exp.h"
+#include "fipsmodule/sha/internal.h"
 
 #include "test/file_test.h"
 
@@ -41,14 +31,14 @@ class ImplDispatchTest : public ::testing::Test {
     aes_hw_ = CRYPTO_is_AESNI_capable();
     avx_movbe_ = CRYPTO_is_AVX_capable() && CRYPTO_is_MOVBE_capable();
     aes_vpaes_ = CRYPTO_is_SSSE3_capable();
+    is_avx2_ = CRYPTO_is_AVX2_capable();
     ifma_avx512 = CRYPTO_is_AVX512IFMA_capable();
     sha_ext_ =
-// TODO(CryptoAlg-2137): sha_ext_ isn't enabled on Windows Debug Builds with newer
-// 32-bit Intel processors.
-#if !(defined(OPENSSL_WINDOWS) && defined(OPENSSL_X86) && !defined(NDEBUG))
-    CRYPTO_is_SHAEXT_capable();
+    // sha_ext_ isn't enabled on 32-bit x86 architectures.
+#if defined(OPENSSL_X86)
+        false;
 #else
-    false;
+        CRYPTO_is_SHAEXT_capable();
 #endif
 
     vaes_vpclmulqdq_ =
@@ -86,6 +76,24 @@ class ImplDispatchTest : public ::testing::Test {
     aes_gcm_8x_ = CRYPTO_is_ARMv8_GCM_8x_capable();
     sha_ext_ = OPENSSL_armcap_P & ARMV8_SHA256;
     sha_512_ext_ = OPENSSL_armcap_P & ARMV8_SHA512;
+    sha3_ext_ = CRYPTO_is_ARMv8_SHA3_capable();
+    neoverse_n1_ = CRYPTO_is_Neoverse_N1();
+    neoverse_v1_ = CRYPTO_is_Neoverse_V1();
+    neoverse_v2_ = CRYPTO_is_Neoverse_V2();
+    neoverse_v3_ = CRYPTO_is_Neoverse_V3();
+
+    assembler_has_neon_sha3_extension_ =
+#if defined(MY_ASSEMBLER_SUPPORTS_NEON_SHA3_EXTENSION)
+        true;
+#else
+        false;
+#endif
+#endif
+    have_s2n_bignum_asm_ =
+#if defined(KECCAK1600_S2N_BIGNUM_ASM)
+        true;
+#else
+        false;
 #endif
   }
 
@@ -116,10 +124,12 @@ class ImplDispatchTest : public ::testing::Test {
   bool aes_hw_ = false;
   bool aes_vpaes_ = false;
   bool sha_ext_ = false;
+  bool have_s2n_bignum_asm_ = false;
 #if defined(OPENSSL_X86) || defined(OPENSSL_X86_64)
   bool vaes_vpclmulqdq_ = false;
   bool avx_movbe_ = false;
   bool is_x86_64_ = false;
+  bool is_avx2_ = false;
   bool is_assembler_too_old = false;
   bool is_assembler_too_old_avx512 = false;
   bool ifma_avx512 = false;
@@ -127,6 +137,12 @@ class ImplDispatchTest : public ::testing::Test {
   bool aes_gcm_pmull_ = false;
   bool aes_gcm_8x_ = false;
   bool sha_512_ext_ = false;
+  bool sha3_ext_ = false;
+  bool neoverse_n1_ = false;
+  bool neoverse_v1_ = false;
+  bool neoverse_v2_ = false;
+  bool neoverse_v3_ = false;
+  bool assembler_has_neon_sha3_extension_ = false;
 #endif
 
 };
@@ -144,10 +160,18 @@ constexpr size_t kFlag_sha256_hw = 6;
 constexpr size_t kFlag_aesni_gcm_encrypt = 2;
 constexpr size_t kFlag_aes_gcm_encrypt_avx512 = 7;
 constexpr size_t kFlag_RSAZ_mod_exp_avx512_x2 = 8;
+constexpr size_t kFlag_sha3_keccak_f1600 = 9;
+constexpr size_t kFlag_sha3_keccak4_f1600_alt = 10;
 #else // AARCH64
 constexpr size_t kFlag_aes_gcm_enc_kernel = 2;
 constexpr size_t kFlag_aesv8_gcm_8x_enc_128 = 7;
 constexpr size_t kFlag_sha512_hw = 8;
+constexpr size_t kFlag_KeccakF1600_hw = 9;
+constexpr size_t kFlag_sha3_keccak_f1600 = 10;
+constexpr size_t kFlag_sha3_keccak_f1600_alt = 11;
+constexpr size_t kFlag_sha3_keccak2_f1600 = 12;
+constexpr size_t kFlag_sha3_keccak4_f1600_alt = 13;
+constexpr size_t kFlag_sha3_keccak4_f1600_alt2 = 14;
 #endif
 
 TEST_F(ImplDispatchTest, AEAD_AES_GCM) {
@@ -159,10 +183,12 @@ TEST_F(ImplDispatchTest, AEAD_AES_GCM) {
           {kFlag_vpaes_set_encrypt_key, aes_vpaes_ && !aes_hw_},
 #if defined(OPENSSL_X86) || defined(OPENSSL_X86_64)
           {kFlag_aes_hw_ctr32_encrypt_blocks, aes_hw_ &&
-           (is_assembler_too_old || !vaes_vpclmulqdq_)},
+           (!is_x86_64_ || is_assembler_too_old ||
+            !(vaes_vpclmulqdq_ && !is_assembler_too_old_avx512))},
           {kFlag_aesni_gcm_encrypt,
            is_x86_64_ && aes_hw_ && avx_movbe_ &&
-           !is_assembler_too_old && !vaes_vpclmulqdq_},
+           !is_assembler_too_old &&
+           !(vaes_vpclmulqdq_ && !is_assembler_too_old_avx512)},
           {kFlag_aes_gcm_encrypt_avx512,
            is_x86_64_ && aes_hw_ &&
            !is_assembler_too_old_avx512 &&
@@ -246,8 +272,107 @@ TEST_F(ImplDispatchTest, SHA512) {
         SHA512(in, 32, out);
       });
 }
+
+TEST_F(ImplDispatchTest, SHA3_512) {
+  // Assembly dispatch logic for Keccak-x1 on AArch64:
+  // - For Neoverse N1, V1, V2, V3, we use scalar Keccak assembly from s2n-bignum
+  //   (`sha3_keccak_f1600()`)
+  //   leveraging lazy rotations from https://eprint.iacr.org/2022/1243.
+  // - Otherwise, if the Neon SHA3 extension is supported, we use the Neon
+  //   Keccak assembly from s2n-bignum (`sha3_keccak_f1600_alt()`),
+  //   leveraging that extension.
+  // - Otherwise, fall back to scalar Keccak implementation from OpenSSL,
+  //   (`Keccak1600_hw()`), not using lazy rotations.
+  AssertFunctionsHit(
+      {
+          {kFlag_sha3_keccak_f1600,
+           have_s2n_bignum_asm_ &&
+           (neoverse_n1_ || neoverse_v1_ || neoverse_v2_ || neoverse_v3_) },
+          {kFlag_sha3_keccak_f1600_alt,
+           have_s2n_bignum_asm_ &&
+           !(neoverse_n1_ || neoverse_v1_ || neoverse_v2_ || neoverse_v3_) &&
+           (assembler_has_neon_sha3_extension_ && sha3_ext_) },
+          {kFlag_KeccakF1600_hw,
+           !have_s2n_bignum_asm_ ||
+           (
+             !(neoverse_n1_ || neoverse_v1_ || neoverse_v2_ || neoverse_v3_) &&
+             !(assembler_has_neon_sha3_extension_ && sha3_ext_)
+           ) },
+      },
+      [] {
+        const uint8_t in[32] = {0};
+        uint8_t out[SHA3_512_DIGEST_LENGTH];
+        SHA3_512(in, 32, out);
+      });
+}
 #endif // OPENSSL_AARCH64
 
+TEST_F(ImplDispatchTest, SHAKE256_Batched) {
+#if defined(OPENSSL_X86_64) || defined(OPENSSL_X86)
+  // Assembly dispatch logic for Keccak-x4 on x86:
+  // - For platforms with AVX2 support, we use batched Keccak assembly from s2n-bignum
+  //   (`sha3_keccak4_f1600_alt()`).
+  // - Otherwise, fall back to scalar Keccak implementation from s2n-bignum,
+  //   (`sha3_keccak_f1600()`).
+  AssertFunctionsHit(
+      {
+          {kFlag_sha3_keccak4_f1600_alt,
+           have_s2n_bignum_asm_ &&
+           is_avx2_ },
+           {kFlag_sha3_keccak_f1600,
+           have_s2n_bignum_asm_ && is_x86_64_ && !is_avx2_ },
+      },
+#else // AARCH64
+  // Assembly dispatch logic for Keccak-x4 on AArch64:
+  // - For Neoverse N1, we use scalar batched hybrid Keccak assembly from s2n-bignum
+  //   (`sha3_keccak4_f1600_alt()`) leveraging Neon and scalar assembly with
+  //   lazy rotations.
+  // - For Neoverse V1, V2, V3, we use SIMD batched hybrid Keccak assembly from s2n-bignum
+  //   (`sha3_keccak4_f1600_alt2()`) leveraging Neon, Neon SHA3 extension,
+  //   and scalar assembly with lazy rotations.
+  // - Otherwise, if the Neon SHA3 extension is supported, we use the 2-fold
+  //   Keccak assembly from s2n-bignum (`sha3_keccak2_f1600()`) twice,
+  //   which is a straightforward implementation using the SHA3 extension.
+  // - Otherwise, fall back to four times the 1-fold Keccak implementation
+  //   with its own dispatch logic.
+  AssertFunctionsHit(
+      {
+          {kFlag_sha3_keccak4_f1600_alt,
+           have_s2n_bignum_asm_ && neoverse_n1_},
+          {kFlag_sha3_keccak4_f1600_alt2,
+           have_s2n_bignum_asm_ &&
+           (neoverse_v1_ || neoverse_v2_ || neoverse_v3_) &&
+           assembler_has_neon_sha3_extension_},
+          {kFlag_sha3_keccak2_f1600,
+           have_s2n_bignum_asm_ &&
+           !(neoverse_n1_ || neoverse_v1_ || neoverse_v2_ || neoverse_v3_) &&
+           (assembler_has_neon_sha3_extension_ && sha3_ext_)},
+          // If we don't have assembly batched Keccak available,
+          // we fall back to the dispatch logic in KeccakF1600().
+          // Under the assumption that no batched Keccak assembly
+          // was chosen, this simplifies as follows:
+          // 1. If we run on Neoverse-V1, Neoverse-V2, or Neoverse-V3 and there is
+          //    no compiler support for SHA3 (otherwise, we would have
+          //    have chosen the batched hybrid with SHA3 extension),
+          //    we use the scalar assembly with lazy rotation.
+          // 2. Otherwise, we fall back to the OpenSSL assembly.
+          {kFlag_sha3_keccak_f1600,
+           have_s2n_bignum_asm_ && (neoverse_v1_ || neoverse_v2_ || neoverse_v3_) &&
+           !(assembler_has_neon_sha3_extension_ && sha3_ext_) },
+          {kFlag_KeccakF1600_hw,
+           !have_s2n_bignum_asm_ ||
+           (
+	       !neoverse_n1_ && !neoverse_v1_ && !neoverse_v2_ && !neoverse_v3_ &&
+	       !(assembler_has_neon_sha3_extension_ && sha3_ext_)
+	   ) },
+      },
+#endif
+      [] {
+        const uint8_t in[32] = {0};
+        uint8_t out0[32], out1[32], out2[32], out3[32];
+        SHAKE256_x4(in, in, in, in, 32, out0, out1, out2, out3, 32);
+      });
+}
 
 #if defined(OPENSSL_X86) || defined(OPENSSL_X86_64)
 static bssl::UniquePtr<BIGNUM> GetBIGNUM(FileTest *t, const char *attr);

@@ -27,12 +27,12 @@
 
 use core::fmt::Debug;
 
-use crate::{
-    digest::match_digest_type, digest::AlgorithmID, error::Unspecified, fips::indicator_check,
-};
+use crate::digest::{match_digest_type, AlgorithmID};
+use crate::error::Unspecified;
+use crate::fips::indicator_check;
 use core::ptr::null;
 
-use aws_lc::CRYPTO_tls1_prf;
+use crate::aws_lc::CRYPTO_tls1_prf;
 
 /// The TLS PRF `P_hash` Algorithm
 pub struct Algorithm(AlgorithmID);
@@ -162,7 +162,7 @@ fn prf(
 
     if 1 != indicator_check!(unsafe {
         CRYPTO_tls1_prf(
-            *digest,
+            digest.as_const_ptr(),
             output.as_mut_ptr(),
             output.len(),
             secret.as_ptr(),

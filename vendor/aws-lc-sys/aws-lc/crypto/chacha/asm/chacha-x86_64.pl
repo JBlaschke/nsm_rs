@@ -1,17 +1,11 @@
 #! /usr/bin/env perl
 # Copyright 2016 The OpenSSL Project Authors. All Rights Reserved.
-#
-# Licensed under the OpenSSL license (the "License").  You may not use
-# this file except in compliance with the License.  You can obtain a copy
-# in the file LICENSE in the source distribution or at
-# https://www.openssl.org/source/license.html
+# SPDX-License-Identifier: Apache-2.0
 
 #
 # ====================================================================
 # Written by Andy Polyakov <appro@openssl.org> for the OpenSSL
-# project. The module is, however, dual licensed under OpenSSL and
-# CRYPTOGAMS licenses depending on where you obtain it. For further
-# details see http://www.openssl.org/~appro/cryptogams/.
+# project.
 # ====================================================================
 #
 # November 2014
@@ -71,6 +65,7 @@ die "can't locate x86_64-xlate.pl";
 open OUT,"| \"$^X\" \"$xlate\" $flavour \"$output\"";
 *STDOUT=*OUT;
 
+# AWS-LC limits the ChaCha20 assembly generated here to AVX2.
 $avx = 2;
 for (@ARGV) { $avx = 0 if (/-DMY_ASSEMBLER_IS_TOO_OLD_FOR_AVX/); }
 
@@ -705,7 +700,6 @@ ChaCha20_ctr32_ssse3_4x:
 	_CET_ENDBR
 	mov		%rsp,%r9		# frame pointer
 .cfi_def_cfa_register	r9
-	mov		%r10,%r11
 ___
 $code.=<<___;
 	sub		\$0x140+$xframe,%rsp
@@ -2719,33 +2713,38 @@ $code.=<<___ if ($avx>2);
 ___
 $code.=<<___;
 .section	.xdata
-.align	8
+.align	4
 .LSEH_info_ChaCha20_ctr32_nohw:
 	.byte	9,0,0,0
 	.rva	se_handler
 
+.align	4
 .LSEH_info_ChaCha20_ctr32_ssse3:
 	.byte	9,0,0,0
 	.rva	ssse3_handler
 	.rva	.Lssse3_body,.Lssse3_epilogue
 
+.align	4
 .LSEH_info_ChaCha20_ctr32_ssse3_4x:
 	.byte	9,0,0,0
 	.rva	full_handler
 	.rva	.L4x_body,.L4x_epilogue
 ___
 $code.=<<___ if ($avx>1);
+.align	4
 .LSEH_info_ChaCha20_ctr32_avx2:
 	.byte	9,0,0,0
 	.rva	full_handler
 	.rva	.L8x_body,.L8x_epilogue			# HandlerData[]
 ___
 $code.=<<___ if ($avx>2);
+.align	4
 .LSEH_info_ChaCha20_avx512:
 	.byte	9,0,0,0
 	.rva	ssse3_handler
 	.rva	.Lavx512_body,.Lavx512_epilogue		# HandlerData[]
 
+.align	4
 .LSEH_info_ChaCha20_16x:
 	.byte	9,0,0,0
 	.rva	full_handler

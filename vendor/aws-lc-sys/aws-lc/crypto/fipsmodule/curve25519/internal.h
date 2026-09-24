@@ -1,16 +1,5 @@
-/* Copyright (c) 2020, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2020, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #ifndef OPENSSL_HEADER_CURVE25519_INTERNAL_H
 #define OPENSSL_HEADER_CURVE25519_INTERNAL_H
@@ -20,23 +9,100 @@ extern "C" {
 #endif
 
 #include <openssl/base.h>
+#include <openssl/curve25519.h>
 
 #include "../../internal.h"
 
-int ED25519_sign_no_self_test(uint8_t out_sig[ED25519_SIGNATURE_LEN],
-                              const uint8_t *message, size_t message_len,
-                              const uint8_t private_key[ED25519_PRIVATE_KEY_LEN]);
+typedef enum {
+  ED25519_ALG,
+  ED25519CTX_ALG,
+  ED25519PH_ALG,
+} ed25519_algorithm_t;
 
-int ED25519_verify_no_self_test(const uint8_t *message, size_t message_len,
-                                const uint8_t signature[ED25519_SIGNATURE_LEN],
-                                const uint8_t public_key[ED25519_PUBLIC_KEY_LEN]);
+#define DOM2_PREFIX_SIZE 32
+#define DOM2_F_SIZE 1
+#define DOM2_C_SIZE 1
+#define DOM2_F_OFFSET DOM2_PREFIX_SIZE
+#define DOM2_C_OFFSET (DOM2_F_OFFSET + DOM2_F_SIZE)
+#define DOM2_CONTEXT_OFFSET (DOM2_C_OFFSET + DOM2_C_SIZE)
+#define MAX_DOM2_CONTEXT_SIZE 255
+#define MAX_DOM2_SIZE \
+  (DOM2_PREFIX_SIZE + DOM2_F_SIZE + DOM2_C_SIZE + MAX_DOM2_CONTEXT_SIZE)
+
+int ED25519_keypair_internal(
+    uint8_t out_public_key[ED25519_PUBLIC_KEY_LEN],
+    uint8_t out_private_key[ED25519_PRIVATE_KEY_LEN]);
+
+int ed25519_sign_internal(
+    ed25519_algorithm_t alg,
+    uint8_t out_sig[ED25519_SIGNATURE_LEN],
+    const uint8_t *message, size_t message_len,
+    const uint8_t private_key[ED25519_PRIVATE_KEY_LEN],
+    const uint8_t *ctx, size_t ctx_len);
+
+int ed25519_verify_internal(
+    ed25519_algorithm_t alg,
+    const uint8_t *message, size_t message_len,
+    const uint8_t signature[ED25519_SIGNATURE_LEN],
+    const uint8_t public_key[ED25519_PUBLIC_KEY_LEN],
+    const uint8_t *ctx, size_t ctx_len);
+
+int ED25519_sign_no_self_test(
+    uint8_t out_sig[ED25519_SIGNATURE_LEN],
+    const uint8_t *message, size_t message_len,
+    const uint8_t private_key[ED25519_PRIVATE_KEY_LEN]);
+
+int ED25519_verify_no_self_test(
+    const uint8_t *message, size_t message_len,
+    const uint8_t signature[ED25519_SIGNATURE_LEN],
+    const uint8_t public_key[ED25519_PUBLIC_KEY_LEN]);
+
+int ED25519ctx_sign_no_self_test(
+    uint8_t out_sig[ED25519_SIGNATURE_LEN],
+    const uint8_t *message, size_t message_len,
+    const uint8_t private_key[ED25519_PRIVATE_KEY_LEN],
+    const uint8_t *context, size_t context_len);
+
+int ED25519ctx_verify_no_self_test(
+    const uint8_t *message, size_t message_len,
+    const uint8_t signature[ED25519_SIGNATURE_LEN],
+    const uint8_t public_key[ED25519_PUBLIC_KEY_LEN],
+    const uint8_t *context, size_t context_len);
+
+int ED25519ph_sign_no_self_test(
+    uint8_t out_sig[ED25519_SIGNATURE_LEN],
+    const uint8_t *message, size_t message_len,
+    const uint8_t private_key[ED25519_PRIVATE_KEY_LEN],
+    const uint8_t *context, size_t context_len);
+
+int ED25519ph_sign_digest_no_self_test(
+    uint8_t out_sig[ED25519_SIGNATURE_LEN],
+    const uint8_t digest[SHA512_DIGEST_LENGTH],
+    const uint8_t private_key[ED25519_PRIVATE_KEY_LEN],
+    const uint8_t *context, size_t context_len);
+
+int ED25519ph_verify_no_self_test(
+    const uint8_t *message, size_t message_len,
+    const uint8_t signature[ED25519_SIGNATURE_LEN],
+    const uint8_t public_key[ED25519_PUBLIC_KEY_LEN],
+    const uint8_t *context, size_t context_len);
+
+int ED25519ph_verify_digest_no_self_test(
+    const uint8_t digest[SHA512_DIGEST_LENGTH],
+    const uint8_t signature[ED25519_SIGNATURE_LEN],
+    const uint8_t public_key[ED25519_PUBLIC_KEY_LEN],
+    const uint8_t *context, size_t context_len);
 
 // If (1) x86_64 or aarch64, (2) linux or apple, and (3) OPENSSL_NO_ASM is not
-// set, s2n-bignum path is capable.
-#if ((defined(OPENSSL_X86_64) && !defined(MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX)) || \
+// set, s2n-bignum path is capable. On x86_64 this needs BMI2/ADX, not
+// AVX-512, so it is gated on MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2 rather
+// than MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX. OPENSSL_SMALL implies only the
+// latter, so this path remains available under OPENSSL_SMALL (#3355).
+#if ((defined(OPENSSL_X86_64) && !defined(MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2)) || \
      defined(OPENSSL_AARCH64)) &&                                              \
     (defined(OPENSSL_LINUX) || defined(OPENSSL_APPLE) ||                       \
-     defined(OPENSSL_OPENBSD) || defined(OPENSSL_FREEBSD)) &&                  \
+     defined(OPENSSL_OPENBSD) || defined(OPENSSL_FREEBSD) || \
+     defined(OPENSSL_NETBSD)) &&                  \
     !defined(OPENSSL_NO_ASM)
 #define CURVE25519_S2N_BIGNUM_CAPABLE
 #endif
@@ -167,31 +233,39 @@ void ed25519_public_key_from_hashed_seed_nohw(
 // |ED25519_PRIVATE_KEY_SEED_LEN| and |A| must have length
 // |ED25519_PUBLIC_KEY_LEN|.
 void ed25519_sign_s2n_bignum(uint8_t out_sig[ED25519_SIGNATURE_LEN],
-  uint8_t r[SHA512_DIGEST_LENGTH], const uint8_t *s, const uint8_t *A,
-  const void *message, size_t message_len);
+                             uint8_t r[SHA512_DIGEST_LENGTH], const uint8_t *s,
+                             const uint8_t *A,
+                             const void *message, size_t message_len,
+                             const uint8_t *dom2, size_t dom2_len);
 void ed25519_sign_nohw(uint8_t out_sig[ED25519_SIGNATURE_LEN],
-  uint8_t r[SHA512_DIGEST_LENGTH], const uint8_t *s, const uint8_t *A,
-  const void *message, size_t message_len);
+                       uint8_t r[SHA512_DIGEST_LENGTH], const uint8_t *s,
+                       const uint8_t *A,
+                       const void *message, size_t message_len,
+                       const uint8_t *dom2, size_t dom2_len);
 
 // ed25519_verify_[s2n_bignum,nohw] handles steps rfc8032 5.1.7.[1,2,3].
 // Computes [S]B - [k]A' and returns the result in |R_computed_encoded|. Returns
 // 1 on success and 0 otherwise. The failure case occurs if decoding of the
 // public key |public_key| fails.
 int ed25519_verify_s2n_bignum(uint8_t R_computed_encoded[32],
-  const uint8_t public_key[ED25519_PUBLIC_KEY_LEN], uint8_t R_expected[32],
-  uint8_t S[32], const uint8_t *message, size_t message_len);
+                              const uint8_t public_key[ED25519_PUBLIC_KEY_LEN],
+                              uint8_t R_expected[32], uint8_t S[32],
+                              const uint8_t *message, size_t message_len,
+                              const uint8_t *dom2, size_t dom2_len);
 int ed25519_verify_nohw(uint8_t R_computed_encoded[32],
-  const uint8_t public_key[ED25519_PUBLIC_KEY_LEN], uint8_t R_expected[32],
-  uint8_t S[32], const uint8_t *message, size_t message_len);
+                        const uint8_t public_key[ED25519_PUBLIC_KEY_LEN],
+                        uint8_t R_expected[32], uint8_t S[32],
+                        const uint8_t *message, size_t message_len,
+                        const uint8_t *dom2, size_t dom2_len);
 
-// Computes the SHA512 function of three input pairs: (|input1|, |len1|),
-// (|input2|, |len2|), (|input3|, |len3|). Specifically, the hash is computed
-// over the concatenation: |input1| || |input2| || |input3|.
-// The final pair might have |len3| == 0, meaning this input will be ignored.
-// The result is written to |out|.
+// Computes the SHA512 function of up to four input pairs: (|input1|, |len1|),
+// (|input2|, |len2|), (|input3|, |len3|), (|input4|, |len4|). Specifically, the
+// hash is computed over the concatenation: |input1| || |input2| || |input3| ||
+// |input4|. The final two pairs may have |len3| == 0 or |len4| == 0, meaning
+// those input values will be ignored. The result is written to |out|.
 void ed25519_sha512(uint8_t out[SHA512_DIGEST_LENGTH],
   const void *input1, size_t len1, const void *input2, size_t len2,
-  const void *input3, size_t len3);
+  const void *input3, size_t len3, const void *input4, size_t len4);
 
 
 int ed25519_check_public_key_s2n_bignum(const uint8_t public_key[ED25519_PUBLIC_KEY_LEN]);

@@ -1,4 +1,3 @@
-#![allow(unknown_lints, unexpected_cfgs)]
 #![warn(rust_2018_idioms)]
 #![cfg(all(
     feature = "full",
@@ -61,6 +60,38 @@ fn num_idle_blocking_threads() {
     }
 
     assert_eq!(1, rt.metrics().num_idle_blocking_threads());
+}
+
+#[test]
+fn num_idle_blocking_threads_is_zero_after_shutdown() {
+    let rt = current_thread();
+    let handle = rt.handle().clone();
+
+    // Spawn a blocking task to create a worker thread.
+    let _ = rt.block_on(rt.spawn_blocking(move || {}));
+
+    // Wait for the thread to become idle.
+    rt.block_on(async {
+        time::sleep(Duration::from_millis(5)).await;
+    });
+    if handle.metrics().num_idle_blocking_threads() == 0 {
+        rt.block_on(async {
+            time::sleep(Duration::from_secs(1)).await;
+        });
+    }
+    assert_eq!(1, handle.metrics().num_idle_blocking_threads());
+
+    // Drop the runtime, which triggers shutdown and joins all blocking
+    // threads. Before the fix for #6439, the shutdown path incremented
+    // num_idle_threads a second time for each idle worker, so this
+    // counter stayed at 1 instead of going back to 0.
+    drop(rt);
+
+    assert_eq!(
+        0,
+        handle.metrics().num_idle_blocking_threads(),
+        "num_idle_blocking_threads should be 0 after shutdown (see #6439)"
+    );
 }
 
 #[test]
@@ -211,64 +242,6 @@ fn worker_thread_id_threaded() {
         );
     }))
     .unwrap()
-}
-
-#[test]
-fn worker_park_count() {
-    let rt = current_thread();
-    let metrics = rt.metrics();
-    rt.block_on(async {
-        time::sleep(Duration::from_millis(1)).await;
-    });
-    drop(rt);
-    assert!(1 <= metrics.worker_park_count(0));
-
-    let rt = threaded();
-    let metrics = rt.metrics();
-    rt.block_on(async {
-        time::sleep(Duration::from_millis(1)).await;
-    });
-    drop(rt);
-    assert!(1 <= metrics.worker_park_count(0));
-    assert!(1 <= metrics.worker_park_count(1));
-}
-
-#[test]
-fn worker_park_unpark_count() {
-    let rt = current_thread();
-    let metrics = rt.metrics();
-    rt.block_on(rt.spawn(async {})).unwrap();
-    drop(rt);
-    assert!(2 <= metrics.worker_park_unpark_count(0));
-
-    let rt = threaded();
-    let metrics = rt.metrics();
-
-    // Wait for workers to be parked after runtime startup.
-    for _ in 0..100 {
-        if 1 <= metrics.worker_park_unpark_count(0) && 1 <= metrics.worker_park_unpark_count(1) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    assert_eq!(1, metrics.worker_park_unpark_count(0));
-    assert_eq!(1, metrics.worker_park_unpark_count(1));
-
-    // Spawn a task to unpark and then park a worker.
-    rt.block_on(rt.spawn(async {})).unwrap();
-    for _ in 0..100 {
-        if 3 <= metrics.worker_park_unpark_count(0) || 3 <= metrics.worker_park_unpark_count(1) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    assert!(3 <= metrics.worker_park_unpark_count(0) || 3 <= metrics.worker_park_unpark_count(1));
-
-    // Both threads unpark for runtime shutdown.
-    drop(rt);
-    assert_eq!(0, metrics.worker_park_unpark_count(0) % 2);
-    assert_eq!(0, metrics.worker_park_unpark_count(1) % 2);
-    assert!(4 <= metrics.worker_park_unpark_count(0) || 4 <= metrics.worker_park_unpark_count(1));
 }
 
 #[test]
@@ -425,6 +398,34 @@ fn log_histogram() {
 }
 
 #[test]
+fn minimal_log_histogram() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .enable_metrics_poll_time_histogram()
+        .metrics_poll_time_histogram_configuration(HistogramConfiguration::log(
+            LogHistogram::builder()
+                .max_value(Duration::from_millis(4))
+                .min_value(Duration::from_micros(20))
+                .precision_exact(0),
+        ))
+        .build()
+        .unwrap();
+    let metrics = rt.metrics();
+    let num_buckets = rt.metrics().poll_time_histogram_num_buckets();
+    for b in 1..num_buckets - 1 {
+        let range = metrics.poll_time_histogram_bucket_range(b);
+        let size = range.end - range.start;
+        // Assert the buckets continue doubling in size
+        assert_eq!(
+            size,
+            Duration::from_nanos((1 << (b - 1)) * 16384),
+            "incorrect range for {b}"
+        );
+    }
+    assert_eq!(num_buckets, 10);
+}
+
+#[test]
 #[allow(deprecated)]
 fn legacy_log_histogram() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -567,49 +568,6 @@ fn worker_poll_count_histogram_disabled_without_explicit_enable() {
 }
 
 #[test]
-fn worker_total_busy_duration() {
-    const N: usize = 5;
-
-    let zero = Duration::from_millis(0);
-
-    let rt = current_thread();
-    let metrics = rt.metrics();
-
-    rt.block_on(async {
-        for _ in 0..N {
-            tokio::spawn(async {
-                tokio::task::yield_now().await;
-            })
-            .await
-            .unwrap();
-        }
-    });
-
-    drop(rt);
-
-    assert!(zero < metrics.worker_total_busy_duration(0));
-
-    let rt = threaded();
-    let metrics = rt.metrics();
-
-    rt.block_on(async {
-        for _ in 0..N {
-            tokio::spawn(async {
-                tokio::task::yield_now().await;
-            })
-            .await
-            .unwrap();
-        }
-    });
-
-    drop(rt);
-
-    for i in 0..metrics.num_workers() {
-        assert!(zero < metrics.worker_total_busy_duration(i));
-    }
-}
-
-#[test]
 fn worker_local_schedule_count() {
     let rt = current_thread();
     let metrics = rt.metrics();
@@ -637,7 +595,7 @@ fn worker_local_schedule_count() {
         .map(|i| metrics.worker_local_schedule_count(i))
         .sum();
 
-    assert_eq!(2, n);
+    assert!(n == 1 || n == 2, "n={n}");
     assert_eq!(1, metrics.remote_schedule_count());
 }
 
@@ -840,6 +798,55 @@ fn io_driver_ready_count() {
     let _stream = rt.block_on(async move { stream.await.unwrap() });
 
     assert_eq!(metrics.io_driver_ready_count(), 1);
+}
+
+#[cfg(feature = "schedule-latency")]
+#[test]
+fn schedule_latency_counts() {
+    const N: u64 = 50;
+    let rts = [
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .enable_metrics_schedule_latency_histogram()
+            .metrics_schedule_latency_histogram_configuration(HistogramConfiguration::linear(
+                Duration::from_millis(50),
+                3,
+            ))
+            .build()
+            .unwrap(),
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .enable_metrics_schedule_latency_histogram()
+            .metrics_schedule_latency_histogram_configuration(HistogramConfiguration::linear(
+                Duration::from_millis(50),
+                3,
+            ))
+            .build()
+            .unwrap(),
+    ];
+
+    for rt in rts {
+        let metrics = rt.metrics();
+        rt.block_on(async {
+            for _ in 0..N {
+                tokio::spawn(async {}).await.unwrap();
+            }
+        });
+        drop(rt);
+
+        let num_workers = metrics.num_workers();
+        let num_buckets = metrics.schedule_latency_histogram_num_buckets();
+
+        assert!(metrics.schedule_latency_histogram_enabled());
+        assert_eq!(num_buckets, 3);
+
+        let n = (0..num_workers)
+            .flat_map(|i| (0..num_buckets).map(move |j| (i, j)))
+            .map(|(worker, bucket)| metrics.schedule_latency_histogram_bucket_count(worker, bucket))
+            .sum();
+        assert_eq!(N, n);
+    }
 }
 
 async fn try_spawn_stealable_task() -> Result<(), mpsc::RecvTimeoutError> {

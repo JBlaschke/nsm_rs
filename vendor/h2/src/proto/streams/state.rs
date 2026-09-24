@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io;
 
 use crate::codec::UserError;
@@ -47,7 +48,7 @@ use self::Peer::*;
 ///        ES: END_STREAM flag
 ///        R:  RST_STREAM frame
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct State {
     inner: Inner,
 }
@@ -75,6 +76,8 @@ enum Peer {
 enum Cause {
     EndStream,
     Error(Error),
+    /// The stream was reset after the receive half had already reached EOS.
+    ErrorAfterEndStream(Error),
 
     /// This indicates to the connection that a reset frame must be sent out
     /// once the send queue has been flushed.
@@ -255,6 +258,7 @@ impl State {
     /// - `frame`: the received RST_STREAM frame.
     /// - `queued`: true if this stream has frames in the pending send queue.
     pub fn recv_reset(&mut self, frame: frame::Reset, queued: bool) {
+        let recv_end_stream = self.is_recv_end_stream();
         match self.inner {
             // If the stream is already in a `Closed` state, do nothing,
             // provided that there are no frames still in the send queue.
@@ -280,10 +284,13 @@ impl State {
                     state,
                     queued
                 );
-                self.inner = Closed(Cause::Error(Error::remote_reset(
-                    frame.stream_id(),
-                    frame.reason(),
-                )));
+                let error = Error::remote_reset(frame.stream_id(), frame.reason());
+                // Preserve the received EOS while retaining the reset for the send half.
+                self.inner = Closed(if recv_end_stream {
+                    Cause::ErrorAfterEndStream(error)
+                } else {
+                    Cause::Error(error)
+                });
             }
         }
     }
@@ -355,7 +362,7 @@ impl State {
 
     pub fn is_local_error(&self) -> bool {
         match self.inner {
-            Closed(Cause::Error(ref e)) => e.is_local(),
+            Closed(Cause::Error(ref e) | Cause::ErrorAfterEndStream(ref e)) => e.is_local(),
             Closed(Cause::ScheduledLibraryReset(..)) => true,
             _ => false,
         }
@@ -365,6 +372,11 @@ impl State {
         matches!(
             self.inner,
             Closed(Cause::Error(Error::Reset(_, _, Initiator::Remote)))
+                | Closed(Cause::ErrorAfterEndStream(Error::Reset(
+                    _,
+                    _,
+                    Initiator::Remote
+                )))
         )
     }
 
@@ -409,15 +421,16 @@ impl State {
         )
     }
 
-    pub fn is_closed(&self) -> bool {
-        matches!(self.inner, Closed(_))
-    }
-
-    pub fn is_recv_closed(&self) -> bool {
+    pub fn is_recv_end_stream(&self) -> bool {
+        // In each case END_STREAM has been received.
         matches!(
             self.inner,
-            Closed(..) | HalfClosedRemote(..) | ReservedLocal
+            Closed(Cause::EndStream | Cause::ErrorAfterEndStream(_)) | HalfClosedRemote(..)
         )
+    }
+
+    pub fn is_closed(&self) -> bool {
+        matches!(self.inner, Closed(_))
     }
 
     pub fn is_send_closed(&self) -> bool {
@@ -438,7 +451,9 @@ impl State {
             Closed(Cause::ScheduledLibraryReset(reason)) => {
                 Err(proto::Error::library_go_away(reason))
             }
-            Closed(Cause::EndStream) | HalfClosedRemote(..) | ReservedLocal => Ok(false),
+            Closed(Cause::EndStream | Cause::ErrorAfterEndStream(_))
+            | HalfClosedRemote(..)
+            | ReservedLocal => Ok(false),
             _ => Ok(true),
         }
     }
@@ -447,9 +462,13 @@ impl State {
     pub(super) fn ensure_reason(&self, mode: PollReset) -> Result<Option<Reason>, crate::Error> {
         match self.inner {
             Closed(Cause::Error(Error::Reset(_, reason, _)))
+            | Closed(Cause::ErrorAfterEndStream(Error::Reset(_, reason, _)))
             | Closed(Cause::Error(Error::GoAway(_, reason, _)))
+            | Closed(Cause::ErrorAfterEndStream(Error::GoAway(_, reason, _)))
             | Closed(Cause::ScheduledLibraryReset(reason)) => Ok(Some(reason)),
-            Closed(Cause::Error(ref e)) => Err(e.clone().into()),
+            Closed(Cause::Error(ref e) | Cause::ErrorAfterEndStream(ref e)) => {
+                Err(e.clone().into())
+            }
             Open {
                 local: Streaming, ..
             }
@@ -465,5 +484,39 @@ impl State {
 impl Default for State {
     fn default() -> State {
         State { inner: Inner::Idle }
+    }
+}
+
+// remove some noise for debug output
+impl fmt::Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::HeaderMap;
+
+    #[test]
+    fn recv_reset_preserves_received_end_stream() {
+        let stream_id = StreamId::from(1);
+        let mut state = State::default();
+        state.send_open(false).unwrap();
+
+        let mut headers = frame::Headers::new(stream_id, Default::default(), HeaderMap::new());
+        headers.set_end_stream();
+        state.recv_open(&headers).unwrap();
+        assert!(state.is_recv_end_stream());
+
+        state.recv_reset(frame::Reset::new(stream_id, Reason::NO_ERROR), true);
+
+        assert!(state.is_recv_end_stream());
+        assert_eq!(state.ensure_recv_open().unwrap(), false);
+        assert_eq!(
+            state.ensure_reason(PollReset::Streaming).unwrap(),
+            Some(Reason::NO_ERROR)
+        );
     }
 }

@@ -7,6 +7,8 @@ use std::{
 use clap_lex::OsStrExt as _;
 
 // Internal
+use crate::ArgAction;
+use crate::INTERNAL_ERROR_MSG;
 use crate::builder::{Arg, Command};
 use crate::error::Error as ClapError;
 use crate::error::Result as ClapResult;
@@ -17,8 +19,6 @@ use crate::parser::{ArgMatcher, SubCommand};
 use crate::parser::{Validator, ValueSource};
 use crate::util::AnyValue;
 use crate::util::Id;
-use crate::ArgAction;
-use crate::INTERNAL_ERROR_MSG;
 
 pub(crate) struct Parser<'cmd> {
     cmd: &'cmd mut Command,
@@ -54,14 +54,15 @@ impl<'cmd> Parser<'cmd> {
     ) -> ClapResult<()> {
         debug!("Parser::get_matches_with");
 
-        ok!(self.parse(matcher, raw_args, args_cursor).map_err(|err| {
-            if self.cmd.is_ignore_errors_set() {
-                #[cfg(feature = "env")]
-                let _ = self.add_env(matcher);
-                let _ = self.add_defaults(matcher);
-            }
-            err
-        }));
+        ok!(self
+            .parse(matcher, raw_args, args_cursor)
+            .inspect_err(|_err| {
+                if self.cmd.is_ignore_errors_set() {
+                    #[cfg(feature = "env")]
+                    let _ = self.add_env(matcher);
+                    let _ = self.add_defaults(matcher);
+                }
+            }));
         ok!(self.resolve_pending(matcher));
 
         #[cfg(feature = "env")]
@@ -134,6 +135,12 @@ impl<'cmd> Parser<'cmd> {
                         // ParseResult::MaybeHyphenValue, do nothing
                     } else {
                         debug!("Parser::get_matches_with: setting TrailingVals=true");
+                        if self.cmd.get_keymap().get(&pos_counter).is_some_and(|arg| {
+                            self.check_terminator(arg, arg_os.to_value_os()).is_some()
+                        }) {
+                            // count as both an escape and terminator
+                            pos_counter += 1;
+                        }
                         trailing_values = true;
                         matcher.start_trailing();
                         continue;
@@ -246,9 +253,7 @@ impl<'cmd> Parser<'cmd> {
 
                             debug!(
                                 "Parser::get_matches_with:FlagSubCommandShort: subcmd_name={}, keep_state={}, flag_subcmd_skip={}",
-                                name,
-                                keep_state,
-                                self.flag_subcmd_skip
+                                name, keep_state, self.flag_subcmd_skip
                             );
 
                             subcmd_name = Some(name);
@@ -483,7 +488,8 @@ impl<'cmd> Parser<'cmd> {
                     pos_sc_name.clone(),
                     matcher
                         .arg_ids()
-                        .map(|id| self.cmd.find(id).unwrap().to_string())
+                        // skip groups
+                        .filter_map(|id| self.cmd.find(id).map(|a| a.to_string()))
                         .collect(),
                     Usage::new(self.cmd).create_usage_with_title(&[]),
                 ));
@@ -737,8 +743,10 @@ impl<'cmd> Parser<'cmd> {
                     p.flag_subcmd_skip = self.flag_subcmd_skip;
                 }
                 if let Err(error) = p.get_matches_with(&mut sc_matcher, raw_args, args_cursor) {
-                    if partial_parsing_enabled {
-                        debug!("Parser::parse_subcommand: ignored error in subcommand {sc_name}: {error:?}");
+                    if partial_parsing_enabled && error.use_stderr() {
+                        debug!(
+                            "Parser::parse_subcommand: ignored error in subcommand {sc_name}: {error:?}"
+                        );
                     } else {
                         return Err(error);
                     }
@@ -778,7 +786,7 @@ impl<'cmd> Parser<'cmd> {
             Err(long_arg_os) => {
                 return Ok(ParseResult::NoMatchingArg {
                     arg: long_arg_os.to_string_lossy().into_owned(),
-                })
+                });
             }
         };
         if long_arg.is_empty() {
@@ -854,7 +862,7 @@ impl<'cmd> Parser<'cmd> {
                 )
             }
         } else if let Some(sc_name) = self.possible_long_flag_subcommand(long_arg) {
-            Ok(ParseResult::FlagSubCommand(sc_name.to_string()))
+            Ok(ParseResult::FlagSubCommand(sc_name.to_owned()))
         } else if self
             .cmd
             .get_keymap()
@@ -987,7 +995,7 @@ impl<'cmd> Parser<'cmd> {
                 self.cur_idx.set(self.cur_idx.get() + 1);
                 debug!("Parser::parse_short_arg: cur_idx:={}", self.cur_idx.get());
 
-                let name = sc_name.to_string();
+                let name = sc_name.to_owned();
                 // Get the index of the previously saved flag subcommand in the group of flags (if exists).
                 // If it is a new flag subcommand, then the formentioned index should be the current one
                 // (ie. `cur_idx`), and should be registered.
@@ -1462,7 +1470,8 @@ impl<'cmd> Parser<'cmd> {
 
                     if add {
                         if let Some(default) = default {
-                            let arg_values = vec![default.to_os_string()];
+                            let arg_values =
+                                default.iter().map(|os_str| os_str.to_os_string()).collect();
                             let trailing_idx = None;
                             let _ = ok!(self.react(
                                 None,
@@ -1571,9 +1580,11 @@ impl Parser<'_> {
         );
 
         // Add the arg to the matches to build a proper usage string
-        if let Some((name, _)) = did_you_mean.as_ref() {
-            if let Some(arg) = self.cmd.get_keymap().get(&name.as_ref()) {
-                self.start_custom_arg(matcher, arg, ValueSource::CommandLine);
+        if !self.cmd.is_ignore_errors_set() {
+            if let Some((name, _)) = did_you_mean.as_ref() {
+                if let Some(arg) = self.cmd.get_keymap().get(&name.as_ref()) {
+                    self.start_custom_arg(matcher, arg, ValueSource::CommandLine);
+                }
             }
         }
         let did_you_mean = did_you_mean.map(|(arg, cmd)| (format!("--{arg}"), cmd));
@@ -1584,7 +1595,7 @@ impl Parser<'_> {
             .filter(|arg_id| {
                 matcher.check_explicit(arg_id, &crate::builder::ArgPredicate::IsPresent)
             })
-            .filter(|n| self.cmd.find(n).map(|a| !a.is_hide_set()).unwrap_or(true))
+            .filter(|n| self.cmd.find(n).map(|a| !a.is_hide_set()).unwrap_or(false))
             .cloned()
             .collect();
 

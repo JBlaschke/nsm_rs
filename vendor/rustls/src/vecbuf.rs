@@ -76,6 +76,10 @@ impl ChunkVecBuffer {
         let len = bytes.len();
 
         if !bytes.is_empty() {
+            if self.chunks.is_empty() {
+                debug_assert_eq!(self.prefix_used, 0);
+            }
+
             self.chunks.push_back(bytes);
         }
 
@@ -99,7 +103,10 @@ impl ChunkVecBuffer {
 
     #[cfg(read_buf)]
     /// Read data out of this object, writing it into `cursor`.
-    pub(crate) fn read_buf(&mut self, mut cursor: core::io::BorrowedCursor<'_>) -> io::Result<()> {
+    pub(crate) fn read_buf(
+        &mut self,
+        mut cursor: core::io::BorrowedCursor<'_, u8>,
+    ) -> io::Result<()> {
         while !self.is_empty() && cursor.capacity() > 0 {
             let chunk = &self.chunks[0][self.prefix_used..];
             let used = cmp::min(chunk.len(), cursor.capacity());
@@ -108,6 +115,13 @@ impl ChunkVecBuffer {
         }
 
         Ok(())
+    }
+
+    /// Inspect the first chunk from this object.
+    pub(crate) fn peek(&self) -> Option<&[u8]> {
+        self.chunks
+            .front()
+            .map(|ch| ch.as_slice())
     }
 }
 
@@ -142,6 +156,19 @@ impl ChunkVecBuffer {
         Ok(offs)
     }
 
+    pub(crate) fn consume_first_chunk(&mut self, used: usize) {
+        // this backs (infallible) `BufRead::consume`, where `used` is
+        // user-supplied.
+        assert!(
+            used <= self
+                .chunk()
+                .map(|ch| ch.len())
+                .unwrap_or_default(),
+            "illegal `BufRead::consume` usage",
+        );
+        self.consume(used);
+    }
+
     fn consume(&mut self, used: usize) {
         // first, mark the rightmost extent of the used buffer
         self.prefix_used += used;
@@ -150,12 +177,17 @@ impl ChunkVecBuffer {
         // buffers
         while let Some(buf) = self.chunks.front() {
             if self.prefix_used < buf.len() {
-                break;
+                return;
             } else {
                 self.prefix_used -= buf.len();
                 self.chunks.pop_front();
             }
         }
+
+        debug_assert_eq!(
+            self.prefix_used, 0,
+            "attempted to `ChunkVecBuffer::consume` more than available"
+        );
     }
 
     /// Read data out of this object, passing it `wr`
@@ -171,9 +203,30 @@ impl ChunkVecBuffer {
             prefix = 0;
         }
         let len = cmp::min(bufs.len(), self.chunks.len());
-        let used = wr.write_vectored(&bufs[..len])?;
+        let bufs = &bufs[..len];
+        let used = wr.write_vectored(bufs)?;
+        let available_bytes = bufs.iter().map(|ch| ch.len()).sum();
+
+        if used > available_bytes {
+            // This is really unrecoverable, since the amount of data written
+            // is now unknown.  Consume all the potentially-written data in
+            // case the caller ignores the error.
+            // See <https://github.com/rustls/rustls/issues/2316> for background.
+            self.consume(available_bytes);
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                std::format!("illegal write_vectored return value ({used} > {available_bytes})"),
+            ));
+        }
         self.consume(used);
         Ok(used)
+    }
+
+    /// Returns the first contiguous chunk of data, or None if empty.
+    pub(crate) fn chunk(&self) -> Option<&[u8]> {
+        self.chunks
+            .front()
+            .map(|chunk| &chunk[self.prefix_used..])
     }
 }
 
@@ -252,7 +305,7 @@ mod tests {
             cvb.append(b"data".to_vec());
 
             let mut buf = [MaybeUninit::<u8>::uninit(); 8];
-            let mut buf: BorrowedBuf<'_> = buf.as_mut_slice().into();
+            let mut buf: BorrowedBuf<'_, u8> = buf.as_mut_slice().into();
             cvb.read_buf(buf.unfilled()).unwrap();
             assert_eq!(buf.filled(), b"test fix");
             buf.clear();
@@ -268,7 +321,7 @@ mod tests {
             cvb.append(b"short message".to_vec());
 
             let mut buf = [MaybeUninit::<u8>::uninit(); 1024];
-            let mut buf: BorrowedBuf<'_> = buf.as_mut_slice().into();
+            let mut buf: BorrowedBuf<'_, u8> = buf.as_mut_slice().into();
             cvb.read_buf(buf.unfilled()).unwrap();
             assert_eq!(buf.filled(), b"short message");
         }

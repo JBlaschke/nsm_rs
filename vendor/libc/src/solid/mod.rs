@@ -4,16 +4,6 @@
 
 use crate::prelude::*;
 
-pub type c_schar = i8;
-pub type c_uchar = u8;
-pub type c_short = i16;
-pub type c_ushort = u16;
-pub type c_int = i32;
-pub type c_uint = u32;
-pub type c_float = f32;
-pub type c_double = f64;
-pub type c_longlong = i64;
-pub type c_ulonglong = u64;
 pub type intmax_t = i64;
 pub type uintmax_t = u64;
 
@@ -179,6 +169,7 @@ s! {
         pub iov_len: size_t,
     }
 
+    #[derive(Default)]
     pub struct timeval {
         pub tv_sec: c_long,
         pub tv_usec: c_long,
@@ -216,10 +207,10 @@ pub const S_IWRITE: c_short = 0o0200;
 pub const S_IREAD: c_short = 0o0400;
 pub const S_IFCHR: c_short = 0o2_0000;
 pub const S_IFDIR: c_short = 0o4_0000;
-pub const S_IFMT: c_short = 0o16_0000;
+pub const S_IFMT: c_short = u16_cast_short(0o16_0000);
 pub const S_IFIFO: c_short = 0o1_0000;
 pub const S_IFBLK: c_short = 0o6_0000;
-pub const S_IFREG: c_short = 0o10_0000;
+pub const S_IFREG: c_short = u16_cast_short(0o10_0000);
 
 pub const LC_ALL: c_int = 0;
 pub const LC_COLLATE: c_int = 1;
@@ -228,6 +219,9 @@ pub const LC_MONETARY: c_int = 3;
 pub const LC_NUMERIC: c_int = 4;
 pub const LC_TIME: c_int = 5;
 pub const LC_MESSAGES: c_int = 6;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const _LC_LAST: c_int = 7;
 
 pub const EPERM: c_int = 1;
@@ -405,21 +399,9 @@ pub const SIGUSR1: c_int = 30;
 pub const SIGUSR2: c_int = 31;
 pub const SIGPWR: c_int = 32;
 
-#[cfg_attr(feature = "extra_traits", derive(Debug))]
-pub enum FILE {}
-impl Copy for FILE {}
-impl Clone for FILE {
-    fn clone(&self) -> FILE {
-        *self
-    }
-}
-#[cfg_attr(feature = "extra_traits", derive(Debug))]
-pub enum fpos_t {}
-impl Copy for fpos_t {}
-impl Clone for fpos_t {
-    fn clone(&self) -> fpos_t {
-        *self
-    }
+extern_ty! {
+    pub type FILE;
+    pub type fpos_t;
 }
 
 extern "C" {

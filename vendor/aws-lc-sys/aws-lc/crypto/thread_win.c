@@ -1,16 +1,5 @@
-/* Copyright (c) 2015, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2015, Google Inc.
+// SPDX-License-Identifier: ISC
 
 // Ensure we can't call OPENSSL_malloc circularly.
 #define _BORINGSSL_PROHIBIT_OPENSSL_MALLOC
@@ -85,6 +74,21 @@ void CRYPTO_STATIC_MUTEX_unlock_write(struct CRYPTO_STATIC_MUTEX *lock) {
   ReleaseSRWLockExclusive(&lock->lock);
 }
 
+#if !defined(NDEBUG)
+int CRYPTO_STATIC_MUTEX_is_write_locked(struct CRYPTO_STATIC_MUTEX *lock) {
+  assert(lock != NULL);
+
+  if (TryAcquireSRWLockShared(&lock->lock)) {
+    // If successful, the lock is not write-locked
+    // Release it immediately and return false (0)
+    ReleaseSRWLockShared(&lock->lock);
+    return 0;
+  }
+
+  return 1;
+}
+#endif
+
 static SRWLOCK g_destructors_lock = SRWLOCK_INIT;
 static thread_local_destructor_t g_destructors[NUM_OPENSSL_THREAD_LOCALS];
 
@@ -146,6 +150,7 @@ static void NTAPI thread_local_destructor(PVOID module, DWORD reason,
 // optimization from discarding the variable.
 //
 // Note, in the prefixed build, |p_thread_callback_boringssl| may be a macro.
+#ifdef _MSC_VER
 #define STRINGIFY(x) #x
 #define EXPAND_AND_STRINGIFY(x) STRINGIFY(x)
 #ifdef _WIN64
@@ -156,6 +161,7 @@ __pragma(comment(
 __pragma(comment(linker, "/INCLUDE:__tls_used"))
 __pragma(comment(
     linker, "/INCLUDE:_" EXPAND_AND_STRINGIFY(p_thread_callback_boringssl)))
+#endif
 #endif
 
 // .CRT$XLA to .CRT$XLZ is an array of PIMAGE_TLS_CALLBACK pointers that are
@@ -174,6 +180,8 @@ __pragma(comment(
 // reference to this variable with a linker /INCLUDE:symbol pragma to ensure
 // that.) If this variable is discarded, the OnThreadExit function will never
 // be called.
+#if defined(_MSC_VER)
+
 #ifdef _WIN64
 
 // .CRT section is merged with .rdata on x64 so it must be constant data.
@@ -193,6 +201,23 @@ PIMAGE_TLS_CALLBACK p_thread_callback_boringssl = thread_local_destructor;
 #pragma data_seg()
 
 #endif  // _WIN64
+
+#else  // !_MSC_VER
+
+// MinGW compilers do not reliably implement the MSVC section pragmas above;
+// use the GCC section attribute instead ('used' prevents discarding).
+extern const PIMAGE_TLS_CALLBACK p_thread_callback_boringssl;
+__attribute__((section(".CRT$XLC"), used))
+const PIMAGE_TLS_CALLBACK p_thread_callback_boringssl = thread_local_destructor;
+
+// The callback array is only walked if the image has a TLS directory, which
+// requires the CRT's _tls_used symbol. MSVC forces it with /INCLUDE above;
+// on MinGW, create a reference so the linker pulls it in.
+extern const IMAGE_TLS_DIRECTORY _tls_used;
+__attribute__((used))
+static const IMAGE_TLS_DIRECTORY *tls_used_reference_boringssl = &_tls_used;
+
+#endif  // _MSC_VER
 
 static void **get_thread_locals(void) {
   // |TlsGetValue| clears the last error even on success, so that callers may

@@ -1,4 +1,3 @@
-#![allow(unknown_lints, unexpected_cfgs)]
 #![cfg(all(feature = "full", not(target_os = "wasi")))] // Wasi doesn't support threading
 
 use tokio::test;
@@ -92,6 +91,13 @@ pub mod issue_5243 {
     mac!(
         async fn foo() {}
     );
+}
+
+#[tokio::test(name = "a valid runtime name")]
+async fn test_macro_should_handle_the_name_if_provided() {
+    let handle = tokio::runtime::Handle::current();
+
+    assert_eq!("a valid runtime name", handle.name().unwrap())
 }
 
 #[cfg(tokio_unstable)]

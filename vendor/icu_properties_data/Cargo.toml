@@ -10,11 +10,12 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
-rust-version = "1.67"
+edition = "2024"
+rust-version = "1.88"
 name = "icu_properties_data"
-version = "1.5.0"
+version = "2.3.0"
 authors = ["The ICU4X Project Developers"]
+build = "build.rs"
 include = [
     "data/**/*",
     "src/**/*",
@@ -24,19 +25,46 @@ include = [
     "Cargo.toml",
     "LICENSE",
     "README.md",
+    "build.rs",
 ]
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "Data for the icu_properties crate"
 homepage = "https://icu4x.unicode.org"
 readme = "README.md"
-categories = ["internationalization"]
+keywords = [
+    "data",
+    "unicode",
+]
+categories = [
+    "internationalization",
+    "localization",
+    "no-std",
+    "embedded",
+]
 license = "Unicode-3.0"
 repository = "https://github.com/unicode-org/icu4x"
+resolver = "2"
 
 [package.metadata.sources.cldr]
-tagged = "45.0.0"
+tagged = "48.2.1"
 
 [package.metadata.sources.icuexport]
-tagged = "icu4x/2024-05-16/75.x"
+tagged = "release-78.1rc"
 
 [package.metadata.sources.segmenter_lstm]
 tagged = "v0.1.0"
+
+[lib]
+name = "icu_properties_data"
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = ["cfg(icu4x_custom_data)"]

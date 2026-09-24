@@ -45,11 +45,17 @@ where
     /// Create a JSON deserializer from one of the possible serde_json input
     /// sources.
     ///
+    /// When reading from a source against which short reads are not efficient, such
+    /// as a [`File`], you will want to apply your own buffering because serde_json
+    /// will not buffer the input. See [`std::io::BufReader`].
+    ///
     /// Typically it is more convenient to use one of these methods instead:
     ///
     ///   - Deserializer::from_str
     ///   - Deserializer::from_slice
     ///   - Deserializer::from_reader
+    ///
+    /// [`File`]: std::fs::File
     pub fn new(read: R) -> Self {
         Deserializer {
             read,
@@ -362,7 +368,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
             }
-        };
+        }
 
         tri!(self.scan_integer128(&mut buf));
 
@@ -987,7 +993,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     fn scan_number(&mut self, buf: &mut String) -> Result<()> {
         match tri!(self.peek_or_null()) {
             b'.' => self.scan_decimal(buf),
-            e @ (b'e' | b'E') => self.scan_exponent(e as char, buf),
+            b'e' | b'E' => self.scan_exponent(buf),
             _ => Ok(()),
         }
     }
@@ -1012,15 +1018,15 @@ impl<'de, R: Read<'de>> Deserializer<R> {
         }
 
         match tri!(self.peek_or_null()) {
-            e @ (b'e' | b'E') => self.scan_exponent(e as char, buf),
+            b'e' | b'E' => self.scan_exponent(buf),
             _ => Ok(()),
         }
     }
 
     #[cfg(feature = "arbitrary_precision")]
-    fn scan_exponent(&mut self, e: char, buf: &mut String) -> Result<()> {
+    fn scan_exponent(&mut self, buf: &mut String) -> Result<()> {
         self.eat_char();
-        buf.push(e);
+        buf.push('e');
 
         match tri!(self.peek_or_null()) {
             b'+' => {
@@ -1031,7 +1037,9 @@ impl<'de, R: Read<'de>> Deserializer<R> {
                 self.eat_char();
                 buf.push('-');
             }
-            _ => {}
+            _ => {
+                buf.push('+');
+            }
         }
 
         // Make sure a digit follows the exponent place.
@@ -2044,7 +2052,17 @@ impl<'de, 'a, R: Read<'de> + 'a> de::EnumAccess<'de> for VariantAccess<'a, R> {
     where
         V: de::DeserializeSeed<'de>,
     {
-        let val = tri!(seed.deserialize(&mut *self.de));
+        match tri!(self.de.parse_whitespace()) {
+            Some(b'"') => {}
+            Some(b'}') => return Err(self.de.peek_error(ErrorCode::ExpectedSomeValue)),
+            Some(_) => return Err(self.de.peek_error(ErrorCode::KeyMustBeAString)),
+            None => return Err(self.de.peek_error(ErrorCode::EofWhileParsingObject)),
+        }
+
+        let val = match seed.deserialize(MapKey { de: &mut *self.de }) {
+            Ok(value) => value,
+            Err(err) => return Err(self.de.fix_position(err)),
+        };
         tri!(self.de.parse_object_colon());
         Ok((val, self))
     }
@@ -2517,10 +2535,7 @@ where
 /// reading a file completely into memory and then applying [`from_str`]
 /// or [`from_slice`] on it. See [issue #160].
 ///
-/// [`File`]: https://doc.rust-lang.org/std/fs/struct.File.html
-/// [`std::io::BufReader`]: https://doc.rust-lang.org/std/io/struct.BufReader.html
-/// [`from_str`]: ./fn.from_str.html
-/// [`from_slice`]: ./fn.from_slice.html
+/// [`File`]: std::fs::File
 /// [issue #160]: https://github.com/serde-rs/json/issues/160
 ///
 /// # Example
@@ -2567,6 +2582,7 @@ where
 /// use serde::Deserialize;
 ///
 /// use std::error::Error;
+/// use std::io::BufReader;
 /// use std::net::{TcpListener, TcpStream};
 ///
 /// #[derive(Deserialize, Debug)]
@@ -2575,8 +2591,8 @@ where
 ///     location: String,
 /// }
 ///
-/// fn read_user_from_stream(tcp_stream: TcpStream) -> Result<User, Box<dyn Error>> {
-///     let mut de = serde_json::Deserializer::from_reader(tcp_stream);
+/// fn read_user_from_stream(stream: &mut BufReader<TcpStream>) -> Result<User, Box<dyn Error>> {
+///     let mut de = serde_json::Deserializer::from_reader(stream);
 ///     let u = User::deserialize(&mut de)?;
 ///
 ///     Ok(u)
@@ -2587,8 +2603,9 @@ where
 /// # fn fake_main() {
 ///     let listener = TcpListener::bind("127.0.0.1:4000").unwrap();
 ///
-///     for stream in listener.incoming() {
-///         println!("{:#?}", read_user_from_stream(stream.unwrap()));
+///     for tcp_stream in listener.incoming() {
+///         let mut buffered = BufReader::new(tcp_stream.unwrap());
+///         println!("{:#?}", read_user_from_stream(&mut buffered));
 ///     }
 /// }
 /// ```

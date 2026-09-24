@@ -7,6 +7,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
     feature = "webpki-roots"
 ))]
 use rustls::crypto::CryptoProvider;
+use rustls::pki_types::ServerName;
 use rustls::ClientConfig;
 
 use super::{DefaultServerNameResolver, HttpsConnector, ResolveServerName};
@@ -16,7 +17,6 @@ use super::{DefaultServerNameResolver, HttpsConnector, ResolveServerName};
     feature = "rustls-platform-verifier"
 ))]
 use crate::config::ConfigBuilderExt;
-use pki_types::ServerName;
 
 /// A builder for an [`HttpsConnector`]
 ///
@@ -74,11 +74,26 @@ impl ConnectorBuilder<WantsTlsConfig> {
         feature = "rustls-platform-verifier"
     ))]
     pub fn with_platform_verifier(self) -> ConnectorBuilder<WantsSchemes> {
-        self.with_tls_config(
+        self.try_with_platform_verifier()
+            .expect("failure to initialize platform verifier")
+    }
+
+    /// Shorthand for using rustls' default crypto provider and other defaults, and
+    /// the platform verifier.
+    ///
+    /// See [`ConfigBuilderExt::with_platform_verifier()`].
+    #[cfg(all(
+        any(feature = "ring", feature = "aws-lc-rs"),
+        feature = "rustls-platform-verifier"
+    ))]
+    pub fn try_with_platform_verifier(
+        self,
+    ) -> Result<ConnectorBuilder<WantsSchemes>, rustls::Error> {
+        Ok(self.with_tls_config(
             ClientConfig::builder()
-                .with_platform_verifier()
+                .try_with_platform_verifier()?
                 .with_no_client_auth(),
-        )
+        ))
     }
 
     /// Shorthand for using a custom [`CryptoProvider`] and the platform verifier.
@@ -92,8 +107,8 @@ impl ConnectorBuilder<WantsTlsConfig> {
         Ok(self.with_tls_config(
             ClientConfig::builder_with_provider(provider.into())
                 .with_safe_default_protocol_versions()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
-                .with_platform_verifier()
+                .and_then(|builder| builder.try_with_platform_verifier())
+                .map_err(std::io::Error::other)?
                 .with_no_client_auth(),
         ))
     }
@@ -125,7 +140,7 @@ impl ConnectorBuilder<WantsTlsConfig> {
         Ok(self.with_tls_config(
             ClientConfig::builder_with_provider(provider.into())
                 .with_safe_default_protocol_versions()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+                .map_err(std::io::Error::other)?
                 .with_native_roots()?
                 .with_no_client_auth(),
         ))
@@ -214,7 +229,7 @@ impl WantsProtocols1 {
         HttpsConnector {
             force_https: self.https_only,
             http: conn,
-            tls_config: std::sync::Arc::new(self.tls_config),
+            tls_config: Arc::new(self.tls_config),
             server_name_resolver: self
                 .server_name_resolver
                 .unwrap_or_else(|| Arc::new(DefaultServerNameResolver::default())),

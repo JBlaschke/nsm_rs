@@ -1,61 +1,7 @@
-/*
- * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project
- * 2013.
- */
-/* ====================================================================
- * Copyright (c) 2013 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
-
+// Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project 2013.
+// Copyright (c) 2013 The OpenSSL Project. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+ 
 #ifndef OPENSSL_HEADER_X509_INTERNAL_H
 #define OPENSSL_HEADER_X509_INTERNAL_H
 
@@ -253,6 +199,16 @@ DECLARE_ASN1_ITEM(GENERAL_NAME)
 // and C type is |GENERAL_NAMES*|, aka |STACK_OF(GENERAL_NAME)*|.
 DECLARE_ASN1_ITEM(GENERAL_NAMES)
 
+// Certificate policy |ASN1_ITEM|s (RFC 5280 certificatePolicies). These are
+// declared here rather than in the defining translation unit (v3_cpols.c) so
+// the symbol-registry tooling, which scans headers, records their exported
+// |name_it| symbols. The corresponding public |_new|/|_free| functions live in
+// <openssl/x509.h>.
+DECLARE_ASN1_ITEM(POLICYINFO)
+DECLARE_ASN1_ITEM(POLICYQUALINFO)
+DECLARE_ASN1_ITEM(USERNOTICE)
+DECLARE_ASN1_ITEM(NOTICEREF)
+
 struct X509_VERIFY_PARAM_st {
   int64_t check_time;               // POSIX time to use
   unsigned long flags;              // Various verify flags
@@ -268,6 +224,7 @@ struct X509_VERIFY_PARAM_st {
   unsigned char *ip;     // If not NULL IP address to match
   size_t iplen;          // Length of IP address
   unsigned char poison;  // Fail all verifications at name checking
+  uint64_t awslc_flags;
 } /* X509_VERIFY_PARAM */;
 
 struct x509_object_st {
@@ -308,6 +265,7 @@ struct x509_store_st {
 
   // Callbacks for various operations
   X509_STORE_CTX_verify_cb verify_cb;       // error callback
+  X509_STORE_CTX_lookup_crls_fn lookup_crls;
   X509_STORE_CTX_get_crl_fn get_crl;        // retrieve CRL
   X509_STORE_CTX_check_crl_fn check_crl;    // Check CRL validity
 
@@ -342,8 +300,11 @@ struct x509_store_ctx_st {
 
   // Callbacks for various operations
   X509_STORE_CTX_verify_cb verify_cb;       // error callback
+  X509_STORE_CTX_lookup_crls_fn lookup_crls;
   X509_STORE_CTX_get_crl_fn get_crl;        // retrieve CRL
   X509_STORE_CTX_check_crl_fn check_crl;    // Check CRL validity
+  X509_STORE_CTX_verify_crit_oids_cb
+      verify_custom_crit_oids;  // Check custom critical oids
 
   // The following is built up
 
@@ -359,8 +320,15 @@ struct x509_store_ctx_st {
 
   int current_crl_score;         // score of current CRL
 
+  // Stack of allowed custom critical extension oids.
+  STACK_OF(ASN1_OBJECT) *custom_crit_oids;
+
   CRYPTO_EX_DATA ex_data;
 } /* X509_STORE_CTX */;
+
+#define FLAG_BIT(n)  ((uint64_t)1 << (uint64_t)n)
+
+#define AWSLC_V_ENABLE_EC_KEY_EXPLICIT_PARAMS FLAG_BIT(0)
 
 void X509_OBJECT_free_contents(X509_OBJECT *a);
 
@@ -451,11 +419,6 @@ unsigned char *x509v3_hex_to_bytes(const char *str, size_t *len);
 // with |cmp| followed by '.', and zero otherwise.
 int x509v3_conf_name_matches(const char *name, const char *cmp);
 
-// x509v3_looks_like_dns_name returns one if |in| looks like a DNS name and zero
-// otherwise.
-OPENSSL_EXPORT int x509v3_looks_like_dns_name(const unsigned char *in,
-                                              size_t len);
-
 // x509v3_cache_extensions fills in a number of fields relating to X.509
 // extensions in |x|. It returns one on success and zero if some extensions were
 // invalid.
@@ -538,6 +501,8 @@ int X509V3_add_value_int(const char *name, const ASN1_INTEGER *aint,
   ERR_add_error_data(6, "section:", (val)->section, ",name:", (val)->name, \
                      ",value:", (val)->value);
 
+int NAME_CONSTRAINTS_check_CN(X509 *x, NAME_CONSTRAINTS *nc);
+
 // GENERAL_NAME_cmp returns zero if |a| and |b| are equal and a non-zero
 // value otherwise. Note this function does not provide a comparison suitable
 // for sorting.
@@ -566,6 +531,24 @@ int X509_check_akid(X509 *issuer, const AUTHORITY_KEYID *akid);
 
 // TODO(https://crbug.com/boringssl/695): Remove this.
 int DIST_POINT_set_dpname(DIST_POINT_NAME *dpn, X509_NAME *iname);
+
+// Exported for testing purposes only. Used for validating that the CIDR mask bytes
+// from a IP Name Constraint is a valid CIDR prefix.
+//
+// It accepts either IPv4 (4 bytes) or IPv6 (16 bytes) masks, returns 0 for any other lengths,
+// and otherwise returns 1 if the provided netmask is a valid CIDR prefix.
+//
+// For example the IPv4 mask `255.255.255.0` would return valid, but `255.0.255.0` would be invalid.
+OPENSSL_EXPORT int validate_cidr_mask(CBS *cidr_mask);
+
+OPENSSL_EXPORT int cn2dnsid(ASN1_STRING *cn, unsigned char **dnsid, size_t *idlen);
+
+int x509_digest_nid_ok(const int digest_nid);
+
+// Match reference identifiers starting with "." to any sub-domain.
+// This is a non-public flag, turned on implicitly when the subject
+// reference identity is a DNS name.
+#define _X509_CHECK_FLAG_DOT_SUBDOMAINS 0x8000
 
 #if defined(__cplusplus)
 }  // extern C

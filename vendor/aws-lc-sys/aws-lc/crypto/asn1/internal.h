@@ -1,60 +1,6 @@
-/*
- * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project
- * 2006.
- */
-/* ====================================================================
- * Copyright (c) 2006 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
+// Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project 2006.
+// Copyright (c) 2006 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENSSL_HEADER_ASN1_INTERNAL_H
 #define OPENSSL_HEADER_ASN1_INTERNAL_H
@@ -216,21 +162,6 @@ void asn1_type_cleanup(ASN1_TYPE *a);
 // asn1_is_printable returns one if |value| is a valid Unicode codepoint for an
 // ASN.1 PrintableString, and zero otherwise.
 int asn1_is_printable(uint32_t value);
-
-// asn1_get_object_maybe_indefinite parses an ASN.1 header, including tag, class,
-// and length information. The tag number is written to |*out_tag|. The class is
-// written to |*out_class|. If the tag is not indefinite, the content length is
-// written to |*out_len|. |inp| is advanced past the header in the input buffer.
-//
-// If |indefinite_ok| is non-zero, indefinite-length encoding and universal tags
-// are allowed, otherwise these will produce errors.
-//
-// The return value may have the following bits set:
-//   * 0x80: error occurred while parsing.
-//   * 0x20: the encoding is constructed, not primitive.
-//   * 0x01: indefinite-length constructed encoding.
-int asn1_get_object_maybe_indefinite(const unsigned char **inp, long *out_len, int *out_tag,
-                        int *out_class, long in_len, int indefinite_ok);
 
 // asn1_bit_string_length returns the number of bytes in |str| and sets
 // |*out_padding_bits| to the number of padding bits.

@@ -11,7 +11,7 @@
 //! limitations of what we can do when using real-world certificates. We
 //! accept that the benefit of having these tests outweigh this downside.
 //! If we encounter cases where these tests are flaky we'll spend additional
-//! effort  
+//! effort
 //!
 //! * If these certificates are ever revoked then it is possible that, even if
 //!   with the measures mentioned in the next paragraphs, the operating system
@@ -33,52 +33,68 @@
 //! a networking error causes the fetch of the OCSP response to fail, then
 //! they will continue roughly as though they received a "Good" response.
 //! Thus we don't expect these tests to be flaky w.r.t. that, except for
-//! potentially poor performance.     
-use super::TestCase;
-use crate::tests::{assert_cert_error_eq, ensure_global_state, verification_time};
-use crate::Verifier;
+//! potentially poor performance.
+
 use rustls::client::danger::ServerCertVerifier;
 use rustls::pki_types;
+#[cfg(not(any(target_vendor = "apple", windows)))]
+use rustls::pki_types::{DnsName, ServerName};
 use rustls::{CertificateError, Error as TlsError};
-use std::convert::TryFrom;
+
+use super::TestCase;
+use crate::tests::{assert_cert_error_eq, test_provider, verification_time};
+use crate::Verifier;
 
 // This is the certificate chain presented by one server for
-// my.1password.com when this test was updated 2023-08-01. It is
-// valid for *.1password.com and 1password.com from
-// "Jun 24 00:00:00 2023 GMT" through "Jul 22 23:59:59 2024 GMT".
+// `aws.amazon.com` when this test was updated 2025-08-13.
 //
 // Use this to template view the certificate using OpenSSL:
 // ```sh
-// openssl x509 -inform der -text -in 1password_com_valid_1.crt | less
+// openssl x509 -inform der -text -in aws_amazon_com_valid_1.crt | less
 // ```
 //
-// You can update the cert file with `update_valid_ee_certs.rs`
-const VALID_1PASSWORD_COM_CHAIN: &[&[u8]] = &[
-    include_bytes!("1password_com_valid_1.crt"),
-    include_bytes!("1password_com_valid_2.crt"),
-    include_bytes!("1password_com_valid_3.crt"),
+// You can update these cert files with `examples/update-certs.rs`
+const VALID_AWS_AMAZON_COM_CHAIN: &[&[u8]] = &[
+    include_bytes!("aws_amazon_com_valid_1.crt"),
+    include_bytes!("aws_amazon_com_valid_2.crt"),
+    include_bytes!("aws_amazon_com_valid_3.crt"),
     // XXX: This certificate is included for testing in environments that might need
     // a cross-signed root certificate instead of the just the server-provided one.
-    include_bytes!("1password_com_valid_4.crt"),
+    include_bytes!("aws_amazon_com_valid_4.crt"),
 ];
 
-const MY_1PASSWORD_COM: &str = "my.1password.com";
+/// Returns a list of names valid for [VALID_AWS_AMAZON_COM_CHAIN], in a format
+/// expected by `CertificateError::NotValidForContext`.
+#[cfg(not(any(target_vendor = "apple", windows)))]
+fn valid_aws_chain_names() -> Vec<String> {
+    const VALID_AWS_NAMES: &[&str] = &[
+        "aws.amazon.com",
+        "aws-us-west-2.amazon.com",
+        "www.aws.amazon.com",
+        "1.aws-lbr.amazonaws.com",
+        "amazonaws-china.com",
+        "www.amazonaws-china.com",
+        "aws-us-east-1.amazon.com",
+    ];
 
-// A domain name for which `VALID_1PASSWORD_COM_CHAIN` isn't valid.
-const VALID_UNRELATED_DOMAIN: &str = "agilebits.com";
-const VALID_UNRELATED_CHAIN: &[&[u8]] = &[
-    include_bytes!("agilebits_com_valid_1.crt"),
-    include_bytes!("agilebits_com_valid_2.crt"),
-    include_bytes!("agilebits_com_valid_3.crt"),
-    include_bytes!("agilebits_com_valid_4.crt"),
-];
+    VALID_AWS_NAMES
+        .iter()
+        .copied()
+        .map(|name| format!("DnsName(\"{name}\")"))
+        .collect()
+}
+
+const AWS_AMAZON_COM: &str = "aws.amazon.com";
+
+// Domain names for which `VALID_AWS_AMAZON_COM_CHAIN` isn't valid.
+const VALID_UNRELATED_DOMAIN: &str = "my.1password.com";
+const VALID_UNRELATED_SUBDOMAIN: &str = "www.amazon.com";
 
 const LETSENCRYPT_ORG: &str = "letsencrypt.org";
 
 const VALID_LETSENCRYPT_ORG_CHAIN: &[&[u8]] = &[
     include_bytes!("letsencrypt_org_valid_1.crt"),
     include_bytes!("letsencrypt_org_valid_2.crt"),
-    include_bytes!("letsencrypt_org_valid_3.crt"),
 ];
 
 macro_rules! real_world_test_cases {
@@ -118,20 +134,25 @@ macro_rules! no_error {
 }
 
 fn real_world_test<E: std::error::Error>(test_case: &TestCase<E>) {
-    ensure_global_state();
     log::info!(
         "verifying ref ID {:?} expected {:?}",
         test_case.reference_id,
         test_case.expected_result
     );
 
+    let crypto_provider = test_provider();
+
     // On BSD systems openssl-probe fails to find the system CA bundle,
-    // so we must provide extra roots from webpki-roots.
+    // so we must provide extra roots from webpki-root-cert.
     #[cfg(target_os = "freebsd")]
-    let verifier = Verifier::new_with_extra_roots(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let verifier = Verifier::new_with_extra_roots(
+        webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().cloned(),
+        crypto_provider,
+    )
+    .unwrap();
 
     #[cfg(not(target_os = "freebsd"))]
-    let verifier = Verifier::new();
+    let verifier = Verifier::new(crypto_provider).unwrap();
 
     let mut chain = test_case
         .chain
@@ -166,28 +187,28 @@ fn real_world_test<E: std::error::Error>(test_case: &TestCase<E>) {
 // Prefer to staple the OCSP response for the end-entity certificate for
 // performance and repeatability.
 real_world_test_cases! {
-    // The certificate is valid for *.1password.com.
-    my_1password_com_valid => TestCase {
-        reference_id: MY_1PASSWORD_COM,
-        chain: VALID_1PASSWORD_COM_CHAIN,
+    // The certificate is valid for *.aws.amazon.com.
+    aws_amazon_com_valid => TestCase {
+        reference_id: AWS_AMAZON_COM,
+        chain: VALID_AWS_AMAZON_COM_CHAIN,
         stapled_ocsp: None,
         verification_time: verification_time(),
         expected_result: Ok(()),
         other_error: no_error!(),
     },
     // Same as above but without stapled OCSP.
-    my_1password_com_valid_no_stapled => TestCase {
-        reference_id: MY_1PASSWORD_COM,
-        chain: VALID_1PASSWORD_COM_CHAIN,
+    aws_amazon_com_valid_no_stapled => TestCase {
+        reference_id: AWS_AMAZON_COM,
+        chain: VALID_AWS_AMAZON_COM_CHAIN,
         stapled_ocsp: None,
         verification_time: verification_time(),
         expected_result: Ok(()),
         other_error: no_error!(),
     },
-    // Valid also for 1password.com (no subdomain).
-    _1password_com_valid => TestCase {
-        reference_id: "1password.com",
-        chain: VALID_1PASSWORD_COM_CHAIN,
+    // Valid also for www.amazon.amazon.com (extra subdomain).
+    _aws_amazon_com_valid => TestCase {
+        reference_id: "www.aws.amazon.com",
+        chain: VALID_AWS_AMAZON_COM_CHAIN,
         stapled_ocsp: None,
         verification_time: verification_time(),
         expected_result: Ok(()),
@@ -195,30 +216,32 @@ real_world_test_cases! {
     },
     // The certificate isn't valid for an unrelated subdomain.
     unrelated_domain_invalid => TestCase {
-        reference_id: VALID_UNRELATED_DOMAIN,
-        chain: VALID_1PASSWORD_COM_CHAIN,
+        reference_id: VALID_UNRELATED_SUBDOMAIN,
+        chain: VALID_AWS_AMAZON_COM_CHAIN,
         stapled_ocsp: None,
         verification_time: verification_time(),
+        #[cfg(not(any(target_vendor = "apple", windows)))]
+        expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForNameContext {
+            expected: ServerName::DnsName(DnsName::try_from(VALID_UNRELATED_SUBDOMAIN).unwrap()),
+            presented: valid_aws_chain_names(),
+        })),
+        #[cfg(any(target_vendor = "apple", windows))]
         expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForName)),
-        other_error: no_error!(),
-    },
-    // The certificate chain for the unrelated domain is valid for that
-    // unrelated domain.
-    unrelated_chain_valid_for_unrelated_domain => TestCase {
-        reference_id: VALID_UNRELATED_DOMAIN,
-        chain: VALID_UNRELATED_CHAIN,
-        stapled_ocsp: None,
-        verification_time: verification_time(),
-        expected_result: Ok(()),
         other_error: no_error!(),
     },
     // The certificate chain for the unrelated domain is not valid for
     // my.1password.com.
     unrelated_chain_not_valid_for_my_1password_com => TestCase {
-        reference_id: MY_1PASSWORD_COM,
-        chain: VALID_UNRELATED_CHAIN,
+        reference_id: VALID_UNRELATED_DOMAIN,
+        chain: VALID_AWS_AMAZON_COM_CHAIN,
         stapled_ocsp: None,
         verification_time: verification_time(),
+        #[cfg(not(any(target_vendor = "apple", windows)))]
+        expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForNameContext {
+            expected: ServerName::DnsName(DnsName::try_from(VALID_UNRELATED_DOMAIN).unwrap()),
+            presented: valid_aws_chain_names(),
+        })),
+        #[cfg(any(target_vendor = "apple", windows))]
         expected_result: Err(TlsError::InvalidCertificate(CertificateError::NotValidForName)),
         other_error: no_error!(),
     },

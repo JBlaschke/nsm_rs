@@ -1,16 +1,5 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2014, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <openssl/base.h>
 
@@ -31,6 +20,7 @@ OPENSSL_MSVC_PRAGMA(warning(pop))
 #endif
 
 #include <assert.h>
+#include <errno.h>
 
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
@@ -60,6 +50,7 @@ OPENSSL_MSVC_PRAGMA(warning(pop))
 #include <vector>
 
 #include "../../crypto/internal.h"
+#include "../../crypto/ube/vm_ube_detect.h"
 #include "../internal.h"
 #include "async_bio.h"
 #include "handshake_util.h"
@@ -986,6 +977,11 @@ static bool DoConnection(bssl::UniquePtr<SSL_SESSION> *out_session,
     int ssl_err = SSL_get_error(ssl.get(), -1);
     if (ssl_err != SSL_ERROR_NONE) {
       fprintf(stderr, "SSL error: %s\n", SSL_error_description(ssl_err));
+      if (ssl_err == SSL_ERROR_SYSCALL) {
+        int err = errno;
+        fprintf(stderr, "Error occurred: errno = %d, description = %s\n", err, strerror(err));
+
+      }
     }
     return false;
   }
@@ -1409,6 +1405,14 @@ static bool DoExchange(bssl::UniquePtr<SSL_SESSION> *out_session,
     return false;
   }
 
+  if (SSL_clear_num_renegotiations(ssl) !=
+          config->expect_total_renegotiations ||
+      SSL_total_renegotiations(ssl) != 0) {
+    fprintf(stderr, "Expected renegotiation count to be reset to 0, got %d\n",
+            SSL_total_renegotiations(ssl));
+    return false;
+  }
+
   return true;
 }
 
@@ -1418,7 +1422,7 @@ class StderrDelimiter {
 };
 
 int main(int argc, char **argv) {
-#if defined(OPENSSL_LINUX) && defined(AWSLC_SNAPSAFE_TESTING)
+#if defined(OPENSSL_LINUX) && defined(AWSLC_VM_UBE_TESTING)
   if (1 != HAZMAT_init_sysgenid_file()) {
     abort();
   }

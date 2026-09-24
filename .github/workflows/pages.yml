@@ -1,0 +1,71 @@
+name: Docs
+
+# Builds `cargo doc` and the markdown guides (README, docs/, CONTRIBUTING,
+# CHANGELOG) and publishes both to GitHub Pages. The repository's Pages source
+# must be set to "GitHub Actions" (Settings > Pages) for the deploy step to
+# take effect; until then this workflow only verifies that the docs build.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_OFFLINE: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pandoc
+      - name: Render the guides
+        run: scripts/render-docs.sh target/doc/guide
+        env:
+          NSM_REPO_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}
+      - name: Add landing page
+        run: |
+          cat > target/doc/index.html <<'HTML'
+          <!doctype html><meta charset="utf-8"><title>nsm documentation</title>
+          <link rel="stylesheet" href="guide/style.css">
+          <h1>nsm documentation</h1>
+          <ul>
+            <li><a href="guide/README.html">README: building, how it works, command-line reference</a></li>
+            <li><a href="guide/docs/ARCHITECTURE.html">Architecture</a></li>
+            <li><a href="guide/docs/PROTOCOL.html">Wire protocol</a></li>
+            <li><a href="guide/docs/REST_API.html">REST control plane</a></li>
+            <li><a href="guide/CONTRIBUTING.html">Contributing</a></li>
+            <li><a href="guide/CHANGELOG.html">Changelog</a></li>
+            <li><a href="guide/docs/PLAN.html">Cleanup plan</a> and <a href="guide/docs/audit/README.html">audit</a></li>
+            <li><a href="nsm/index.html">API documentation (rustdoc)</a></li>
+          </ul>
+          HTML
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -123,7 +123,7 @@ $L$SEH_begin_ecp_nistz256_ord_mul_mont:
 
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rcx,[OPENSSL_ia32cap_P]
 	mov	rcx,QWORD[8+rcx]
 	and	ecx,0x80100
@@ -464,7 +464,7 @@ $L$SEH_begin_ecp_nistz256_ord_sqr_mont:
 
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rcx,[OPENSSL_ia32cap_P]
 	mov	rcx,QWORD[8+rcx]
 	and	ecx,0x80100
@@ -753,7 +753,7 @@ $L$ord_sqr_epilogue:
 	DB	0F3h,0C3h		;repret
 
 $L$SEH_end_ecp_nistz256_ord_sqr_mont:
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 
 
 ALIGN	32
@@ -1242,7 +1242,7 @@ $L$SEH_begin_ecp_nistz256_mul_mont:
 
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rcx,[OPENSSL_ia32cap_P]
 	mov	rcx,QWORD[8+rcx]
 	and	ecx,0x80100
@@ -1261,7 +1261,7 @@ $L$mul_mont:
 	push	r15
 
 $L$mul_body:
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	cmp	ecx,0x80100
 	je	NEAR $L$mul_montx
 %endif
@@ -1273,7 +1273,7 @@ $L$mul_body:
 	mov	r12,QWORD[24+rsi]
 
 	call	__ecp_nistz256_mul_montq
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	jmp	NEAR $L$mul_mont_done
 
 ALIGN	32
@@ -1549,7 +1549,7 @@ $L$SEH_begin_ecp_nistz256_sqr_mont:
 
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rcx,[OPENSSL_ia32cap_P]
 	mov	rcx,QWORD[8+rcx]
 	and	ecx,0x80100
@@ -1567,7 +1567,7 @@ _CET_ENDBR
 	push	r15
 
 $L$sqr_body:
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	cmp	ecx,0x80100
 	je	NEAR $L$sqr_montx
 %endif
@@ -1577,7 +1577,7 @@ $L$sqr_body:
 	mov	r8,QWORD[24+rsi]
 
 	call	__ecp_nistz256_sqr_montq
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	jmp	NEAR $L$sqr_mont_done
 
 ALIGN	32
@@ -1775,7 +1775,7 @@ __ecp_nistz256_sqr_montq:
 	DB	0F3h,0C3h		;repret
 
 
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 
 ALIGN	32
 __ecp_nistz256_mul_montx:
@@ -2083,7 +2083,7 @@ ALIGN	32
 ecp_nistz256_select_w5:
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rax,[OPENSSL_ia32cap_P]
 	mov	rax,QWORD[8+rax]
 	test	eax,32
@@ -2176,7 +2176,7 @@ ALIGN	32
 ecp_nistz256_select_w7:
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rax,[OPENSSL_ia32cap_P]
 	mov	rax,QWORD[8+rax]
 	test	eax,32
@@ -2249,7 +2249,7 @@ $L$select_loop_sse_w7:
 
 $L$SEH_end_ecp_nistz256_select_w7:
 
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 
 
 
@@ -2339,7 +2339,7 @@ $L$select_loop_avx2_w5:
 $L$SEH_end_ecp_nistz256_avx2_select_w5:
 
 %endif
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 
 
 global	ecp_nistz256_avx2_select_w7
@@ -2589,7 +2589,7 @@ $L$SEH_begin_ecp_nistz256_point_double:
 
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rcx,[OPENSSL_ia32cap_P]
 	mov	rcx,QWORD[8+rcx]
 	and	ecx,0x80100
@@ -2830,7 +2830,7 @@ $L$SEH_begin_ecp_nistz256_point_add:
 
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rcx,[OPENSSL_ia32cap_P]
 	mov	rcx,QWORD[8+rcx]
 	and	ecx,0x80100
@@ -3274,7 +3274,7 @@ $L$SEH_begin_ecp_nistz256_point_add_affine:
 
 
 _CET_ENDBR
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	lea	rcx,[OPENSSL_ia32cap_P]
 	mov	rcx,QWORD[8+rcx]
 	and	ecx,0x80100
@@ -3600,7 +3600,7 @@ $L$add_affineq_epilogue:
 	DB	0F3h,0C3h		;repret
 
 $L$SEH_end_ecp_nistz256_point_add_affine:
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 
 ALIGN	32
 __ecp_nistz256_add_tox:
@@ -4883,7 +4883,7 @@ ALIGN	4
 	DD	$L$SEH_begin_ecp_nistz256_ord_sqr_mont wrt ..imagebase
 	DD	$L$SEH_end_ecp_nistz256_ord_sqr_mont wrt ..imagebase
 	DD	$L$SEH_info_ecp_nistz256_ord_sqr_mont wrt ..imagebase
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	DD	$L$SEH_begin_ecp_nistz256_ord_mul_montx wrt ..imagebase
 	DD	$L$SEH_end_ecp_nistz256_ord_mul_montx wrt ..imagebase
 	DD	$L$SEH_info_ecp_nistz256_ord_mul_montx wrt ..imagebase
@@ -4907,7 +4907,7 @@ ALIGN	4
 	DD	$L$SEH_begin_ecp_nistz256_select_w7 wrt ..imagebase
 	DD	$L$SEH_end_ecp_nistz256_select_w7 wrt ..imagebase
 	DD	$L$SEH_info_ecp_nistz256_select_wX wrt ..imagebase
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	DD	$L$SEH_begin_ecp_nistz256_avx2_select_w5 wrt ..imagebase
 	DD	$L$SEH_end_ecp_nistz256_avx2_select_w5 wrt ..imagebase
 	DD	$L$SEH_info_ecp_nistz256_avx2_select_wX wrt ..imagebase
@@ -4927,7 +4927,7 @@ ALIGN	4
 	DD	$L$SEH_begin_ecp_nistz256_point_add_affine wrt ..imagebase
 	DD	$L$SEH_end_ecp_nistz256_point_add_affine wrt ..imagebase
 	DD	$L$SEH_info_ecp_nistz256_point_add_affine wrt ..imagebase
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
 	DD	$L$SEH_begin_ecp_nistz256_point_doublex wrt ..imagebase
 	DD	$L$SEH_end_ecp_nistz256_point_doublex wrt ..imagebase
 	DD	$L$SEH_info_ecp_nistz256_point_doublex wrt ..imagebase
@@ -4941,44 +4941,51 @@ ALIGN	4
 	DD	$L$SEH_info_ecp_nistz256_point_add_affinex wrt ..imagebase
 %endif
 
-section	.xdata rdata align=8
-ALIGN	8
+section	.xdata rdata align=4
+ALIGN	4
 $L$SEH_info_ecp_nistz256_neg:
 	DB	9,0,0,0
 	DD	short_handler wrt ..imagebase
 	DD	$L$neg_body wrt ..imagebase,$L$neg_epilogue wrt ..imagebase
+ALIGN	4
 $L$SEH_info_ecp_nistz256_ord_mul_mont:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$ord_mul_body wrt ..imagebase,$L$ord_mul_epilogue wrt ..imagebase
 	DD	48,0
+ALIGN	4
 $L$SEH_info_ecp_nistz256_ord_sqr_mont:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$ord_sqr_body wrt ..imagebase,$L$ord_sqr_epilogue wrt ..imagebase
 	DD	48,0
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
+ALIGN	4
 $L$SEH_info_ecp_nistz256_ord_mul_montx:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$ord_mulx_body wrt ..imagebase,$L$ord_mulx_epilogue wrt ..imagebase
 	DD	48,0
+ALIGN	4
 $L$SEH_info_ecp_nistz256_ord_sqr_montx:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$ord_sqrx_body wrt ..imagebase,$L$ord_sqrx_epilogue wrt ..imagebase
 	DD	48,0
 %endif
+ALIGN	4
 $L$SEH_info_ecp_nistz256_mul_mont:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$mul_body wrt ..imagebase,$L$mul_epilogue wrt ..imagebase
 	DD	48,0
+ALIGN	4
 $L$SEH_info_ecp_nistz256_sqr_mont:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$sqr_body wrt ..imagebase,$L$sqr_epilogue wrt ..imagebase
 	DD	48,0
+ALIGN	4
 $L$SEH_info_ecp_nistz256_select_wX:
 	DB	0x01,0x33,0x16,0x00
 	DB	0x33,0xf8,0x09,0x00
@@ -4992,8 +4999,8 @@ $L$SEH_info_ecp_nistz256_select_wX:
 	DB	0x0c,0x78,0x01,0x00
 	DB	0x08,0x68,0x00,0x00
 	DB	0x04,0x01,0x15,0x00
-ALIGN	8
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
+ALIGN	4
 $L$SEH_info_ecp_nistz256_avx2_select_wX:
 	DB	0x01,0x36,0x17,0x0b
 	DB	0x36,0xf8,0x09,0x00
@@ -5008,35 +5015,39 @@ $L$SEH_info_ecp_nistz256_avx2_select_wX:
 	DB	0x09,0x68,0x00,0x00
 	DB	0x04,0x01,0x15,0x00
 	DB	0x00,0xb3,0x00,0x00
-ALIGN	8
 %endif
+ALIGN	4
 $L$SEH_info_ecp_nistz256_point_double:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$point_doubleq_body wrt ..imagebase,$L$point_doubleq_epilogue wrt ..imagebase
 	DD	32*5+56,0
+ALIGN	4
 $L$SEH_info_ecp_nistz256_point_add:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$point_addq_body wrt ..imagebase,$L$point_addq_epilogue wrt ..imagebase
 	DD	32*18+56,0
+ALIGN	4
 $L$SEH_info_ecp_nistz256_point_add_affine:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$add_affineq_body wrt ..imagebase,$L$add_affineq_epilogue wrt ..imagebase
 	DD	32*15+56,0
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
-ALIGN	8
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2
+ALIGN	4
 $L$SEH_info_ecp_nistz256_point_doublex:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$point_doublex_body wrt ..imagebase,$L$point_doublex_epilogue wrt ..imagebase
 	DD	32*5+56,0
+ALIGN	4
 $L$SEH_info_ecp_nistz256_point_addx:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase
 	DD	$L$point_addx_body wrt ..imagebase,$L$point_addx_epilogue wrt ..imagebase
 	DD	32*18+56,0
+ALIGN	4
 $L$SEH_info_ecp_nistz256_point_add_affinex:
 	DB	9,0,0,0
 	DD	full_handler wrt ..imagebase

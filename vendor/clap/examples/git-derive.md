@@ -87,12 +87,12 @@ git-derive[EXE] stash push:
   -h, --help               Print help
 
 git-derive[EXE] stash pop:
-  -h, --help   Print help
-  [STASH]  
+  -h, --help  Print help
+  [STASH]     
 
 git-derive[EXE] stash apply:
-  -h, --help   Print help
-  [STASH]  
+  -h, --help  Print help
+  [STASH]     
 
 git-derive[EXE] stash help:
 Print this message or the help of the given subcommand(s)
@@ -132,6 +132,19 @@ External subcommands:
 ```console
 $ git-derive custom-tool arg1 --foo bar
 Calling out to "custom-tool" with ["arg1", "--foo", "bar"]
+
+```
+
+Configurable aliases:
+Aliases loaded from application configuration can expand into built-in commands
+and arguments. Built-in commands take precedence over configured aliases.
+
+```console
+$ git-derive last ./src
+Diffing HEAD~..HEAD ./src (color=auto)
+
+$ git-derive stage Cargo.toml Cargo.lock
+Adding ["Cargo.toml", "Cargo.lock"]
 
 ```
 

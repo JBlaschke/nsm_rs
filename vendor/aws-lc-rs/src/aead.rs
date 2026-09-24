@@ -158,7 +158,7 @@
 //! let seal_prepared_nonce = sealing_key.prepare_nonce()?;
 //!
 //! // Query the nonce that will be used for our seal operation with our prepared nonce
-//! let seal_nonce_bytes = Vec::from(seal_prepared_nonce.nonce().as_ref());
+//! let seal_nonce_bytes = Vec::from(seal_prepared_nonce.nonce().as_ref().as_slice());
 //!
 //! // Use the prepared nonce and seal the plaintext
 //! seal_prepared_nonce.seal_in_place_append_tag(Aad::empty(), &mut in_out)?;
@@ -167,7 +167,7 @@
 //! let open_prepared_nonce = opening_key.prepare_nonce()?;
 //!
 //! // Query the nonce that will be used for our seal operation with our prepared nonce
-//! let open_nonce_bytes = Vec::from(open_prepared_nonce.nonce().as_ref());
+//! let open_nonce_bytes = Vec::from(open_prepared_nonce.nonce().as_ref().as_slice());
 //!
 //! // Since we initialized the Counter32Builder the same between both builders the nonce here
 //! // will match the one from the opening key.
@@ -180,10 +180,12 @@
 //! # }
 //! ```
 
-use crate::{derive_debug_via_id, error::Unspecified, hkdf};
+use crate::error::Unspecified;
+use crate::{derive_debug_via_id, hkdf};
 use aead_ctx::AeadCtx;
-use core::{fmt::Debug, ops::RangeFrom, stringify};
-use paste::paste;
+use core::fmt::Debug;
+use core::ops::RangeFrom;
+use core::stringify;
 
 mod aead_ctx;
 mod aes_gcm;
@@ -197,14 +199,12 @@ mod rand_nonce;
 mod tls;
 mod unbound_key;
 
-pub use self::{
-    aes_gcm::{AES_128_GCM, AES_128_GCM_SIV, AES_192_GCM, AES_256_GCM, AES_256_GCM_SIV},
-    chacha::CHACHA20_POLY1305,
-    nonce::{Nonce, NONCE_LEN},
-    rand_nonce::RandomizedNonceKey,
-    tls::{TlsProtocolId, TlsRecordOpeningKey, TlsRecordSealingKey},
-    unbound_key::UnboundKey,
-};
+pub use self::aes_gcm::{AES_128_GCM, AES_128_GCM_SIV, AES_192_GCM, AES_256_GCM, AES_256_GCM_SIV};
+pub use self::chacha::CHACHA20_POLY1305;
+pub use self::nonce::{Nonce, NONCE_LEN};
+pub use self::rand_nonce::RandomizedNonceKey;
+pub use self::tls::{TlsProtocolId, TlsRecordOpeningKey, TlsRecordSealingKey};
+pub use self::unbound_key::UnboundKey;
 
 /// A sequences of unique nonces.
 ///
@@ -528,25 +528,21 @@ impl<N: NonceSequence> SealingKey<N> {
 }
 
 macro_rules! nonce_seq_key_op_mut {
-    ($name:ident) => {
-        paste! {
+    ($name:ident, $name_prep_nonce:ident) => {
         /// A key operation with a precomputed nonce from a key's associated `NonceSequence`.
-        pub struct [<$name PreparedNonce>]<'a, N: NonceSequence> {
+        pub struct $name_prep_nonce<'a, N: NonceSequence> {
             key: &'a mut $name<N>,
             nonce: Nonce,
         }
 
-        impl<'a, N: NonceSequence> [<$name PreparedNonce>]<'a, N> {
+        impl<'a, N: NonceSequence> $name_prep_nonce<'a, N> {
             fn new(key: &'a mut $name<N>) -> Result<Self, Unspecified> {
                 let nonce = key.nonce_sequence.advance()?;
-                Ok(Self {
-                    key,
-                    nonce,
-                })
+                Ok(Self { key, nonce })
             }
         }
 
-        impl<N: NonceSequence> [<$name PreparedNonce>]<'_, N> {
+        impl<N: NonceSequence> $name_prep_nonce<'_, N> {
             /// Returns the prepared Nonce that is used for key methods invoked on [Self].
             #[must_use]
             pub fn nonce(&self) -> &Nonce {
@@ -554,17 +550,17 @@ macro_rules! nonce_seq_key_op_mut {
             }
         }
 
-        impl<N: NonceSequence> Debug for [<$name PreparedNonce>]<'_, N> {
+        impl<N: NonceSequence> Debug for $name_prep_nonce<'_, N> {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
-                f.debug_struct(stringify!([<$name PreparedNonce>])).finish_non_exhaustive()
+                f.debug_struct(stringify!($name_prep_nonce))
+                    .finish_non_exhaustive()
             }
-        }
         }
     };
 }
 
-nonce_seq_key_op_mut!(OpeningKey);
-nonce_seq_key_op_mut!(SealingKey);
+nonce_seq_key_op_mut!(OpeningKey, OpeningKeyPreparedNonce);
+nonce_seq_key_op_mut!(SealingKey, SealingKeyPreparedNonce);
 
 impl<N: NonceSequence> OpeningKeyPreparedNonce<'_, N> {
     /// Authenticates and decrypts (“opens”) data in place.
@@ -740,6 +736,37 @@ impl LessSafeKey {
         self.open_within(nonce, aad, in_out, 0..)
     }
 
+    /// Like [`OpeningKey::open_in_place()`], except the authentication tag is
+    /// passed separately.
+    ///
+    /// `in_out` contains the ciphertext on input and is overwritten with the
+    /// plaintext on success. `tag` is the authentication tag, e.g. as produced
+    /// by [`Self::seal_in_place_separate_tag()`].
+    ///
+    /// `nonce` must be unique for every use of the key to open data.
+    // # FIPS
+    // This method must not be used.
+    //
+    /// # Errors
+    /// `error::Unspecified` when ciphertext is invalid. In this case, `in_out` may
+    /// have been overwritten in an unspecified way.
+    #[inline]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn open_in_place_separate_tag<'in_out, A>(
+        &self,
+        nonce: Nonce,
+        aad: Aad<A>,
+        tag: &[u8],
+        in_out: &'in_out mut [u8],
+    ) -> Result<&'in_out mut [u8], Unspecified>
+    where
+        A: AsRef<[u8]>,
+    {
+        self.key
+            .open_in_place_separate_tag(&nonce, aad.as_ref(), tag, in_out)?;
+        Ok(in_out)
+    }
+
     /// Like [`OpeningKey::open_within()`], except it accepts an arbitrary nonce.
     ///
     /// `nonce` must be unique for every use of the key to open data.
@@ -768,7 +795,7 @@ impl LessSafeKey {
             .open_within(nonce, aad.as_ref(), in_out, ciphertext_and_tag)
     }
 
-    /// Authenticates and decrypts (“opens”) data into another provided slice.
+    /// Authenticates and decrypts ("opens") data into another provided slice.
     ///
     /// `aad` is the additional authenticated data (AAD), if any.
     ///
@@ -872,6 +899,54 @@ impl LessSafeKey {
         self.key
             .seal_in_place_separate_tag(Some(nonce), aad.as_ref(), in_out)
             .map(|(_, tag)| tag)
+    }
+
+    /// Encrypts and signs (“seals”) `in_plaintext` into the separate `out_ciphertext`
+    /// buffer, leaving `in_plaintext` untouched.
+    ///
+    /// This is the out-of-place counterpart to [`Self::seal_in_place_scatter`], and the
+    /// sealing counterpart to [`Self::open_separate_gather`].
+    ///
+    /// `aad` is the additional authenticated data (AAD), if any. This is authenticated
+    /// but not encrypted. If there is no AAD then use `Aad::empty()`.
+    ///
+    /// `out_ciphertext` must be exactly `in_plaintext.len()` bytes. `extra_in` is
+    /// additional plaintext, such as TLS 1.3's inner content-type byte, that is
+    /// encrypted into `extra_out_and_tag` ahead of the tag, so `extra_out_and_tag` must
+    /// be `extra_in.len() + self.algorithm().tag_len()` bytes. A caller with no extra
+    /// plaintext passes an empty `extra_in` and an `extra_out_and_tag` of
+    /// `self.algorithm().tag_len()` bytes.
+    ///
+    /// `nonce` must be unique for every use of the key to seal data.
+    // # FIPS
+    // This method must not be used.
+    //
+    /// # Errors
+    /// `error::Unspecified` if the buffer lengths are wrong or the encryption operation
+    /// fails. A length mismatch is rejected before the AEAD runs, leaving both output
+    /// buffers untouched.
+    #[inline]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn seal_out_of_place_scatter<A>(
+        &self,
+        nonce: Nonce,
+        aad: Aad<A>,
+        in_plaintext: &[u8],
+        out_ciphertext: &mut [u8],
+        extra_in: &[u8],
+        extra_out_and_tag: &mut [u8],
+    ) -> Result<(), Unspecified>
+    where
+        A: AsRef<[u8]>,
+    {
+        self.key.seal_out_of_place_scatter(
+            nonce,
+            aad.as_ref(),
+            in_plaintext,
+            out_ciphertext,
+            extra_in,
+            extra_out_and_tag,
+        )
     }
 
     /// Encrypts and signs (“seals”) data in place with extra plaintext.
@@ -1005,7 +1080,6 @@ impl core::fmt::Debug for Tag {
     }
 }
 
-#[allow(dead_code)]
 const MAX_KEY_LEN: usize = 32;
 
 // All the AEADs we support use 128-bit tags.
@@ -1019,7 +1093,8 @@ mod tests {
     use nonce_sequence::Counter32Builder;
 
     use super::*;
-    use crate::{iv::FixedLength, test::from_hex};
+    use crate::iv::FixedLength;
+    use crate::test::from_hex;
 
     #[cfg(feature = "fips")]
     mod fips;

@@ -17,8 +17,10 @@
 #![recursion_limit = "1024"]
 #![feature(rustc_private)]
 #![allow(
+    clippy::assert_is_empty,
     clippy::blocks_in_conditions,
     clippy::doc_markdown,
+    clippy::elidable_lifetime_names,
     clippy::explicit_deref_methods,
     clippy::let_underscore_untyped,
     clippy::manual_assert,
@@ -27,7 +29,8 @@
     clippy::match_wildcard_for_single_variants,
     clippy::needless_lifetimes,
     clippy::too_many_lines,
-    clippy::uninlined_format_args
+    clippy::uninlined_format_args,
+    clippy::unnecessary_box_returns
 )]
 
 extern crate rustc_ast;
@@ -35,17 +38,15 @@ extern crate rustc_ast_pretty;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_span;
-extern crate smallvec;
-extern crate thin_vec;
 
 use crate::common::eq::SpanlessEq;
 use crate::common::parse;
 use quote::ToTokens;
 use rustc_ast::ast;
-use rustc_ast::ptr::P;
 use rustc_ast_pretty::pprust;
 use rustc_span::edition::Edition;
 use std::fs;
+use std::mem;
 use std::path::Path;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -195,24 +196,23 @@ fn test_expressions(path: &Path, edition: Edition, exprs: Vec<syn::Expr>) -> (us
     (passed, failed)
 }
 
-fn librustc_parse_and_rewrite(input: &str) -> Option<P<ast::Expr>> {
+fn librustc_parse_and_rewrite(input: &str) -> Option<Box<ast::Expr>> {
     parse::librustc_expr(input).map(librustc_parenthesize)
 }
 
-fn librustc_parenthesize(mut librustc_expr: P<ast::Expr>) -> P<ast::Expr> {
+fn librustc_parenthesize(mut librustc_expr: Box<ast::Expr>) -> Box<ast::Expr> {
     use rustc_ast::ast::{
         AssocItem, AssocItemKind, Attribute, BinOpKind, Block, BoundConstness, Expr, ExprField,
-        ExprKind, GenericArg, GenericBound, Local, LocalKind, Pat, PolyTraitRef, Stmt, StmtKind,
-        StructExpr, StructRest, TraitBoundModifiers, Ty,
+        ExprKind, GenericArg, GenericBound, Local, LocalKind, Pat, PatKind, PolyTraitRef, Stmt,
+        StmtKind, StructExpr, StructRest, TraitBoundModifiers, Ty,
     };
-    use rustc_ast::mut_visit::{walk_flat_map_assoc_item, MutVisitor};
+    use rustc_ast::mut_visit::{walk_flat_map_assoc_item, walk_pat, MutVisitor};
     use rustc_ast::visit::{AssocCtxt, BoundKind};
     use rustc_data_structures::flat_map_in_place::FlatMapInPlace;
+    use rustc_data_structures::smallvec::SmallVec;
+    use rustc_data_structures::thin_vec::ThinVec;
     use rustc_span::DUMMY_SP;
-    use smallvec::SmallVec;
-    use std::mem;
     use std::ops::DerefMut;
-    use thin_vec::ThinVec;
 
     struct FullyParenthesize;
 
@@ -263,7 +263,9 @@ fn librustc_parenthesize(mut librustc_expr: P<ast::Expr>) -> P<ast::Expr> {
                     fields,
                     rest,
                 } = expr.deref_mut();
-                vis.visit_qself(qself);
+                if let Some(qself) = qself {
+                    vis.visit_qself(qself);
+                }
                 vis.visit_path(path);
                 fields.flat_map_in_place(|field| flat_map_field(field, vis));
                 if let StructRest::Base(rest) = rest {
@@ -275,23 +277,20 @@ fn librustc_parenthesize(mut librustc_expr: P<ast::Expr>) -> P<ast::Expr> {
     }
 
     impl MutVisitor for FullyParenthesize {
-        fn visit_expr(&mut self, e: &mut P<Expr>) {
+        fn visit_expr(&mut self, e: &mut Expr) {
             noop_visit_expr(e, self);
             match e.kind {
                 ExprKind::Block(..) | ExprKind::If(..) | ExprKind::Let(..) => {}
                 ExprKind::Binary(..) if contains_let_chain(e) => {}
                 _ => {
-                    let inner = mem::replace(
-                        e,
-                        P(Expr {
-                            id: ast::DUMMY_NODE_ID,
-                            kind: ExprKind::Dummy,
-                            span: DUMMY_SP,
-                            attrs: ThinVec::new(),
-                            tokens: None,
-                        }),
-                    );
-                    e.kind = ExprKind::Paren(inner);
+                    let inner = mem::replace(e, Expr::dummy());
+                    *e = Expr {
+                        id: ast::DUMMY_NODE_ID,
+                        kind: ExprKind::Paren(Box::new(inner)),
+                        span: DUMMY_SP,
+                        attrs: ThinVec::new(),
+                        tokens: None,
+                    };
                 }
             }
         }
@@ -325,7 +324,7 @@ fn librustc_parenthesize(mut librustc_expr: P<ast::Expr>) -> P<ast::Expr> {
             }
         }
 
-        fn visit_block(&mut self, block: &mut P<Block>) {
+        fn visit_block(&mut self, block: &mut Block) {
             self.visit_id(&mut block.id);
             block
                 .stmts
@@ -333,7 +332,7 @@ fn librustc_parenthesize(mut librustc_expr: P<ast::Expr>) -> P<ast::Expr> {
             self.visit_span(&mut block.span);
         }
 
-        fn visit_local(&mut self, local: &mut P<Local>) {
+        fn visit_local(&mut self, local: &mut Local) {
             match &mut local.kind {
                 LocalKind::Decl => {}
                 LocalKind::Init(init) => {
@@ -348,9 +347,9 @@ fn librustc_parenthesize(mut librustc_expr: P<ast::Expr>) -> P<ast::Expr> {
 
         fn flat_map_assoc_item(
             &mut self,
-            item: P<AssocItem>,
+            item: Box<AssocItem>,
             ctxt: AssocCtxt,
-        ) -> SmallVec<[P<AssocItem>; 1]> {
+        ) -> SmallVec<[Box<AssocItem>; 1]> {
             match &item.kind {
                 AssocItemKind::Const(const_item)
                     if !const_item.generics.params.is_empty()
@@ -365,11 +364,14 @@ fn librustc_parenthesize(mut librustc_expr: P<ast::Expr>) -> P<ast::Expr> {
         // We don't want to look at expressions that might appear in patterns or
         // types yet. We'll look into comparing those in the future. For now
         // focus on expressions appearing in other places.
-        fn visit_pat(&mut self, pat: &mut P<Pat>) {
-            let _ = pat;
+        fn visit_pat(&mut self, pat: &mut Pat) {
+            match &pat.kind {
+                PatKind::Expr(..) | PatKind::Range(..) => {}
+                _ => walk_pat(self, pat),
+            }
         }
 
-        fn visit_ty(&mut self, ty: &mut P<Ty>) {
+        fn visit_ty(&mut self, ty: &mut Ty) {
             let _ = ty;
         }
 
@@ -384,8 +386,10 @@ fn librustc_parenthesize(mut librustc_expr: P<ast::Expr>) -> P<ast::Expr> {
 }
 
 fn syn_parenthesize(syn_expr: syn::Expr) -> syn::Expr {
-    use syn::fold::{fold_expr, fold_generic_argument, Fold};
-    use syn::{token, BinOp, Expr, ExprParen, GenericArgument, MetaNameValue, Pat, Stmt, Type};
+    use syn::fold::{fold_expr, fold_generic_argument, fold_pat, Fold};
+    use syn::{
+        token, BinOp, Expr, ExprParen, GenericArgument, Lit, MetaNameValue, Pat, Stmt, Type,
+    };
 
     struct FullyParenthesize;
 
@@ -457,11 +461,21 @@ fn syn_parenthesize(syn_expr: syn::Expr) -> syn::Expr {
         // types yet. We'll look into comparing those in the future. For now
         // focus on expressions appearing in other places.
         fn fold_pat(&mut self, pat: Pat) -> Pat {
-            pat
+            match pat {
+                Pat::Range(_) => pat,
+                _ => fold_pat(self, pat),
+            }
         }
 
         fn fold_type(&mut self, ty: Type) -> Type {
             ty
+        }
+
+        fn fold_lit(&mut self, lit: Lit) -> Lit {
+            if let Lit::Verbatim(lit) = &lit {
+                panic!("unexpected verbatim literal: {lit}");
+            }
+            lit
         }
     }
 
@@ -510,9 +524,8 @@ fn make_parens_invisible(expr: syn::Expr) -> syn::Expr {
 
 /// Walk through a crate collecting all expressions we can find in it.
 fn collect_exprs(file: syn::File) -> Vec<syn::Expr> {
-    use syn::fold::Fold;
-    use syn::punctuated::Punctuated;
-    use syn::{token, ConstParam, Expr, ExprTuple, Pat, Path};
+    use syn::fold::{fold_pat, Fold};
+    use syn::{ConstParam, Expr, Pat, Path};
 
     struct CollectExprs(Vec<Expr>);
     impl Fold for CollectExprs {
@@ -521,16 +534,14 @@ fn collect_exprs(file: syn::File) -> Vec<syn::Expr> {
                 Expr::Verbatim(_) => {}
                 _ => self.0.push(expr),
             }
-
-            Expr::Tuple(ExprTuple {
-                attrs: vec![],
-                elems: Punctuated::new(),
-                paren_token: token::Paren::default(),
-            })
+            Expr::PLACEHOLDER
         }
 
         fn fold_pat(&mut self, pat: Pat) -> Pat {
-            pat
+            match pat {
+                Pat::Range(_) => pat,
+                _ => fold_pat(self, pat),
+            }
         }
 
         fn fold_path(&mut self, path: Path) -> Path {

@@ -1,16 +1,5 @@
-/* Copyright (c) 2020, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2020, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #ifndef OPENSSL_HEADER_EC_EXTRA_INTERNAL_H
 #define OPENSSL_HEADER_EC_EXTRA_INTERNAL_H
@@ -70,6 +59,21 @@ OPENSSL_EXPORT int ec_hash_to_scalar_p384_xmd_sha512_draft07(
     const EC_GROUP *group, EC_SCALAR *out, const uint8_t *dst, size_t dst_len,
     const uint8_t *msg, size_t msg_len);
 
+// ec_group_new_by_curve_name_nonfips returns the EC_GROUP for non-FIPS curves,
+// or NULL if |nid| is not a supported non-FIPS curve. Called from the default
+// fallthrough in EC_GROUP_new_by_curve_name to keep per-curve dispatch logic
+// outside the FIPS module boundary (bcm.o).
+const EC_GROUP *ec_group_new_by_curve_name_nonfips(int nid);
+
+enum ECParametersType {
+  UNKNOWN_EC_PARAMETERS = 0,
+  NAMED_CURVE_EC_PARAMETERS = 1,
+  SPECIFIED_CURVE_EC_PARAMETERS = 2,
+};
+
+// EC_KEY_parse_parameters_and_type parses the elliptic curve key parameters from |cbs| and
+// sets the type of parameters found on |paramType|.
+EC_GROUP *EC_KEY_parse_parameters_and_type(CBS *cbs, enum ECParametersType *paramType);
 
 #if defined(__cplusplus)
 }  // extern C

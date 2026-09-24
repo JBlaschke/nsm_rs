@@ -1,110 +1,6 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
- */
-/* ====================================================================
- * Copyright (c) 1998-2001 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com). */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
+// Copyright (c) 1998-2001 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENSSL_HEADER_CRYPTO_INTERNAL_H
 #define OPENSSL_HEADER_CRYPTO_INTERNAL_H
@@ -114,8 +10,6 @@
 #include <openssl/service_indicator.h>
 #include <openssl/stack.h>
 #include <openssl/thread.h>
-
-#include "fipsmodule/rand/snapsafe_detect.h"
 
 #include <assert.h>
 #include <string.h>
@@ -141,7 +35,8 @@
 #endif
 
 #if defined(OPENSSL_THREADS) && \
-    (!defined(OPENSSL_WINDOWS) || defined(__MINGW32__))
+    (!defined(OPENSSL_WINDOWS) || \
+        (defined(__MINGW32__) && !defined(__clang__)))
 #include <pthread.h>
 #define OPENSSL_PTHREADS
 #endif
@@ -153,6 +48,8 @@ OPENSSL_MSVC_PRAGMA(warning(push, 3))
 #include <windows.h>
 OPENSSL_MSVC_PRAGMA(warning(pop))
 #endif
+
+#include <stdbool.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -552,6 +449,12 @@ static inline int constant_time_declassify_int(int v) {
   return value_barrier_u32(v);
 }
 
+// declassify_assert behaves like |assert| but declassifies the result of
+// evaluating |expr|. This allows the assertion to branch on the (presumably
+// public) result, but still ensures that values leading up to the computation
+// were secret.
+#define declassify_assert(expr) assert(constant_time_declassify_int(expr))
+
 
 // Thread-safe initialisation.
 
@@ -696,6 +599,15 @@ OPENSSL_EXPORT void CRYPTO_STATIC_MUTEX_unlock_read(
 OPENSSL_EXPORT void CRYPTO_STATIC_MUTEX_unlock_write(
     struct CRYPTO_STATIC_MUTEX *lock);
 
+#if !defined(NDEBUG)
+// CRYPTO_STATIC_MUTEX_is_write_locked checks whether |lock| has an active write
+// lock. If it does, the function returns 1. If it doesn't, it returns 0. Returns -1
+// on any other error. Note that due to the concurrent nature of locks, the result
+// may be stale by the time it is used.
+OPENSSL_EXPORT int CRYPTO_STATIC_MUTEX_is_write_locked(
+    struct CRYPTO_STATIC_MUTEX *lock);
+#endif
+
 #if defined(__cplusplus)
 extern "C++" {
 
@@ -743,6 +655,9 @@ typedef enum {
   OPENSSL_THREAD_LOCAL_FIPS_COUNTERS,
   AWSLC_THREAD_LOCAL_FIPS_SERVICE_INDICATOR_STATE,
   OPENSSL_THREAD_LOCAL_TEST,
+  OPENSSL_THREAD_LOCAL_PRIVATE_RAND,
+  OPENSSL_THREAD_LOCAL_PUBLIC_RAND,
+  OPENSSL_THREAD_LOCAL_UBE,
   NUM_OPENSSL_THREAD_LOCALS,
 } thread_local_data_t;
 
@@ -888,7 +803,10 @@ static inline uint64_t CRYPTO_bswap8(uint64_t x) {
 // These wrapper functions behave the same as the corresponding C standard
 // functions, but behave as expected when passed NULL if the length is zero.
 //
-// Note |OPENSSL_memcmp| is a different function from |CRYPTO_memcmp|.
+// |OPENSSL_memcmp| performs a constant-time comparison that preserves the
+// ordering semantics of |memcmp| (negative, zero, or positive). It iterates
+// over the full length regardless of where the first differing byte is, so it
+// can be used safely with secret data without leaking timing information.
 
 // C++ defines |memchr| as a const-correct overload.
 #if defined(__cplusplus)
@@ -918,17 +836,30 @@ static inline void *OPENSSL_memchr(const void *s, int c, size_t n) {
     return NULL;
   }
 
-  return memchr(s, c, n);
+  // C23 makes memchr const-correct, returning const void * when the input is
+  // const void *. Some C libraries apply this change even in C11 mode. Cast to
+  // match our return type.
+  return (void *)memchr(s, c, n);
 }
 
 #endif  // __cplusplus
 
 static inline int OPENSSL_memcmp(const void *s1, const void *s2, size_t n) {
-  if (n == 0) {
-    return 0;
+  const uint8_t *a = (const uint8_t *)s1;
+  const uint8_t *b = (const uint8_t *)s2;
+  // Walk from the end so the lowest-index differing byte (the one that decides
+  // memcmp's sign) is the last write to |result|. Equal-byte iterations leave
+  // |result| unchanged. The loop always runs |n| iterations, so timing depends
+  // only on |n|.
+  int result = 0;
+  for (size_t i = n; i > 0; i--) {
+    uint8_t ai = a[i - 1];
+    uint8_t bi = b[i - 1];
+    crypto_word_t diff_mask =
+        ~constant_time_is_zero_w((crypto_word_t)(ai ^ bi));
+    result = constant_time_select_int(diff_mask, (int)ai - (int)bi, result);
   }
-
-  return memcmp(s1, s2, n);
+  return result;
 }
 
 static inline void *OPENSSL_memcpy(void *dst, const void *src, size_t n) {
@@ -1165,13 +1096,13 @@ static inline uint64_t CRYPTO_rotr_u64(uint64_t value, int shift) {
 
 static inline uint32_t CRYPTO_addc_u32(uint32_t x, uint32_t y, uint32_t carry,
                                        uint32_t *out_carry) {
-  assert(carry <= 1);
+  declassify_assert(carry <= 1);
   return CRYPTO_GENERIC_ADDC(x, y, carry, out_carry);
 }
 
 static inline uint64_t CRYPTO_addc_u64(uint64_t x, uint64_t y, uint64_t carry,
                                        uint64_t *out_carry) {
-  assert(carry <= 1);
+  declassify_assert(carry <= 1);
   return CRYPTO_GENERIC_ADDC(x, y, carry, out_carry);
 }
 
@@ -1179,7 +1110,7 @@ static inline uint64_t CRYPTO_addc_u64(uint64_t x, uint64_t y, uint64_t carry,
 
 static inline uint32_t CRYPTO_addc_u32(uint32_t x, uint32_t y, uint32_t carry,
                                        uint32_t *out_carry) {
-  assert(carry <= 1);
+  declassify_assert(carry <= 1);
   uint64_t ret = carry;
   ret += (uint64_t)x + y;
   *out_carry = (uint32_t)(ret >> 32);
@@ -1188,7 +1119,7 @@ static inline uint32_t CRYPTO_addc_u32(uint32_t x, uint32_t y, uint32_t carry,
 
 static inline uint64_t CRYPTO_addc_u64(uint64_t x, uint64_t y, uint64_t carry,
                                        uint64_t *out_carry) {
-  assert(carry <= 1);
+  declassify_assert(carry <= 1);
 #if defined(BORINGSSL_HAS_UINT128)
   uint128_t ret = carry;
   ret += (uint128_t)x + y;
@@ -1217,13 +1148,13 @@ static inline uint64_t CRYPTO_addc_u64(uint64_t x, uint64_t y, uint64_t carry,
 
 static inline uint32_t CRYPTO_subc_u32(uint32_t x, uint32_t y, uint32_t borrow,
                                        uint32_t *out_borrow) {
-  assert(borrow <= 1);
+  declassify_assert(borrow <= 1);
   return CRYPTO_GENERIC_SUBC(x, y, borrow, out_borrow);
 }
 
 static inline uint64_t CRYPTO_subc_u64(uint64_t x, uint64_t y, uint64_t borrow,
                                        uint64_t *out_borrow) {
-  assert(borrow <= 1);
+  declassify_assert(borrow <= 1);
   return CRYPTO_GENERIC_SUBC(x, y, borrow, out_borrow);
 }
 
@@ -1231,7 +1162,7 @@ static inline uint64_t CRYPTO_subc_u64(uint64_t x, uint64_t y, uint64_t borrow,
 
 static inline uint32_t CRYPTO_subc_u32(uint32_t x, uint32_t y, uint32_t borrow,
                                        uint32_t *out_borrow) {
-  assert(borrow <= 1);
+  declassify_assert(borrow <= 1);
   uint32_t ret = x - y - borrow;
   *out_borrow = (x < y) | ((x == y) & borrow);
   return ret;
@@ -1239,7 +1170,7 @@ static inline uint32_t CRYPTO_subc_u32(uint32_t x, uint32_t y, uint32_t borrow,
 
 static inline uint64_t CRYPTO_subc_u64(uint64_t x, uint64_t y, uint64_t borrow,
                                        uint64_t *out_borrow) {
-  assert(borrow <= 1);
+  declassify_assert(borrow <= 1);
   uint64_t ret = x - y - borrow;
   *out_borrow = (x < y) | ((x == y) & borrow);
   return ret;
@@ -1261,15 +1192,26 @@ static inline uint64_t CRYPTO_subc_u64(uint64_t x, uint64_t y, uint64_t borrow,
 
 #if defined(BORINGSSL_FIPS)
 
-// BORINGSSL_FIPS_abort is called when a FIPS power-on or continuous test
-// fails. It prevents any further cryptographic operations by the current
-// process.
-#if defined(_MSC_VER)
-__declspec(noreturn) void BORINGSSL_FIPS_abort(void);
+// AWS_LC_FIPS_failure is called when a FIPS power-on or continuous test
+// fails. The behavior depends on how AWS-LC is built:
+// - When AWS-LC is not in FIPS mode it prints |message| to |stderr|.
+// - If AWS-LC is built with FIPS it prints |message| to |stderr| and prevents
+//     any further cryptographic operations by the current process.
+// - If AWS-LC is built with FIPS, AWSLC_FIPS_FAILURE_CALLBACK, and the
+//      application does not define the AWS_LC_fips_failure_callback function
+//      the normal behavior FIPS behavior is used.
+// - If AWS-LC is built with FIPS, AWSLC_FIPS_FAILURE_CALLBACK, and the
+//      application defines the AWS_LC_fips_failure_callback function that
+//      function is called with |message|.
+#if defined(AWSLC_FIPS_FAILURE_CALLBACK)
+void AWS_LC_FIPS_failure(const char* message);
 #else
-void BORINGSSL_FIPS_abort(void) __attribute__((noreturn));
+#if defined(_MSC_VER)
+__declspec(noreturn) void AWS_LC_FIPS_failure(const char* message);
+#else
+void AWS_LC_FIPS_failure(const char* message) __attribute__((noreturn));
 #endif
-
+#endif
 // boringssl_self_test_startup runs all startup self tests and returns one on
 // success or zero on error. Startup self tests do not include lazy tests.
 // Call |BORINGSSL_self_test| to run every self test.
@@ -1295,10 +1237,20 @@ void boringssl_ensure_ffdh_self_test(void);
 // address space if unsuccessful.
 void boringssl_ensure_ml_kem_self_test(void);
 
-// boringssl_ensure_eddsa_self_test checks whether the EDDSA self-test
+// boringssl_ensure_ml_dsa_self_test checks whether the ML-DSA self-test
+// has been run in this address space. If not, it runs it and crashes the
+// address space if unsuccessful.
+void boringssl_ensure_ml_dsa_self_test(void);
+
+// boringssl_ensure_eddsa_self_test checks whether the EdDSA self-test
 // has been run in this address space. If not, it runs it and crashes the
 // address space if unsuccessful.
 void boringssl_ensure_eddsa_self_test(void);
+
+// boringssl_ensure_hasheddsa_self_test checks whether the HashEdDSA self-test
+// has been run in this address space. If not, it runs it and crashes the
+// address space if unsuccessful.
+void boringssl_ensure_hasheddsa_self_test(void);
 
 #else
 
@@ -1308,21 +1260,20 @@ OPENSSL_INLINE void boringssl_ensure_rsa_self_test(void) {}
 OPENSSL_INLINE void boringssl_ensure_ecc_self_test(void) {}
 OPENSSL_INLINE void boringssl_ensure_ffdh_self_test(void) {}
 OPENSSL_INLINE void boringssl_ensure_ml_kem_self_test(void) {}
+OPENSSL_INLINE void boringssl_ensure_ml_dsa_self_test(void) {}
 OPENSSL_INLINE void boringssl_ensure_eddsa_self_test(void) {}
+OPENSSL_INLINE void boringssl_ensure_hasheddsa_self_test(void) {}
+
+// Outside of FIPS mode AWS_LC_FIPS_failure simply logs the message to stderr
+void AWS_LC_FIPS_failure(const char* message);
 
 #endif  // FIPS
 
-// boringssl_self_test_sha256 performs a SHA-256 KAT.
+// boringssl_self_test_sha256 performs a SHA-256 KAT
 int boringssl_self_test_sha256(void);
 
-// boringssl_self_test_hmac_sha256 performs an HMAC-SHA-256 KAT.
+  // boringssl_self_test_hmac_sha256 performs an HMAC-SHA-256 KAT
 int boringssl_self_test_hmac_sha256(void);
-
-#if defined(BORINGSSL_FIPS_COUNTERS)
-void boringssl_fips_inc_counter(enum fips_counter_t counter);
-#else
-OPENSSL_INLINE void boringssl_fips_inc_counter(enum fips_counter_t counter) {}
-#endif
 
 #if defined(BORINGSSL_FIPS_BREAK_TESTS)
 OPENSSL_INLINE int boringssl_fips_break_test(const char *test) {
@@ -1350,6 +1301,8 @@ OPENSSL_INLINE int boringssl_fips_break_test(const char *test) {
 //   6: sha256_block_data_order_shaext
 //   7: aes_gcm_encrypt_avx512
 //   8: RSAZ_mod_exp_avx512_x2
+//   9: sha3_keccak_f1600
+//  10: sha3_keccak4_f1600_alt
 // On AARCH64:
 //   0: aes_hw_ctr32_encrypt_blocks
 //   1: aes_hw_encrypt
@@ -1360,7 +1313,13 @@ OPENSSL_INLINE int boringssl_fips_break_test(const char *test) {
 //   6: sha256_block_armv8
 //   7: aesv8_gcm_8x_enc_128
 //   8: sha512_block_armv8
-extern uint8_t BORINGSSL_function_hit[9];
+//   9: KeccakF1600_hw
+//  10: sha3_keccak_f1600
+//  11: sha3_keccak_f1600_alt
+//  12: sha3_keccak2_f1600
+//  13: sha3_keccak4_f1600_alt
+//  14: sha3_keccak4_f1600_alt2
+extern uint8_t BORINGSSL_function_hit[15];
 #endif  // BORINGSSL_DISPATCH_TEST
 
 #if !defined(AWSLC_FIPS) && !defined(BORINGSSL_SHARED_LIBRARY)
@@ -1379,7 +1338,7 @@ OPENSSL_EXPORT int OPENSSL_vasprintf_internal(char **str, const char *format,
 // Experimental safety macros inspired by s2n-tls.
 
 // If |cond| is false |action| is invoked, otherwise nothing happens.
-#define __AWS_LC_ENSURE(cond, action) \
+#define AWS_LC_ENSURE(cond, action) \
     do {                           \
         if (!(cond)) {             \
             action;                \
@@ -1394,8 +1353,31 @@ OPENSSL_EXPORT int OPENSSL_vasprintf_internal(char **str, const char *format,
 //
 // NOTE: this macro should only be used with functions that return 0 (for error)
 // and 1 (for success).
-#define GUARD_PTR(ptr) __AWS_LC_ENSURE((ptr) != NULL, OPENSSL_PUT_ERROR(CRYPTO, ERR_R_PASSED_NULL_PARAMETER); \
-                                       return AWS_LC_ERROR)
+#define GUARD_PTR(ptr) AWS_LC_ENSURE((ptr) != NULL, OPENSSL_PUT_ERROR(CRYPTO, ERR_R_PASSED_NULL_PARAMETER); \
+                                      return AWS_LC_ERROR)
+
+// GUARD_PTR_ABORT checks |ptr|: if it is NULL it calls abort() and does nothing
+// otherwise.
+#define GUARD_PTR_ABORT(ptr) AWS_LC_ENSURE((ptr) != NULL, abort())
+
+#if defined(NDEBUG)
+#define AWSLC_ASSERT(x) (void) (x)
+#else
+#define AWSLC_ASSERT(x) AWS_LC_ENSURE(x, abort())
+#endif
+
+#define AWSLC_ABORT_IF_NOT_ONE(x) AWS_LC_ENSURE(1 == (x), abort())
+
+// Windows doesn't really support weak symbols as of May 2019, and Clang on
+// Windows will emit strong symbols instead. See
+// https://bugs.llvm.org/show_bug.cgi?id=37598
+#if defined(__ELF__) && defined(__GNUC__)
+#define WEAK_SYMBOL_FUNC(rettype, name, args) \
+rettype name args __attribute__((weak));
+#else
+#define WEAK_SYMBOL_FUNC(rettype, name, args) static rettype(*name) args = NULL;
+#endif
+
 
 #if defined(__cplusplus)
 }  // extern C

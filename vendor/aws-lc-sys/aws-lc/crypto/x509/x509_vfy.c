@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <ctype.h>
 #include <limits.h>
@@ -74,20 +21,42 @@ static CRYPTO_EX_DATA_CLASS g_ex_data_class =
     CRYPTO_EX_DATA_CLASS_INIT_WITH_APP_DATA;
 
 // CRL score values
+//
+// The bit layout below is carefully chosen so that a numerical comparison
+// against |CRL_SCORE_VALID| is equivalent to "NOCRITICAL, SCOPE, and TIME
+// are all set." For that to hold, the sum of every bit strictly below TIME
+// (ISSUER_NAME | ISSUER_CERT | SAME_PATH | AKID) must be less than TIME,
+// TIME must be less than SCOPE, and SCOPE less than NOCRITICAL. Preserve
+// this invariant when adjusting these values.
 
 // No unhandled critical extensions
-#define CRL_SCORE_NOCRITICAL 0x100
+#define CRL_SCORE_NOCRITICAL 0x200
 
 // certificate is within CRL scope
-#define CRL_SCORE_SCOPE 0x080
+#define CRL_SCORE_SCOPE 0x100
 
 // CRL times valid
-#define CRL_SCORE_TIME 0x040
+#define CRL_SCORE_TIME 0x080
+
+// CRL's IDP specifically matches the certificate's CRLDP. Always set
+// alongside CRL_SCORE_SCOPE; refines a broad in-scope match into a
+// specific one so a specific-IDP CRL outranks a broad no-IDP CRL of
+// equal freshness. 
+//
+// This bit is placed strictly below CRL_SCORE_TIME 
+// so that an invalid specific-IDP CRL cannot win over a valid broad CRL. 
+// A specific-IDP CRL must still be fresh (TIME) and free of unhandled critical 
+// extensions (NOCRITICAL) to qualify as valid.
+#define CRL_SCORE_IDP_MATCH 0x040
 
 // Issuer name matches certificate
 #define CRL_SCORE_ISSUER_NAME 0x020
 
-// If this score or above CRL is probably valid
+// If this score or above CRL is probably valid.
+//
+// CRL_SCORE_IDP_MATCH is intentionally excluded: a specific-IDP CRL that
+// is missing NOCRITICAL or TIME must not be considered valid on the basis
+// of its scope match alone.
 #define CRL_SCORE_VALID \
   (CRL_SCORE_NOCRITICAL | CRL_SCORE_TIME | CRL_SCORE_SCOPE)
 
@@ -116,12 +85,19 @@ static int get_crl_score(X509_STORE_CTX *ctx, X509 **pissuer, X509_CRL *crl,
 static int get_crl(X509_STORE_CTX *ctx, X509_CRL **pcrl, X509 *x);
 static int crl_akid_check(X509_STORE_CTX *ctx, X509_CRL *crl, X509 **pissuer,
                           int *pcrl_score);
-static int crl_crldp_check(X509 *x, X509_CRL *crl, int crl_score);
+static int crl_crldp_check(X509 *x, X509_CRL *crl, int crl_score, int *idp_match);
 static int cert_crl(X509_STORE_CTX *ctx, X509_CRL *crl, X509 *x);
 
 static int internal_verify(X509_STORE_CTX *ctx);
 
 static int null_callback(int ok, X509_STORE_CTX *e) { return ok; }
+static int null_verify_custom_crit_oids_callback(X509_STORE_CTX *ctx,
+                                                 X509 *x509,
+                                                 STACK_OF(ASN1_OBJECT) *oids) {
+  // This returns 0 by default, so that the callback must be configured by the
+  // user when enabling the custom critical extensions feature.
+  return 0;
+}
 
 // cert_self_signed checks if |x| is self-signed. If |x| is valid, it returns
 // one and sets |*out_is_self_signed| to the result. If |x| is invalid, it
@@ -519,7 +495,7 @@ static X509 *find_issuer(X509_STORE_CTX *ctx, STACK_OF(X509) *sk, X509 *x) {
     issuer = sk_X509_value(sk, i);
     if (x509_check_issued_with_callback(ctx, x, issuer)) {
       candidate = issuer;
-      if (x509_check_cert_time(ctx, candidate, /*suppress_error*/1)) {
+      if (x509_check_cert_time(ctx, candidate, /*suppress_error*/ 1)) {
         break;
       }
     }
@@ -561,6 +537,89 @@ static int get_issuer(X509 **issuer, X509_STORE_CTX *ctx, X509 *x) {
   return X509_STORE_CTX_get1_issuer(issuer, ctx, x);
 }
 
+static int check_custom_critical_extensions(X509_STORE_CTX *ctx, X509 *x) {
+  if (ctx->custom_crit_oids == NULL) {
+    // Fail if custom critical extensions are enabled, but none were set.
+    return 0;
+  }
+  size_t known_oid_count = sk_ASN1_OBJECT_num(ctx->custom_crit_oids);
+  if (known_oid_count == 0) {
+    return 0;
+  }
+
+  // Allocate |found_exts| to pass to the callback.
+  STACK_OF(ASN1_OBJECT) *found_exts = sk_ASN1_OBJECT_new_null();
+  if (found_exts == NULL) {
+    return 0;
+  }
+
+  // Iterate through all critical extensions of |x| and validate against the
+  // ones that aren't recognized by |X509_supported_extension|.
+  int last_pos = X509_get_ext_by_critical(x, 1, -1);
+  while (last_pos >= 0) {
+    const X509_EXTENSION *ext = X509_get_ext(x, last_pos);
+    if (!X509_supported_extension(ext)) {
+      int found = 0;
+
+      // Iterate through all set |custom_crit_oids|.
+      for (size_t i = 0; i < known_oid_count; i++) {
+        const ASN1_OBJECT *known_ext =
+            sk_ASN1_OBJECT_value(ctx->custom_crit_oids, i);
+        if (OBJ_cmp(ext->object, known_ext) == 0) {
+          // |sk_ASN1_OBJECT_value| returns a direct pointer.
+          ASN1_OBJECT *dup_obj = OBJ_dup(known_ext);
+          if (dup_obj == NULL || !sk_ASN1_OBJECT_push(found_exts, dup_obj)) {
+            ASN1_OBJECT_free(dup_obj);
+            sk_ASN1_OBJECT_pop_free(found_exts, ASN1_OBJECT_free);
+            return 0;
+          }
+          found = 1;
+          break;
+        }
+      }
+
+      if (!found) {
+        // If any critical extension isn't in our known list, return early.
+        sk_ASN1_OBJECT_pop_free(found_exts, ASN1_OBJECT_free);
+        return 0;
+      }
+    }
+    last_pos = X509_get_ext_by_critical(x, 1, last_pos);
+  }
+
+  // If we get here, all unknown critical extensions in |x| were
+  // properly handled and we pass the ones that were found to the caller.
+  if (!ctx->verify_custom_crit_oids(ctx, x, found_exts)) {
+    sk_ASN1_OBJECT_pop_free(found_exts, ASN1_OBJECT_free);
+    return 0;
+  }
+
+  sk_ASN1_OBJECT_pop_free(found_exts, ASN1_OBJECT_free);
+  return 1;
+}
+
+static int check_curve_decoded_by_name(X509 *x) {
+  EVP_PKEY *pkey = X509_get0_pubkey(x);
+  if (!pkey) {
+    return -1;
+  }
+
+  if (EVP_PKEY_id(pkey) != EVP_PKEY_EC) {
+    return 1;
+  }
+
+  EC_KEY *ec_key = EVP_PKEY_get0_EC_KEY(pkey);
+  if (ec_key == NULL) {
+    return -1;
+  }
+
+  OPENSSL_BEGIN_ALLOW_DEPRECATED
+  int is_explicit = EC_KEY_decoded_from_explicit_params(ec_key);
+  OPENSSL_END_ALLOW_DEPRECATED
+
+  return !is_explicit;
+}
+
 // Check a certificate chains extensions for consistency with the supplied
 // purpose
 
@@ -568,16 +627,51 @@ static int check_chain_extensions(X509_STORE_CTX *ctx) {
   int ok = 0, plen = 0;
   int purpose = ctx->param->purpose;
 
-  // Check all untrusted certificates
-  for (int i = 0; i < ctx->last_untrusted; i++) {
+  int num = (int)sk_X509_num(ctx->chain);
+
+  for (int i = 0; i < num; i++) {
     X509 *x = sk_X509_value(ctx->chain, i);
-    if (!(ctx->param->flags & X509_V_FLAG_IGNORE_CRITICAL) &&
-        (x->ex_flags & EXFLAG_CRITICAL)) {
+    if (  // OpenSSL's historic check for unknown critical extensions.
+          // |EXFLAG_CRITICAL| indicates an unsupported critical extension was
+          // found in |x| during the initial parsing of the certificate.
+        (!(ctx->param->flags & X509_V_FLAG_IGNORE_CRITICAL) &&
+         (x->ex_flags & EXFLAG_CRITICAL)) &&
+        // AWS-LC specific logic for enabling custom unknown critical
+        // extensions.
+        !check_custom_critical_extensions(ctx, x)) {
       ctx->error = X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION;
       ctx->error_depth = i;
       ctx->current_cert = x;
       ok = call_verify_cb(0, ctx);
       if (!ok) {
+        goto end;
+      }
+    }
+
+    // The |num > 1| condition intentionally skips this check for single-certificate chains
+    // (e.g., a self-signed leaf or a partial chain with only the target certificate). This
+    // maintains consistency with OpenSSL 1.1.1 behavior.
+    if (num > 1 && (ctx->param->awslc_flags&AWSLC_V_ENABLE_EC_KEY_EXPLICIT_PARAMS) == 0) {
+      // In OpenSSL 1.1.1 this check was done if |X509_V_FLAG_X509_STRICT| was enabled.
+      // We did not perform this check explicitly before, but the behavior was baked into
+      // SPKI with explicit parameters not being parsed for elliptic curve key types.
+      //
+      // A conforming public CA should not issue certificate with explicitly encoded parameters for
+      // EC keys, but for privately operated CA's this could be doing so still. To be backwards
+      // compatible with OpenSSL 1.1.1 we have added support for parsing SPKI with explicit parameters,
+      // so we have added a new option for enabling this during chain validation.
+      int ret = check_curve_decoded_by_name(x);
+      if (ret < 0) {
+        ctx->error = X509_V_ERR_UNSPECIFIED;
+        ctx->error_depth = i;
+        ctx->current_cert = x;
+        ok = 0;
+        goto end;
+      } else if (ret == 0) {
+        ctx->error = X509_V_ERR_EC_KEY_EXPLICIT_PARAMS;
+        ctx->error_depth = i;
+        ctx->current_cert = x;
+        ok = 0;
         goto end;
       }
     }
@@ -604,7 +698,7 @@ static int check_chain_extensions(X509_STORE_CTX *ctx) {
     }
     // Check pathlen if not self issued
     if (i > 1 && !(x->ex_flags & EXFLAG_SI) && x->ex_pathlen != -1 &&
-        plen > x->ex_pathlen + 1) {
+        plen - 1 > x->ex_pathlen) {
       ctx->error = X509_V_ERR_PATH_LENGTH_EXCEEDED;
       ctx->error_depth = i;
       ctx->current_cert = x;
@@ -623,35 +717,27 @@ end:
   return ok;
 }
 
-static int reject_dns_name_in_common_name(X509 *x509) {
-  const X509_NAME *name = X509_get_subject_name(x509);
-  int i = -1;
-  for (;;) {
-    i = X509_NAME_get_index_by_NID(name, NID_commonName, i);
-    if (i == -1) {
-      return X509_V_OK;
-    }
+static int has_san_id(X509 *x, int type_id) {
+  int ret = 0;
 
-    const X509_NAME_ENTRY *entry = X509_NAME_get_entry(name, i);
-    const ASN1_STRING *common_name = X509_NAME_ENTRY_get_data(entry);
-    unsigned char *idval;
-    int idlen = ASN1_STRING_to_UTF8(&idval, common_name);
-    if (idlen < 0) {
-      return X509_V_ERR_OUT_OF_MEM;
-    }
-    // Only process attributes that look like host names. Note it is
-    // important that this check be mirrored in |X509_check_host|.
-    int looks_like_dns = x509v3_looks_like_dns_name(idval, (size_t)idlen);
-    OPENSSL_free(idval);
-    if (looks_like_dns) {
-      return X509_V_ERR_NAME_CONSTRAINTS_WITHOUT_SANS;
+  GENERAL_NAMES *gs = X509_get_ext_d2i(x, NID_subject_alt_name, NULL, NULL);
+  if (gs == NULL) {
+    return 0;
+  }
+
+  for (size_t i = 0; i < sk_GENERAL_NAME_num(gs); i++) {
+    GENERAL_NAME *g = sk_GENERAL_NAME_value(gs, i);
+    if (g->type == type_id) {
+      ret = 1;
+      break;
     }
   }
+  GENERAL_NAMES_free(gs);
+  return ret;
 }
 
 static int check_name_constraints(X509_STORE_CTX *ctx) {
   int i, j, rv;
-  int has_name_constraints = 0;
   // Check name constraints for all certificates
   for (i = (int)sk_X509_num(ctx->chain) - 1; i >= 0; i--) {
     X509 *x = sk_X509_value(ctx->chain, i);
@@ -666,8 +752,14 @@ static int check_name_constraints(X509_STORE_CTX *ctx) {
     for (j = (int)sk_X509_num(ctx->chain) - 1; j > i; j--) {
       NAME_CONSTRAINTS *nc = sk_X509_value(ctx->chain, j)->nc;
       if (nc) {
-        has_name_constraints = 1;
         rv = NAME_CONSTRAINTS_check(x, nc);
+        if (rv == X509_V_OK &&
+            (ctx->param->hostflags & X509_CHECK_FLAG_NEVER_CHECK_SUBJECT) ==
+                0 &&
+            ((ctx->param->hostflags & X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT) !=
+                0 ||!has_san_id(x, GEN_DNS) )) {
+          rv = NAME_CONSTRAINTS_check_CN(x, nc);
+        }
         switch (rv) {
           case X509_V_OK:
             continue;
@@ -684,36 +776,6 @@ static int check_name_constraints(X509_STORE_CTX *ctx) {
             break;
         }
       }
-    }
-  }
-
-  // Name constraints do not match against the common name, but
-  // |X509_check_host| still implements the legacy behavior where, on
-  // certificates lacking a SAN list, DNS-like names in the common name are
-  // checked instead.
-  //
-  // While we could apply the name constraints to the common name, name
-  // constraints are rare enough that can hold such certificates to a higher
-  // standard. Note this does not make "DNS-like" heuristic failures any
-  // worse. A decorative common-name misidentified as a DNS name would fail
-  // the name constraint anyway.
-  X509 *leaf = sk_X509_value(ctx->chain, 0);
-  if (has_name_constraints && leaf->altname == NULL) {
-    rv = reject_dns_name_in_common_name(leaf);
-    switch (rv) {
-      case X509_V_OK:
-        break;
-      case X509_V_ERR_OUT_OF_MEM:
-        ctx->error = rv;
-        return 0;
-      default:
-        ctx->error = rv;
-        ctx->error_depth = i;
-        ctx->current_cert = leaf;
-        if (!call_verify_cb(0, ctx)) {
-          return 0;
-        }
-        break;
     }
   }
 
@@ -1018,11 +1080,13 @@ static int get_crl_score(X509_STORE_CTX *ctx, X509 **pissuer, X509_CRL *crl,
     return 0;
   }
 
-  // Check cert for matching CRL distribution points
-  if (crl_crldp_check(x, crl, crl_score)) {
+  int idp_match = 0;
+  if (crl_crldp_check(x, crl, crl_score, &idp_match)) {
     crl_score |= CRL_SCORE_SCOPE;
+    if (idp_match) {
+      crl_score |= CRL_SCORE_IDP_MATCH;
+    }
   }
-
   return crl_score;
 }
 
@@ -1127,8 +1191,9 @@ static int idp_check_dp(DIST_POINT_NAME *a, DIST_POINT_NAME *b) {
   return 0;
 }
 
-// Check CRLDP and IDP
-static int crl_crldp_check(X509 *x, X509_CRL *crl, int crl_score) {
+// Check CRLDP and IDP. Return true when the CRL is a good
+// candidate CRL from which to check revocation of the certificate.
+static int crl_crldp_check(X509 *x, X509_CRL *crl, int crl_score, int *idp_match) {
   if (crl->idp_flags & IDP_ONLYATTR) {
     return 0;
   }
@@ -1150,18 +1215,33 @@ static int crl_crldp_check(X509 *x, X509_CRL *crl, int crl_score) {
     //
     // We also do not support indirect CRLs, and a CRL issuer can only match
     // indirect CRLs (RFC 5280, section 6.3.3, step b.1).
-    // support.
-    if (dp->reasons != NULL && dp->CRLissuer != NULL &&
-        (!crl->idp || idp_check_dp(dp->distpoint, crl->idp->distpoint))) {
+    if (dp->reasons != NULL || dp->CRLissuer != NULL) {
+      continue;
+    }
+    // At this point we have already checked that the CRL issuer matches
+    // the certificate issuer (and set CRL_SCORE_ISSUER_NAME);
+
+    // RFC 5280 Section 6.3.3 step b.2
+
+    // A CRL with a specific IDP match will be preferred
+    // over a broad no-IDP/empty-IDP match.
+    if (crl->idp && crl->idp->distpoint &&
+        idp_check_dp(dp->distpoint, crl->idp->distpoint)) {
+      *idp_match = 1;
       return 1;
     }
   }
 
   // If the CRL does not specify an issuing distribution point, allow it to
   // match anything.
-  //
-  // TODO(davidben): Does this match RFC 5280? It's hard to follow because RFC
-  // 5280 starts from distribution points, while this starts from CRLs.
+  // RFC5280 section 6.3.3 check (b).(2) does not prescribe what to do if the
+  // CRL does not include an IDP. This fallback returns CRL_SCORE_SCOPE (broad
+  // match) if the CRL did not include an IDP or an IDP without a DP. Such a
+  // CRL could still be a good candidate CRL to check against although we
+  // cannot check if it matches the DP in the certificate. A CRL with a
+  // specific IDP match receives (CRL_SCORE_SCOPE | CRL_SCORE_IDP_MATCH), so it will be preferred
+  // over a broad match. Among CRLs with the same scope class, get_crl_sk()
+  // will pick the freshest one.
   return !crl->idp || !crl->idp->distpoint;
 }
 
@@ -1179,7 +1259,7 @@ static int get_crl(X509_STORE_CTX *ctx, X509_CRL **pcrl, X509 *x) {
   }
 
   // Lookup CRLs from store
-  skcrl = X509_STORE_CTX_get1_crls(ctx, nm);
+  skcrl = ctx->lookup_crls(ctx, nm);
 
   // If no CRLs found and a near match from get_crl_sk use that
   if (!skcrl && crl) {
@@ -1439,7 +1519,7 @@ static int internal_verify(X509_STORE_CTX *ctx) {
     }
 
   check_cert:
-    ok = x509_check_cert_time(ctx, xs, /*suppress_error*/0);
+    ok = x509_check_cert_time(ctx, xs, /*suppress_error*/ 0);
     if (!ok) {
       goto end;
     }
@@ -1458,6 +1538,23 @@ static int internal_verify(X509_STORE_CTX *ctx) {
       xs = sk_X509_value(ctx->chain, n);
     }
   }
+
+  // Check that the final certificate subject (leaf)
+  // has a public key we actually support. Otherwise
+  // we shouldn't consider the certificate okay. It is possible
+  // for it to be reject sooner during |check_chain_extensions| as well
+  // but disabling certain checks can result in an unuseable leaf certificate
+  // making it to this point.
+  //
+  // This covers situations like invalid curves or points.
+  EVP_PKEY *pkey = X509_get0_pubkey(xs);
+  if(pkey == NULL) {
+    ctx->error = X509_V_UNABLE_TO_GET_CERTS_PUBLIC_KEY;
+    ctx->current_cert = xs;
+    ok = 0;
+    goto end;
+  }
+
   ok = 1;
 end:
   return ok;
@@ -1574,6 +1671,10 @@ void X509_STORE_CTX_set_chain(X509_STORE_CTX *ctx, STACK_OF(X509) *sk) {
   ctx->untrusted = sk;
 }
 
+void X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) *sk) {
+  X509_STORE_CTX_set_chain(ctx, sk);
+}
+
 STACK_OF(X509) *X509_STORE_CTX_get0_untrusted(X509_STORE_CTX *ctx) {
   return ctx->untrusted;
 }
@@ -1682,6 +1783,14 @@ int X509_STORE_CTX_init(X509_STORE_CTX *ctx, X509_STORE *store, X509 *x509,
     ctx->check_crl = check_crl;
   }
 
+  if (store->lookup_crls) {
+    ctx->lookup_crls = store->lookup_crls;
+  } else {
+    ctx->lookup_crls = X509_STORE_get1_crls;
+  }
+
+  ctx->verify_custom_crit_oids = null_verify_custom_crit_oids_callback;
+
   return 1;
 
 err:
@@ -1710,6 +1819,7 @@ void X509_STORE_CTX_cleanup(X509_STORE_CTX *ctx) {
   CRYPTO_free_ex_data(&g_ex_data_class, ctx, &(ctx->ex_data));
   X509_VERIFY_PARAM_free(ctx->param);
   sk_X509_pop_free(ctx->chain, X509_free);
+  sk_ASN1_OBJECT_pop_free(ctx->custom_crit_oids, ASN1_OBJECT_free);
   OPENSSL_memset(ctx, 0, sizeof(X509_STORE_CTX));
 }
 
@@ -1757,4 +1867,33 @@ void X509_STORE_CTX_set0_param(X509_STORE_CTX *ctx, X509_VERIFY_PARAM *param) {
     X509_VERIFY_PARAM_free(ctx->param);
   }
   ctx->param = param;
+}
+
+int X509_STORE_CTX_add_custom_crit_oid(X509_STORE_CTX *ctx, ASN1_OBJECT *oid) {
+  GUARD_PTR(ctx);
+  GUARD_PTR(oid);
+
+  ASN1_OBJECT *oid_dup = OBJ_dup(oid);
+  if (oid_dup == NULL) {
+    return 0;
+  }
+  if (ctx->custom_crit_oids == NULL) {
+    ctx->custom_crit_oids = sk_ASN1_OBJECT_new_null();
+    if (ctx->custom_crit_oids == NULL) {
+      ASN1_OBJECT_free(oid_dup);
+      return 0;
+    }
+  }
+
+  if (!sk_ASN1_OBJECT_push(ctx->custom_crit_oids, oid_dup)) {
+    ASN1_OBJECT_free(oid_dup);
+    return 0;
+  }
+  return 1;
+}
+
+void X509_STORE_CTX_set_verify_crit_oids(
+    X509_STORE_CTX *ctx,
+    X509_STORE_CTX_verify_crit_oids_cb verify_custom_crit_oids) {
+  ctx->verify_custom_crit_oids = verify_custom_crit_oids;
 }

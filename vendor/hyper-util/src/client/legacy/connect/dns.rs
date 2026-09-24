@@ -2,8 +2,7 @@
 //!
 //! This module contains:
 //!
-//! - A [`GaiResolver`](GaiResolver) that is the default resolver for the
-//!   `HttpConnector`.
+//! - A [`GaiResolver`] that is the default resolver for the `HttpConnector`.
 //! - The `Name` type used as an argument to custom resolvers.
 //!
 //! # Resolvers are `Service`s
@@ -22,7 +21,6 @@
 //! });
 //! ```
 use std::error::Error;
-use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 use std::pin::Pin;
 use std::str::FromStr;
@@ -31,7 +29,6 @@ use std::{fmt, io, vec};
 
 use tokio::task::JoinHandle;
 use tower_service::Service;
-use tracing::debug_span;
 
 pub(super) use self::sealed::Resolve;
 
@@ -118,9 +115,7 @@ impl Service<Name> for GaiResolver {
     }
 
     fn call(&mut self, name: Name) -> Self::Future {
-        let span = debug_span!("resolve", host = %name.host);
         let blocking = tokio::task::spawn_blocking(move || {
-            let _enter = span.enter();
             (&*name.host, 0)
                 .to_socket_addrs()
                 .map(|i| SocketAddrs { iter: i })
@@ -147,7 +142,7 @@ impl Future for GaiFuture {
                 if join_err.is_cancelled() {
                     Err(io::Error::new(io::ErrorKind::Interrupted, join_err))
                 } else {
-                    panic!("gai background task failed: {:?}", join_err)
+                    panic!("gai background task failed: {join_err:?}")
                 }
             }
         })
@@ -255,7 +250,6 @@ impl Iterator for SocketAddrs {
 }
 
 mod sealed {
-    use std::future::Future;
     use std::task::{self, Poll};
 
     use super::{Name, SocketAddr};
@@ -295,14 +289,13 @@ pub(super) async fn resolve<R>(resolver: &mut R, name: Name) -> Result<R::Addrs,
 where
     R: Resolve,
 {
-    futures_util::future::poll_fn(|cx| resolver.poll_ready(cx)).await?;
+    std::future::poll_fn(|cx| resolver.poll_ready(cx)).await?;
     resolver.resolve(name).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
     fn test_ip_addrs_split_by_preference() {

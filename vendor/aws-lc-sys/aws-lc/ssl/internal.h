@@ -1,143 +1,16 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
- */
-/* ====================================================================
- * Copyright (c) 1998-2007 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
-/* ====================================================================
- * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
- * ECC cipher suite support in OpenSSL originally developed by
- * SUN MICROSYSTEMS, INC., and contributed to the OpenSSL project.
- */
-/* ====================================================================
- * Copyright 2005 Nokia. All rights reserved.
- *
- * The portions of the attached software ("Contribution") is developed by
- * Nokia Corporation and is licensed pursuant to the OpenSSL open source
- * license.
- *
- * The Contribution, originally written by Mika Kousa and Pasi Eronen of
- * Nokia Corporation, consists of the "PSK" (Pre-Shared Key) ciphersuites
- * support (see RFC 4279) to OpenSSL.
- *
- * No patent licenses or other rights except those expressly stated in
- * the OpenSSL open source license shall be deemed granted or received
- * expressly, by implication, estoppel, or otherwise.
- *
- * No assurances are provided by Nokia that the Contribution does not
- * infringe the patent or other intellectual property rights of any third
- * party or that the license provides you with all the necessary rights
- * to make use of the Contribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. IN
- * ADDITION TO THE DISCLAIMERS INCLUDED IN THE LICENSE, NOKIA
- * SPECIFICALLY DISCLAIMS ANY LIABILITY FOR CLAIMS BROUGHT BY YOU OR ANY
- * OTHER ENTITY BASED ON INFRINGEMENT OF INTELLECTUAL PROPERTY RIGHTS OR
- * OTHERWISE.
- */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
+// Copyright (c) 1998-2007 The OpenSSL Project.  All rights reserved.
+// Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
+// Copyright 2005 Nokia. All rights reserved.
+//
+// ECC cipher suite support in OpenSSL originally developed by
+// SUN MICROSYSTEMS, INC., and contributed to the OpenSSL project.
+//
+// The Contribution, originally written by Mika Kousa and Pasi Eronen of
+// Nokia Corporation, consists of the "PSK" (Pre-Shared Key) ciphersuites
+// support (see RFC 4279) to OpenSSL.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENSSL_HEADER_SSL_INTERNAL_H
 #define OPENSSL_HEADER_SSL_INTERNAL_H
@@ -147,6 +20,7 @@
 #include <stdlib.h>
 
 #include <algorithm>
+#include <bitset>
 #include <initializer_list>
 #include <limits>
 #include <new>
@@ -177,6 +51,22 @@ OPENSSL_MSVC_PRAGMA(warning(pop))
 #include <sys/time.h>
 #endif
 
+
+#include <atomic>
+
+typedef int SSL_stats_t;
+
+// Using ATOMIC_INT_LOCK_FREE as SSL_stats_t is an int
+#if !defined(OPENSSL_STATS_C11_ATOMIC) && defined(OPENSSL_THREADS) && ATOMIC_INT_LOCK_FREE == 2
+#define OPENSSL_STATS_C11_ATOMIC
+#endif
+
+// Define the actual storage type for statistics counters
+#if defined(OPENSSL_STATS_C11_ATOMIC)
+#define SSL_STATS_COUNTER_TYPE std::atomic<SSL_stats_t>
+#else
+#define SSL_STATS_COUNTER_TYPE SSL_stats_t
+#endif
 
 BSSL_NAMESPACE_BEGIN
 
@@ -460,6 +350,8 @@ class GrowableArray {
 // CBBFinishArray behaves like |CBB_finish| but stores the result in an Array.
 OPENSSL_EXPORT bool CBBFinishArray(CBB *cbb, Array<uint8_t> *out);
 
+OPENSSL_EXPORT UniquePtr<CRYPTO_BUFFER> x509_to_buffer(X509 *x509);
+
 // GetAllNames helps to implement |*_get_all_*_names| style functions. It
 // writes at most |max_out| string pointers to |out| and returns the number that
 // it would have liked to have written. The strings written consist of
@@ -649,7 +541,9 @@ BSSL_NAMESPACE_BEGIN
 // picks the cipher and groups cannot be expressed on the wire. However, for
 // servers, the equal-preference groups allow the client's preferences to be
 // partially respected. (This only has an effect with
-// SSL_OP_CIPHER_SERVER_PREFERENCE).
+// SSL_OP_CIPHER_SERVER_PREFERENCE). Note that the method used to compute the
+// negotiated cipher suite in TLS 1.3 does not use the equal-preference
+// data structure described below.
 //
 // The equal-preference groups are expressed by grouping SSL_CIPHERs together.
 // All elements of a group have the same priority: no ordering is expressed
@@ -720,6 +614,20 @@ const EVP_MD *ssl_get_handshake_digest(uint16_t version,
 bool ssl_create_cipher_list(UniquePtr<SSLCipherPreferenceList> *out_cipher_list,
                             const bool has_aes_hw, const char *rule_str,
                             bool strict, bool config_tls13);
+
+// update_cipher_list creates a new |SSLCipherPreferenceList| containing ciphers
+// from both |ciphers| and |tls13_ciphers| and assigns it to |dst|. The function:
+//
+// 1. Creates a copy of |ciphers|
+// 2. Removes any stale TLS 1.3 ciphersuites from the copy
+// 3. Adds any configured TLS 1.3 ciphersuites from |tls13_ciphers| to the
+// front of the list.
+// 4. Combines |in_group_flags| from both input lists into |dst->in_group_flags|
+//
+// Returns one on success, zero on error.
+int update_cipher_list(UniquePtr<SSLCipherPreferenceList> &dst,
+                       UniquePtr<SSLCipherPreferenceList> &ciphers,
+                       UniquePtr<SSLCipherPreferenceList> &tls13_ciphers);
 
 // ssl_get_certificate_slot_index returns the |SSL_PKEY_*| certificate slot
 // index corresponding to the private key type of |pkey|. It returns -1 if not
@@ -994,9 +902,9 @@ class SSLAEADContext {
 // DTLS1_BITMAP maintains a sliding window of 64 sequence numbers to detect
 // replayed packets. It should be initialized by zeroing every field.
 struct DTLS1_BITMAP {
-  // map is a bit mask of the last 64 sequence numbers. Bit
-  // |1<<i| corresponds to |max_seq_num - i|.
-  uint64_t map = 0;
+  // map is a bitset of sequence numbers that have been seen. Bit i corresponds
+  // to |max_seq_num - i|.
+  std::bitset<256> map;
   // max_seq_num is the largest sequence number seen so far as a 64-bit
   // integer.
   uint64_t max_seq_num = 0;
@@ -1272,8 +1180,7 @@ OPENSSL_EXPORT Span<const HybridGroup> HybridGroups();
 
 // PQGroups returns all supported post-quantum groups. A post-quantum
 // group may be a hybrid group containing at least one PQ
-// component (e.g. SSL_GROUP_SECP256R1_KYBER768_DRAFT00) or a standalone PQ group
-// (e.g. KYBER768_R3).
+// component or a standalone PQ group.
 Span<const uint16_t> PQGroups();
 
 // ssl_nid_to_group_id looks up the group corresponding to |nid|. On success, it
@@ -1290,6 +1197,10 @@ bool ssl_group_id_to_nid(uint16_t *out_nid, int group_id);
 // length |len|. On success, it sets |*out_group_id| to the group ID and returns
 // true. Otherwise, it returns false.
 bool ssl_name_to_group_id(uint16_t *out_group_id, const char *name, size_t len);
+
+// ssl_group_id_to_nid returns the NID corresponding to |group_id| or
+// |NID_undef| if unknown.
+int ssl_group_id_to_nid(uint16_t group_id);
 
 
 // Handshake messages.
@@ -1365,9 +1276,16 @@ void ssl_do_msg_callback(const SSL *ssl, int is_write, int content_type,
 
 // Transport buffers.
 
+enum SSL_BUFFER_SERDE_VERSION {
+  SSL_BUFFER_SERDE_VERSION_ONE = 1,
+  SSL_BUFFER_SERDE_VERSION_TWO = 2
+};
+
+const unsigned kSSLBufferMaxSerDeVersion = SSL_BUFFER_SERDE_VERSION_TWO;
+
 #define SSLBUFFER_READ_AHEAD_MIN_CAPACITY 512
-#define SSLBUFFER_MAX_CAPACITY UINT16_MAX
-class SSLBuffer {
+#define SSLBUFFER_MAX_CAPACITY INT_MAX
+class OPENSSL_EXPORT SSLBuffer {
  public:
   SSLBuffer() {}
   ~SSLBuffer() { Clear(); }
@@ -1411,28 +1329,48 @@ class SSLBuffer {
   void DiscardConsumed();
 
   // DoSerialization writes all fields into |cbb|.
-  bool DoSerialization(CBB *cbb);
+  bool DoSerialization(CBB &cbb);
 
   // DoDeserialization recovers the states encoded via |DoSerialization|.
-  bool DoDeserialization(CBS *in);
+  bool DoDeserialization(CBS &in);
+
+  bool SerializeBufferView(CBB &cbb, Span<uint8_t> &view);
+  bool DeserializeBufferView(CBS &cbb, Span<uint8_t> &view);
 
  private:
   // buf_ is the memory allocated for this buffer.
   uint8_t *buf_ = nullptr;
-  // offset_ is the offset into |buf_| which the buffer contents start at.
-  uint16_t offset_ = 0;
-  // size_ is the size of the buffer contents from |buf_| + |offset_|.
-  uint16_t size_ = 0;
-  // cap_ is how much memory beyond |buf_| + |offset_| is available.
-  uint16_t cap_ = 0;
-  // inline_buf_ is a static buffer for short reads.
-  uint8_t inline_buf_[SSL3_RT_HEADER_LENGTH];
   // buf_allocated_ is true if |buf_| points to allocated data and must be freed
   // or false if it points into |inline_buf_|.
   bool buf_allocated_ = false;
+  // The total capacity requested for this buffer by |EnsureCap|.
+  size_t buf_cap_ = 0;
   // buf_size_ is how much memory allocated for |buf_|. This is needed by
-  // |DoSerialization|.
+  // |DoSerializationV1|. This is the total size of the buffer with the requested capacity + padding.
   size_t buf_size_ = 0;
+  // header length used to calculate initial offset
+  size_t header_len_ = 0;
+  // offset_ is the offset into |buf_| which the buffer contents start at, and is moved as contents are consumed
+  int offset_ = 0;
+  // size_ is the size of the buffer contents from |buf_| + |offset_|.
+  int size_ = 0;
+  // cap_ is how much memory beyond |buf_| + |offset_| is available.
+  int cap_ = 0;
+  // inline_buf_ is a static buffer for short reads.
+  uint8_t inline_buf_[SSL3_RT_HEADER_LENGTH];
+
+  // The V1 version has some intricacies were solved in later serialization versions.
+  // This is mainly to capture if a V1 version was restored and whether it needs to be
+  // re-serialized as that version.
+  uint32_t max_serialization_version_ = SSL_BUFFER_SERDE_VERSION_TWO;
+
+  bool DoSerializationV1(CBB &cbb);
+  bool DoSerializationV2(CBB &cbb);
+
+  bool DoDeserializationV1(CBS &in);
+  bool DoDeserializationV2(CBS &in);
+
+  bool ValidateBuffersState();
 };
 
 // ssl_read_buffer_extend_to extends the read buffer to the desired length. For
@@ -1904,8 +1842,8 @@ struct SSL_HANDSHAKE_HINTS {
 };
 
 struct SSL_HANDSHAKE {
-  explicit SSL_HANDSHAKE(SSL *ssl);
-  ~SSL_HANDSHAKE();
+  OPENSSL_EXPORT explicit SSL_HANDSHAKE(SSL *ssl);
+  OPENSSL_EXPORT ~SSL_HANDSHAKE();
   static constexpr bool kAllowUniquePtr = true;
 
   // ssl is a non-owning pointer to the parent |SSL| object.
@@ -2101,11 +2039,6 @@ struct SSL_HANDSHAKE {
   // CertificateRequest message.
   UniquePtr<STACK_OF(CRYPTO_BUFFER)> ca_names;
 
-  // cached_x509_ca_names contains a cache of parsed versions of the elements of
-  // |ca_names|. This pointer is left non-owning so only
-  // |ssl_crypto_x509_method| needs to link against crypto/x509.
-  STACK_OF(X509_NAME) *cached_x509_ca_names = nullptr;
-
   // certificate_types, on the client, contains the set of certificate types
   // received in a CertificateRequest message.
   Array<uint8_t> certificate_types;
@@ -2270,7 +2203,7 @@ struct SSL_HANDSHAKE {
 // so many tickets.
 constexpr size_t kMaxTickets = 16;
 
-UniquePtr<SSL_HANDSHAKE> ssl_handshake_new(SSL *ssl);
+OPENSSL_EXPORT UniquePtr<SSL_HANDSHAKE> ssl_handshake_new(SSL *ssl);
 
 // ssl_check_message_type checks if |msg| has type |type|. If so it returns
 // one. Otherwise, it sends an alert and returns zero.
@@ -2553,8 +2486,9 @@ bool tls12_add_verify_sigalgs(const SSL_HANDSHAKE *hs, CBB *out);
 // tls12_check_peer_sigalg checks if |sigalg| is acceptable for the peer
 // signature. It returns true on success and false on error, setting
 // |*out_alert| to an alert to send.
-bool tls12_check_peer_sigalg(const SSL_HANDSHAKE *hs, uint8_t *out_alert,
-                             uint16_t sigalg);
+OPENSSL_EXPORT bool tls12_check_peer_sigalg(const SSL_HANDSHAKE *hs,
+                                            uint8_t *out_alert,
+                                            uint16_t sigalg);
 
 
 // Underdocumented functions.
@@ -2571,7 +2505,8 @@ bool tls12_check_peer_sigalg(const SSL_HANDSHAKE *hs, uint8_t *out_alert,
 #define SSL_PKEY_RSA 0
 #define SSL_PKEY_ECC 1
 #define SSL_PKEY_ED25519 2
-#define SSL_PKEY_SIZE 3
+#define SSL_PKEY_PQDSA 3
+#define SSL_PKEY_SIZE 4
 
 struct CERT_PKEY {
   UniquePtr<EVP_PKEY> privatekey;
@@ -2602,6 +2537,19 @@ struct CERT {
 
   explicit CERT(const SSL_X509_METHOD *x509_method);
   ~CERT();
+
+  // SetKeyMethod sets |key_method| for private key callback operations and
+  // clears any software private key in slot |slot_idx| to maintain mutual
+  // exclusivity between |key_method| and per-slot |privatekey|. It returns
+  // true on success. If |slot_idx| is out of range and |method| is non-NULL,
+  // it returns false because the mutual exclusivity invariant cannot be
+  // enforced.
+  bool SetKeyMethod(const SSL_PRIVATE_KEY_METHOD *method, int slot_idx);
+
+  // SetSlotPrivateKey sets the software private key for |slot_idx| and clears
+  // |key_method| to maintain mutual exclusivity between per-slot |privatekey|
+  // and |key_method|. It returns false if |slot_idx| is out of range.
+  bool SetSlotPrivateKey(int slot_idx, EVP_PKEY *pkey);
 
   // cert_privatekey_idx ALWAYS points to an element of the |cert_pkeys|
   // array. OpenSSL implements this as a pointer, but an index is more
@@ -2789,7 +2737,8 @@ struct SSL_X509_METHOD {
   bool (*session_verify_cert_chain)(SSL_SESSION *session, SSL_HANDSHAKE *ssl,
                                     uint8_t *out_alert);
 
-  // hs_flush_cached_ca_names drops any cached |X509_NAME|s from |hs|.
+  // hs_flush_cached_ca_names drops any cached peer CA |X509_NAME|s from
+  // |hs->ssl->s3|. Called when |hs->ca_names| is reparsed.
   void (*hs_flush_cached_ca_names)(SSL_HANDSHAKE *hs);
   // ssl_new does any necessary initialisation of |hs|. It returns true on
   // success or false on error.
@@ -3039,6 +2988,12 @@ struct SSL3_STATE {
   // one.
   UniquePtr<SSL_HANDSHAKE> hs;
 
+  // cached_x509_peer_ca_names, on the client, contains the list of CAs
+  // received in a CertificateRequest message, as X509_NAMEs. This is eagerly
+  // populated from |hs->ca_names| before the handshake object is destroyed, so
+  // that |SSL_get_client_CA_list| can return it after the handshake.
+  STACK_OF(X509_NAME) *cached_x509_peer_ca_names = nullptr;
+
   // peer_key is the peer's ECDH key for both TLS 1.2/1.3. This is only used
   // for observing with |SSL_get_peer_tmp_key| and is not serialized as part of
   // the SSL Transfer feature.
@@ -3243,8 +3198,15 @@ struct SSL_CONFIG {
 
   X509_VERIFY_PARAM *param = nullptr;
 
-  // crypto
+  // cipher_list holds all available cipher suites for tls 1.3,
+  // and 1.2 and below. Any configured ciphersuites here take precedence
+  // over the parent |SSL_CTX| object.
   UniquePtr<SSLCipherPreferenceList> cipher_list;
+
+  // tls13_cipher_list holds the default or configured tls1.3 and above
+  // cipher suites. Any configured ciphersuites here take precedence
+  // over the parent |SSL_CTX| object.
+  UniquePtr<SSLCipherPreferenceList> tls13_cipher_list;
 
   // This is used to hold the local certificate used (i.e. the server
   // certificate for a server or the client certificate for a client).
@@ -3404,6 +3366,8 @@ bool ssl_is_key_type_supported(int key_type);
 bool ssl_compare_public_and_private_key(const EVP_PKEY *pubkey,
                                         const EVP_PKEY *privkey);
 bool ssl_cert_check_private_key(const CERT *cert, const EVP_PKEY *privkey);
+
+CRYPTO_BUFFER *buffer_up_ref(const CRYPTO_BUFFER *buffer);
 
 // ssl_cert_check_cert_private_keys_usage returns true if |cert_private_keys|
 // in |cert| has a valid index and a sufficient amount of slots.
@@ -3581,6 +3545,9 @@ bool tls1_change_cipher_state(SSL_HANDSHAKE *hs,
 int tls1_generate_master_secret(SSL_HANDSHAKE *hs, uint8_t *out,
                                 Span<const uint8_t> premaster);
 
+// tls1_get_default_grouplist returns the default group list
+OPENSSL_EXPORT Span<const uint16_t> tls1_get_default_grouplist(void);
+
 // tls1_get_grouplist returns the locally-configured group preference list.
 Span<const uint16_t> tls1_get_grouplist(const SSL_HANDSHAKE *ssl);
 
@@ -3696,9 +3663,16 @@ void ssl_set_read_error(SSL *ssl);
 
 // ssl_update_counter updates the stat counters in |SSL_CTX|. lock should be
 // set to false when the mutex in |SSL_CTX| has already been locked.
-void ssl_update_counter(SSL_CTX *ctx, int &counter, bool lock);
+void ssl_update_counter(SSL_CTX *ctx, SSL_STATS_COUNTER_TYPE &counter, bool lock);
 
 BSSL_NAMESPACE_END
+
+// ssl_x509_persist_peer_ca_names eagerly converts the peer CA names from
+// |hs->ca_names| to X509_NAMEs and stores them in
+// |ssl->s3->cached_x509_peer_ca_names|, so they remain available via
+// |SSL_get_client_CA_list| after the handshake object is destroyed. It returns
+// true on success and false on allocation failure.
+bool ssl_x509_persist_peer_ca_names(SSL *ssl);
 
 
 // Opaque C types.
@@ -3719,6 +3693,18 @@ struct ssl_method_st {
   // compatibility, or might be a no-op, depending on the application.
   const bssl::SSL_X509_METHOD *x509_method;
 };
+
+// TLS13_DEFAULT_CIPHER_LIST_AES_HW is the default TLS 1.3 cipher suite
+// configuration when AES hardware acceleration is enabled.
+#define TLS13_DEFAULT_CIPHER_LIST_AES_HW "TLS_AES_128_GCM_SHA256:" \
+                                         "TLS_AES_256_GCM_SHA384:" \
+                                         "TLS_CHACHA20_POLY1305_SHA256"
+
+// TLS13_DEFAULT_CIPHER_LIST_NO_AES_HW is the default TLS 1.3 cipher suite
+// configuration when no AES hardware acceleration is enabled.
+#define TLS13_DEFAULT_CIPHER_LIST_NO_AES_HW "TLS_CHACHA20_POLY1305_SHA256:" \
+                                            "TLS_AES_128_GCM_SHA256:" \
+                                            "TLS_AES_256_GCM_SHA384"
 
 #define MIN_SAFE_FRAGMENT_SIZE 512
 struct ssl_ctx_st : public bssl::RefCounted<ssl_ctx_st> {
@@ -3753,12 +3739,12 @@ struct ssl_ctx_st : public bssl::RefCounted<ssl_ctx_st> {
   // quic_method is the method table corresponding to the QUIC hooks.
   const SSL_QUIC_METHOD *quic_method = nullptr;
 
-  // Currently, cipher_list holds the tls1.2 and below ciphersuites.
-  // TODO: move |tls13_cipher_list| to |cipher_list| during cipher
-  // configuration.
+  // cipher_list holds all available cipher suites for tls 1.3,
+  // and 1.2 and below
   bssl::UniquePtr<bssl::SSLCipherPreferenceList> cipher_list;
 
-  // tls13_cipher_list holds the tls1.3 and above ciphersuites.
+  // tls13_cipher_list holds the default or configured tls1.3 and above
+  // cipher suites.
   bssl::UniquePtr<bssl::SSLCipherPreferenceList> tls13_cipher_list;
 
   X509_STORE *cert_store = nullptr;
@@ -3801,16 +3787,16 @@ struct ssl_ctx_st : public bssl::RefCounted<ssl_ctx_st> {
                                  int *copy) = nullptr;
 
   struct {
-    int sess_connect = 0;              // SSL new conn - started
-    int sess_connect_renegotiate = 0;  // SSL reneg - requested
-    int sess_connect_good = 0;         // SSL new conne/reneg - finished
-    int sess_accept = 0;               // SSL new accept - started
-    int sess_accept_good = 0;          // SSL accept/reneg - finished
-    int sess_miss = 0;                 // session lookup misses
-    int sess_timeout = 0;              // reuse attempt on timeouted session
-    int sess_cache_full = 0;           // session removed due to full cache
-    int sess_hit = 0;                  // session reuse actually done
-    int sess_cb_hit = 0;               // session-id that was not
+    SSL_STATS_COUNTER_TYPE sess_connect{};              // SSL new conn - started
+    SSL_STATS_COUNTER_TYPE sess_connect_renegotiate{};  // SSL reneg - requested
+    SSL_STATS_COUNTER_TYPE sess_connect_good{};         // SSL new conne/reneg - finished
+    SSL_STATS_COUNTER_TYPE sess_accept{};               // SSL new accept - started
+    SSL_STATS_COUNTER_TYPE sess_accept_good{};          // SSL accept/reneg - finished
+    SSL_STATS_COUNTER_TYPE sess_miss{};                 // session lookup misses
+    SSL_STATS_COUNTER_TYPE sess_timeout{};              // reuse attempt on timeouted session
+    SSL_STATS_COUNTER_TYPE sess_cache_full{};           // session removed due to full cache
+    SSL_STATS_COUNTER_TYPE sess_hit{};                  // session reuse actually done
+    SSL_STATS_COUNTER_TYPE sess_cb_hit{};               // session-id that was not
                                        // in the cache was
                                        // passed back via the callback. This
                                        // indicates that the application is
@@ -3871,6 +3857,9 @@ struct ssl_ctx_st : public bssl::RefCounted<ssl_ctx_st> {
                        void *arg) = nullptr;
   void *msg_callback_arg = nullptr;
 
+  SSL_security_callback security_callback = nullptr;
+  void *security_callback_ex_data = nullptr;
+
   int verify_mode = SSL_VERIFY_NONE;
   int (*default_verify_callback)(int ok, X509_STORE_CTX *ctx) =
       nullptr;  // called 'verify_callback' in the SSL
@@ -3896,6 +3885,10 @@ struct ssl_ctx_st : public bssl::RefCounted<ssl_ctx_st> {
   // Maximum amount of data to send in one fragment. actual record size can be
   // more than this due to padding and MAC overheads.
   uint16_t max_send_fragment = SSL3_RT_MAX_PLAIN_LENGTH;
+
+  /* ClientHello callback.  Mostly for extensions, but not entirely. */
+  SSL_client_hello_cb_fn client_hello_cb = NULL;
+  void *client_hello_cb_arg = NULL;
 
   // TLS extensions servername callback
   int (*servername_callback)(SSL *, int *, void *) = nullptr;
@@ -4121,6 +4114,9 @@ struct ssl_st {
                        void *arg) = nullptr;
   void *msg_callback_arg = nullptr;
 
+  SSL_security_callback security_callback = nullptr;
+  void *security_callback_ex_data = nullptr;
+
   // session info
 
   // initial_timeout_duration_ms is the default DTLS timeout duration in
@@ -4160,6 +4156,10 @@ struct ssl_st {
   // extra application data
   CRYPTO_EX_DATA ex_data;
 
+  // verify_result is the result of certificate verification in the case of
+  // non-fatal certificate errors.
+  long verify_result = X509_V_ERR_INVALID_CALL;
+
   uint32_t options = 0;  // protocol behaviour
   uint32_t mode = 0;     // API behaviour
   uint32_t max_cert_list = 0;
@@ -4187,6 +4187,10 @@ struct ssl_st {
   // as will fit in the SSLBuffer from the BIO, or just enough to read the record
   // header and then the length of the body
   bool enable_read_ahead : 1;
+
+  // is_suspended_state indicates that the |SSL| object has been serialized and
+  // operations should not be performed on the connection.
+  bool is_suspended_state : 1;
 };
 
 struct ssl_session_st : public bssl::RefCounted<ssl_session_st> {

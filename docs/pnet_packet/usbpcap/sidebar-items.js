@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["MutableUsbPcapPacket","UsbPcap","UsbPcapFunction","UsbPcapIterable","UsbPcapPacket","UsbPcapStatus"]};

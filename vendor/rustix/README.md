@@ -33,7 +33,7 @@ more portable APIs built on this functionality, see the [`cap-std`], [`memfd`],
 
  * linux_raw, which uses raw Linux system calls and vDSO calls, and is
    supported on Linux on x86-64, x86, aarch64, riscv64gc, powerpc64le,
-   arm (v5 onwards), mipsel, and mips64el, with stable, nightly, and 1.63 Rust.
+   arm (v5 onwards), mipsel, and mips64el, with stable, nightly, and 1.65 Rust.
     - By being implemented entirely in Rust, avoiding `libc`, `errno`, and pthread
       cancellation, and employing some specialized optimizations, most functions
       compile down to very efficient code, which can often be fully inlined into
@@ -52,8 +52,9 @@ building.
 
 ## Cargo features
 
-The modules [`rustix::io`], [`rustix::fd`], and [`rustix::ffi`] are enabled by
-default. The rest of the API is conditional with cargo feature flags:
+The modules [`rustix::io`], [`rustix::buffer`], [`rustix::fd`],
+[`rustix::ffi`], and [`rustix::ioctl`] are enabled by default. The rest of the
+API modules are conditional with cargo feature flags.
 
 | Name       | Description                                                    |
 | ---------- | -------------------------------------------------------------- |
@@ -66,7 +67,6 @@ default. The rest of the API is conditional with cargo feature flags:
 | `param`    | [`rustix::param`]—Process parameters.                          |
 | `pipe`     | [`rustix::pipe`]—Pipe operations.                              |
 | `process`  | [`rustix::process`]—Process-associated operations.             |
-| `procfs`   | [`rustix::procfs`]—Utilities for reading `/proc` on Linux.     |
 | `pty`      | [`rustix::pty`]—Pseudoterminal operations.                     |
 | `rand`     | [`rustix::rand`]—Random-related operations.                    |
 | `shm`      | [`rustix::shm`]—POSIX shared memory.                           |
@@ -77,7 +77,18 @@ default. The rest of the API is conditional with cargo feature flags:
 | `time`     | [`rustix::time`]—Time-related operations.                      |
 |            |                                                                |
 | `use-libc` | Enable the libc backend.                                       |
+|            |                                                                |
+| `linux_4_11`    | Enable optimizations that assume Linux ≥ 4.11             |
+| `linux_5_1`     | Enable optimizations that assume Linux ≥ 5.1              |
+| `linux_5_11`    | Enable optimizations that assume Linux ≥ 5.11             |
+| `linux_latest`  | Enable optimizations that assume the latest Linux release |
+|                 |                                                           |
+| `use-libc-auxv` | Use `getauxval` instead of `PR_GET_AUXV` or "/proc/self/auxv". |
+|                 |                                                           |
+| `std`      | On by default; disable to activate `#![no_std]`.               |
+| `alloc`    | On by default; enables features that depend on [`alloc`].      |
 
+[`rustix::buffer`]: https://docs.rs/rustix/*/rustix/buffer/index.html
 [`rustix::event`]: https://docs.rs/rustix/*/rustix/event/index.html
 [`rustix::fs`]: https://docs.rs/rustix/*/rustix/fs/index.html
 [`rustix::io_uring`]: https://docs.rs/rustix/*/rustix/io_uring/index.html
@@ -87,7 +98,6 @@ default. The rest of the API is conditional with cargo feature flags:
 [`rustix::param`]: https://docs.rs/rustix/*/rustix/param/index.html
 [`rustix::pipe`]: https://docs.rs/rustix/*/rustix/pipe/index.html
 [`rustix::process`]: https://docs.rs/rustix/*/rustix/process/index.html
-[`rustix::procfs`]: https://docs.rs/rustix/*/rustix/procfs/index.html
 [`rustix::pty`]: https://docs.rs/rustix/*/rustix/pty/index.html
 [`rustix::rand`]: https://docs.rs/rustix/*/rustix/rand/index.html
 [`rustix::shm`]: https://docs.rs/rustix/*/rustix/shm/index.html
@@ -99,6 +109,7 @@ default. The rest of the API is conditional with cargo feature flags:
 [`rustix::io`]: https://docs.rs/rustix/*/rustix/io/index.html
 [`rustix::fd`]: https://docs.rs/rustix/*/rustix/fd/index.html
 [`rustix::ffi`]: https://docs.rs/rustix/*/rustix/ffi/index.html
+[`rustix::ioctl`]: https://docs.rs/rustix/*/rustix/ffi/ioctl.html
 
 ## 64-bit Large File Support (LFS) and Year 2038 (y2038) support
 
@@ -125,10 +136,10 @@ supported on Redox, such as `*at` functions like `openat`, which are important
 features for `rustix`.
 
 `rustix` has its own code for making direct syscalls, similar to the
-[`syscall`], [`sc`], and [`scall`] crates, using the Rust `asm!` macro.
-`rustix` can also use Linux's vDSO mechanism to optimize Linux `clock_gettime`
-on all architectures, and all Linux system calls on x86. And `rustix`'s
-syscalls report errors using an optimized `Errno` type.
+[`sc`], and [`scall`] crates, using the Rust `asm!` macro. `rustix` can also
+use Linux's vDSO mechanism to optimize Linux `clock_gettime` on all
+architectures, and all Linux system calls on x86. And `rustix`'s syscalls
+report errors using an optimized `Errno` type.
 
 `rustix`'s `*at` functions are similar to the [`openat`] crate, but `rustix`
 provides them as free functions rather than associated functions of a `Dir`
@@ -144,12 +155,12 @@ safety types rather than `RawFd`, and the flags parameters to functions such as
 `tcsetattr` are `enum`s rather than bare integers. And, rustix calls its
 `tcgetattr` function `tcgetattr`, rather than `Termios::from_fd`.
 
-## Minimum Supported Rust Version (MSRV)
+## Minimum Supported Rust Version
 
-This crate currently works on the version of [Rust on Debian stable], which is
-currently [Rust 1.63]. This policy may change in the future, in minor version
-releases, so users using a fixed version of Rust should pin to a specific
-version of this crate.
+This crate has a Minimum Supported Rust Version (MSRV) of [Rust 1.65].
+
+The current policy is that the minimum Rust version required to use this crate
+may be increased in minor releases.
 
 ## Minimum Linux Version
 
@@ -160,11 +171,10 @@ oldest Linux version supported by:
 The specifics of this policy may change in the future, but we intend it to
 always reflect “very old” Linux versions.
 
-[MSRV]: #minimum-supported-rust-version-msrv
-[Rust 1.63]: https://blog.rust-lang.org/2022/08/11/Rust-1.63.0.html
+[MSRV]: #minimum-supported-rust-version
+[Rust 1.65]: https://blog.rust-lang.org/2022/11/03/Rust-1.65.0/
 [any current Rust target]: https://doc.rust-lang.org/nightly/rustc/platform-support.html
 [kernel.org]: https://www.kernel.org/releases.html
-[Rust on Debian stable]: https://packages.debian.org/stable/rust/rustc
 [Windows Sockets 2]: https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-start-page-2
 [`nix`]: https://crates.io/crates/nix
 [`unix`]: https://crates.io/crates/unix
@@ -173,7 +183,6 @@ always reflect “very old” Linux versions.
 [`uapi`]: https://crates.io/crates/uapi
 [`rusl`]: https://lib.rs/crates/rusl
 [`relibc`]: https://gitlab.redox-os.org/redox-os/relibc
-[`syscall`]: https://crates.io/crates/syscall
 [`sc`]: https://crates.io/crates/sc
 [`scall`]: https://crates.io/crates/scall
 [`openat`]: https://crates.io/crates/openat
@@ -194,3 +203,4 @@ always reflect “very old” Linux versions.
 [`OwnedFd`]: https://doc.rust-lang.org/stable/std/os/fd/struct.OwnedFd.html
 [`AsFd`]: https://doc.rust-lang.org/stable/std/os/fd/trait.AsFd.html
 [`NOSYS`]: https://docs.rs/rustix/*/rustix/io/struct.Errno.html#associatedconstant.NOSYS
+[`alloc`]: https://doc.rust-lang.org/alloc/alloc/index.html

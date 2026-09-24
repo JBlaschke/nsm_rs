@@ -1,9 +1,5 @@
-/*
-------------------------------------------------------------------------------------
- Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
- SPDX-License-Identifier: Apache-2.0 OR ISC
-------------------------------------------------------------------------------------
-*/
+// Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
 
 #include <openssl/bn.h>
 #include <openssl/ec.h>
@@ -19,7 +15,7 @@
 #if !defined(OPENSSL_SMALL)
 
 #if defined(EC_NISTP_USE_S2N_BIGNUM)
-#  include "../../../third_party/s2n-bignum/include/s2n-bignum_aws-lc.h"
+#  include "../../../third_party/s2n-bignum/s2n-bignum_aws-lc.h"
 #else
 #  if defined(EC_NISTP_USE_64BIT_LIMB)
 #    include "../../../third_party/fiat/p384_64.h"
@@ -83,6 +79,26 @@ static p384_limb_t p384_felem_nz(const p384_limb_t in1[P384_NLIMBS]) {
 
 #endif // EC_NISTP_USE_S2N_BIGNUM
 
+// The wrapper functions are needed for FIPS static build.
+// Otherwise, initializing ec_nistp_meth with pointers to s2n-bignum
+// functions directly generates :got: references that are also thought
+// to be local_target by the delocator.
+static inline void p384_felem_add_wrapper(ec_nistp_felem_limb *c,
+                                          const ec_nistp_felem_limb *a,
+                                          const ec_nistp_felem_limb *b) {
+  p384_felem_add(c, a, b);
+}
+
+static inline void p384_felem_sub_wrapper(ec_nistp_felem_limb *c,
+                                          const ec_nistp_felem_limb *a,
+                                          const ec_nistp_felem_limb *b) {
+  p384_felem_sub(c, a, b);
+}
+
+static inline void p384_felem_neg_wrapper(ec_nistp_felem_limb *c,
+                                          const ec_nistp_felem_limb *a) {
+  p384_felem_opp(c, a);
+}
 
 static void p384_from_generic(p384_felem out, const EC_FELEM *in) {
 #ifdef OPENSSL_BIG_ENDIAN
@@ -131,6 +147,11 @@ static void p384_from_scalar(p384_felem out, const EC_SCALAR *in) {
 //       ffffffff 00000000 00000000 fffffffc
 static void p384_inv_square(p384_felem out,
                             const p384_felem in) {
+#if defined(EC_NISTP_USE_S2N_BIGNUM)
+  ec_nistp_felem_limb in_sqr[P384_NLIMBS];
+  p384_felem_sqr(in_sqr, in);
+  bignum_montinv_p384(out, in_sqr);
+#else
   // This implements the addition chain described in
   // https://briansmith.org/ecc-inversion-addition-chains-01#p384_field_inversion
   // The side comments show the value of the exponent:
@@ -222,6 +243,7 @@ static void p384_inv_square(p384_felem out,
 
   p384_felem_sqr(ret, ret);
   p384_felem_sqr(out, ret);      // 2^384 - 2^128 - 2^96 + 2^32 - 2^2 = p - 3
+#endif
 }
 
 static void p384_point_double(p384_felem x_out,
@@ -267,11 +289,11 @@ static void p384_point_add(p384_felem x3, p384_felem y3, p384_felem z3,
 DEFINE_METHOD_FUNCTION(ec_nistp_meth, p384_methods) {
     out->felem_num_limbs = P384_NLIMBS;
     out->felem_num_bits = 384;
-    out->felem_add = bignum_add_p384;
-    out->felem_sub = bignum_sub_p384;
+    out->felem_add = p384_felem_add_wrapper;
+    out->felem_sub = p384_felem_sub_wrapper;
     out->felem_mul = bignum_montmul_p384_selector;
     out->felem_sqr = bignum_montsqr_p384_selector;
-    out->felem_neg = bignum_neg_p384;
+    out->felem_neg = p384_felem_neg_wrapper;
     out->felem_nz  = p384_felem_nz;
     out->felem_one = p384_felem_one;
     out->point_dbl = p384_point_double;
@@ -438,39 +460,6 @@ static int ec_GFp_nistp384_cmp_x_coordinate(const EC_GROUP *group,
   return 0;
 }
 
-// ----------------------------------------------------------------------------
-//                    SCALAR MULTIPLICATION OPERATIONS
-// ----------------------------------------------------------------------------
-//
-// The method for computing scalar products in functions:
-//   - |ec_GFp_nistp384_point_mul|,
-//   - |ec_GFp_nistp384_point_mul_base|,
-//   - |ec_GFp_nistp384_point_mul_public|,
-// is adapted from ECCKiila project (https://arxiv.org/abs/2007.11481).
-//
-// One difference from the processing in the ECCKiila project is the order of
-// the digit processing in |ec_GFp_nistp384_point_mul_base|, where we end the
-// processing with the least significant digit to be able to apply the
-// analysis results detailed at the bottom of this file. In
-// |ec_GFp_nistp384_point_mul_base| and |ec_GFp_nistp384_point_mul|, we
-// considered using window size 7 based on that same analysis. However, the
-// table size and performance measurements were more preferable for window
-// size 5. The potential issue with different window sizes is that for some
-// sizes, a scalar can be found such that a case of point doubling instead of
-// point addition happens in the scalar multiplication. This would make
-// the multiplication non constant-time. To the best of our knowledge this
-// timing leak is not an exploitable issue because the only scalar for which
-// the leak can happen is already known by the attacker. This is also provided
-// that this recoding and window size are only used with ECDH and ECDSA
-// protocols. Any other use would need to be analyzed to determine whether it is
-// secure and the user should be aware of this side channel of a particular
-// scalar value.
-//
-// OpenSSL has a similar analysis for P-521 implementation:
-// https://github.com/openssl/openssl/blob/e9492d1cecf459261f1f5ac0eb03e9c631600537/crypto/ec/ecp_nistp521.c#L1318
-//
-// For detailed analysis of different window sizes see the bottom of this file.
-
 // Multiplication of an arbitrary point by a scalar, r = [scalar]P.
 static void ec_GFp_nistp384_point_mul(const EC_GROUP *group, EC_JACOBIAN *r,
                                       const EC_JACOBIAN *p,
@@ -482,7 +471,11 @@ static void ec_GFp_nistp384_point_mul(const EC_GROUP *group, EC_JACOBIAN *r,
   p384_from_generic(tmp[1], &p->Y);
   p384_from_generic(tmp[2], &p->Z);
 
+#if defined(EC_NISTP_USE_S2N_BIGNUM)
+  p384_montjscalarmul_selector((uint64_t*)res, scalar->words, (uint64_t*)tmp);
+#else
   ec_nistp_scalar_mul(p384_methods(), res[0], res[1], res[2], tmp[0], tmp[1], tmp[2], scalar);
+#endif
 
   p384_to_generic(&r->X, res[0]);
   p384_to_generic(&r->Y, res[1]);

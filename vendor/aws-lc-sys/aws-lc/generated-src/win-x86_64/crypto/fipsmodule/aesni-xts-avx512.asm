@@ -9,9 +9,9 @@ default	rel
 %define _CET_ENDBR
 
 %include "openssl/boringssl_prefix_symbols_nasm.inc"
-%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
 section	.text code align=64
 
+%ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
 global	aes_hw_xts_encrypt_avx512
 
 
@@ -447,7 +447,7 @@ $L$_remaining_num_blocks_is_5_hEgxyDlCngwrfFe:
 	vmovdqu8	ZMMWORD[rdx],zmm1
 	vmovdqu	XMMWORD[64+rdx],xmm2
 	add	rdx,0x50
-	movdqa	xmm8,xmm2
+	vmovdqa	xmm8,xmm2
 	vextracti32x4	xmm0,zmm10,0x1
 	and	r8,0xf
 	je	NEAR $L$_ret_hEgxyDlCngwrfFe
@@ -3330,7 +3330,7 @@ $L$_main_loop_run_16_amivrujEyduiFoi:
 	vmovdqu8	zmm2,ZMMWORD[64+rcx]
 	vmovdqu8	zmm3,ZMMWORD[128+rcx]
 	vmovdqu8	zmm4,ZMMWORD[192+rcx]
-	vmovdqu8	zmm5,ZMMWORD[240+rcx]
+	vmovdqu8	xmm5,XMMWORD[240+rcx]
 	add	rcx,0x100
 	vpxorq	zmm1,zmm1,zmm9
 	vpxorq	zmm2,zmm2,zmm10
@@ -5313,6 +5313,9 @@ shufb_15_7:
 
 section	.text
 
+%endif
+%ifdef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+	DB	0
 %endif
 %else
 ; Work around https://bugzilla.nasm.us/show_bug.cgi?id=3392738
