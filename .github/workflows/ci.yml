@@ -28,7 +28,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         provider: [aws-lc-rs, ring]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -41,7 +41,7 @@ jobs:
     name: build and test on the minimum supported Rust
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: msrv
         run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
@@ -57,7 +57,7 @@ jobs:
     name: stress test (50 services, 50 clients)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --test stress -- --ignored
@@ -66,7 +66,7 @@ jobs:
     name: fmt, clippy and rustdoc
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -82,7 +82,7 @@ jobs:
     name: advisories, licenses, sources, unused dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # Advisories (RustSec), licenses, sources and duplicate versions, as
       # configured in deny.toml. --all-features covers both crypto providers.
@@ -105,8 +105,8 @@ jobs:
     name: docker image builds and runs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - run: docker build --tag nsm:ci .
       - run: docker run --rm nsm:ci --version
       - run: docker run --rm nsm:ci list-interfaces
@@ -118,7 +118,7 @@ jobs:
     name: line coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -131,7 +131,7 @@ jobs:
       - run: echo "enforcing a line-coverage floor of ${COVERAGE_FLOOR}%"
       - run: cargo llvm-cov --locked --lcov --output-path lcov.info --fail-under-lines "$COVERAGE_FLOOR"
       - run: cargo llvm-cov report --summary-only
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lcov
           path: lcov.info
