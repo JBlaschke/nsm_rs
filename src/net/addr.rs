@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! host:port            raw TCP (also tcp://host:port)
+//! tls://host:port      TCP with TLS
 //! http://host:port     HTTP
 //! https://host:port    HTTPS
 //! ```
@@ -20,11 +21,13 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 /// How to reach a peer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Transport {
-    /// Length-prefixed JSON messages over a TCP connection, optionally TLS.
+    /// Length-prefixed JSON messages over a plain TCP connection.
     Tcp,
+    /// [`Transport::Tcp`] over TLS.
+    Tls,
     /// JSON messages as HTTP request and response bodies.
     Http,
     /// [`Transport::Http`] over TLS.
@@ -32,10 +35,12 @@ pub enum Transport {
 }
 
 impl Transport {
-    /// URL scheme, or `None` for raw TCP.
+    /// URL scheme, or `None` for raw TCP (whose textual form is a bare
+    /// `host:port`).
     pub fn scheme(self) -> Option<&'static str> {
         match self {
             Transport::Tcp => None,
+            Transport::Tls => Some("tls"),
             Transport::Http => Some("http"),
             Transport::Https => Some("https"),
         }
@@ -48,12 +53,25 @@ impl Transport {
 
     /// True when the transport itself implies TLS.
     pub fn is_tls(self) -> bool {
-        matches!(self, Transport::Https)
+        matches!(self, Transport::Tls | Transport::Https)
+    }
+
+    /// The TLS or plain variant of the same family.
+    pub fn with_tls(self, tls: bool) -> Transport {
+        match (self.is_http(), tls) {
+            (false, false) => Transport::Tcp,
+            (false, true) => Transport::Tls,
+            (true, false) => Transport::Http,
+            (true, true) => Transport::Https,
+        }
     }
 }
 
 /// A peer address: transport, host and port.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Serialises as its textual form (`"tls://10.0.0.5:12000"`), so the same
+/// string works on the command line, in REST bodies and on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Addr {
     /// Transport used to reach the peer.
     pub transport: Transport,
@@ -147,6 +165,19 @@ impl fmt::Display for Addr {
     }
 }
 
+impl Serialize for Addr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Addr {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 impl FromStr for Addr {
     type Err = ParseAddrError;
 
@@ -166,6 +197,8 @@ impl FromStr for Addr {
             (Transport::Http, r)
         } else if let Some(r) = s.strip_prefix("tcp://") {
             (Transport::Tcp, r)
+        } else if let Some(r) = s.strip_prefix("tls://") {
+            (Transport::Tls, r)
         } else if s.contains("://") {
             return Err(err("unsupported scheme"));
         } else {
@@ -236,6 +269,13 @@ mod tests {
         assert_eq!(parse("http://broker:80").transport, Transport::Http);
         assert_eq!(parse("https://broker:443/").transport, Transport::Https);
         assert_eq!(parse("tcp://broker:1").transport, Transport::Tcp);
+        assert_eq!(parse("tls://broker:1").transport, Transport::Tls);
+        assert_eq!(parse("tls://broker:1").to_string(), "tls://broker:1");
+        assert!(Transport::Tls.is_tls() && Transport::Https.is_tls());
+        assert!(!Transport::Tcp.is_tls() && !Transport::Http.is_tls());
+        assert_eq!(Transport::Tcp.with_tls(true), Transport::Tls);
+        assert_eq!(Transport::Https.with_tls(false), Transport::Http);
+        assert_eq!(Transport::Tls.with_tls(false), Transport::Tcp);
         assert_eq!(
             parse("https://broker:443/").to_string(),
             "https://broker:443"
@@ -281,6 +321,7 @@ mod tests {
             "host:65535",
             "http://host:80",
             "https://[::1]:443",
+            "tls://host:12000",
             "[2001:db8::1]:1",
         ] {
             let a = parse(s);
@@ -323,8 +364,18 @@ mod tests {
             serde_json::to_string(&Transport::Https).unwrap(),
             "\"https\""
         );
-        let a: Addr = serde_json::from_str(r#"{"transport":"tcp","host":"h","port":1}"#).unwrap();
-        assert_eq!(a, Addr::tcp("h", 1));
+    }
+
+    #[test]
+    fn addr_serde_is_the_textual_form() {
+        let a = Addr::new(Transport::Tls, "::1", 12000);
+        assert_eq!(serde_json::to_string(&a).unwrap(), "\"tls://[::1]:12000\"");
+        let back: Addr = serde_json::from_str("\"tls://[::1]:12000\"").unwrap();
+        assert_eq!(back, a);
+        let plain: Addr = serde_json::from_str("\"h:1\"").unwrap();
+        assert_eq!(plain, Addr::tcp("h", 1));
+        assert!(serde_json::from_str::<Addr>("\"nope\"").is_err());
+        assert!(serde_json::from_str::<Addr>(r#"{"host":"h","port":1}"#).is_err());
     }
 
     #[tokio::test]

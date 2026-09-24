@@ -209,10 +209,10 @@ pub fn server_config(paths: &TlsPaths, alpn: &[&str]) -> Result<Arc<ServerConfig
         (cert, key) => {
             let mut missing = Vec::new();
             if cert.is_none() {
-                missing.push("--cert (CERT_PATH)");
+                missing.push("--tls-cert (CERT_PATH)");
             }
             if key.is_none() {
-                missing.push("--key (KEY_PATH)");
+                missing.push("--tls-key (KEY_PATH)");
             }
             return Err(Error::config(format!(
                 "a TLS server needs a certificate and a private key; missing: {}",
@@ -377,7 +377,10 @@ mod tests {
         install_default_provider();
         match server_config(&TlsPaths::default(), &["http/1.1"]) {
             Err(Error::Config(msg)) => {
-                assert!(msg.contains("--cert") && msg.contains("--key"), "{msg}");
+                assert!(
+                    msg.contains("--tls-cert") && msg.contains("--tls-key"),
+                    "{msg}"
+                );
             }
             other => panic!("expected a configuration error, got {other:?}"),
         }
@@ -389,7 +392,10 @@ mod tests {
         };
         match server_config(&cert_only, &[]) {
             Err(Error::Config(msg)) => {
-                assert!(msg.contains("--key") && !msg.contains("--cert"), "{msg}");
+                assert!(
+                    msg.contains("--tls-key") && !msg.contains("--tls-cert"),
+                    "{msg}"
+                );
             }
             other => panic!("expected a configuration error, got {other:?}"),
         }

@@ -13,9 +13,11 @@ use crate::{Error, Result};
 pub enum IpVersion {
     /// IPv4 only.
     #[value(name = "4", alias = "v4", alias = "ipv4")]
+    #[serde(rename = "4", alias = "v4", alias = "ipv4", alias = "V4")]
     V4,
     /// IPv6 only.
     #[value(name = "6", alias = "v6", alias = "ipv6")]
+    #[serde(rename = "6", alias = "v6", alias = "ipv6", alias = "V6")]
     V6,
 }
 

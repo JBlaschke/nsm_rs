@@ -11,9 +11,10 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 
-use crate::net::{Addr, IpVersion, Selector};
+use crate::config::TlsPaths;
+use crate::net::{Addr, IpVersion, Selector, Transport};
 
 /// NERSC Service Mesh: publish, claim and broker services across HPC systems.
 #[derive(Debug, Parser)]
@@ -58,10 +59,17 @@ impl IfaceOpts {
 /// TLS settings.
 #[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
 pub struct TlsOpts {
-    /// Serve TLS on this party's own listener (HTTP transport only).
-    /// Requires CERT_PATH and KEY_PATH in the environment.
+    /// Serve TLS on this party's own listener. Requires --tls-cert and --tls-key.
     #[arg(long)]
     pub tls: bool,
+
+    /// PEM certificate chain this process presents when it serves TLS.
+    #[arg(long, value_name = "PEM", env = "CERT_PATH")]
+    pub tls_cert: Option<PathBuf>,
+
+    /// PEM private key matching --tls-cert.
+    #[arg(long, value_name = "PEM", env = "KEY_PATH")]
+    pub tls_key: Option<PathBuf>,
 
     /// PEM bundle of root certificates used to verify peers.
     /// Defaults to the platform trust store.
@@ -74,14 +82,15 @@ pub struct TlsOpts {
     pub root_ca: Option<PathBuf>,
 }
 
-/// Transport a listener speaks when no peer address implies one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ListenTransport {
-    /// Raw TCP.
-    Tcp,
-    /// HTTP (TLS when `--tls` is set).
-    Http,
+impl TlsOpts {
+    /// The file locations as the library wants them.
+    pub fn paths(&self) -> TlsPaths {
+        TlsPaths {
+            cert: self.tls_cert.clone(),
+            key: self.tls_key.clone(),
+            root_ca: self.root_ca.clone(),
+        }
+    }
 }
 
 /// The operations.
@@ -114,9 +123,9 @@ pub enum Command {
         /// Port to accept registrations and relay messages on.
         #[arg(long, value_name = "PORT")]
         bind_port: u16,
-        /// Transport to serve.
+        /// Transport to serve (`tls` and `https` need --tls-cert and --tls-key).
         #[arg(long, value_enum, default_value = "tcp")]
-        transport: ListenTransport,
+        transport: Transport,
         /// Local address selection.
         #[command(flatten)]
         iface: IfaceOpts,
@@ -206,10 +215,13 @@ pub enum Command {
 
     /// Run the REST control plane that exposes the operations above over HTTP.
     Serve {
-        /// Address to bind. Loopback by default; anything else should sit behind
-        /// authentication (see the hardening branch of the cleanup plan).
+        /// Address to bind. Loopback by default; binding anything else
+        /// requires --token.
         #[arg(long, default_value = "127.0.0.1:8080", value_name = "ADDR")]
         bind: SocketAddr,
+        /// Bearer token clients must present (`Authorization: Bearer <TOKEN>`).
+        #[arg(long, env = "NSM_TOKEN", value_name = "TOKEN", hide_env_values = true)]
+        token: Option<String>,
     },
 }
 
@@ -299,11 +311,40 @@ mod tests {
     #[test]
     fn listen_defaults_to_tcp_and_serve_to_loopback() {
         match parse(&["listen", "--bind-port", "1"]).command {
-            Command::Listen { transport, .. } => assert_eq!(transport, ListenTransport::Tcp),
+            Command::Listen { transport, .. } => assert_eq!(transport, Transport::Tcp),
+            other => panic!("{other:?}"),
+        }
+        match parse(&["listen", "--bind-port", "1", "--transport", "https"]).command {
+            Command::Listen { transport, .. } => assert_eq!(transport, Transport::Https),
             other => panic!("{other:?}"),
         }
         match parse(&["serve"]).command {
-            Command::Serve { bind } => assert!(bind.ip().is_loopback()),
+            Command::Serve { bind, token } => {
+                assert!(bind.ip().is_loopback());
+                assert!(token.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn tls_opts_become_tls_paths() {
+        match parse(&[
+            "listen",
+            "--bind-port",
+            "1",
+            "--tls-cert",
+            "/c.pem",
+            "--tls-key",
+            "/k.pem",
+        ])
+        .command
+        {
+            Command::Listen { tls, .. } => {
+                let p = tls.paths();
+                assert!(p.has_server_identity());
+                assert_eq!(p.root_ca, None);
+            }
             other => panic!("{other:?}"),
         }
     }

@@ -106,9 +106,9 @@ impl Default for Limits {
 /// environment fallback); the library only ever sees this struct.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TlsPaths {
-    /// PEM certificate chain presented by a server (`--cert`, `CERT_PATH`).
+    /// PEM certificate chain presented by a server (`--tls-cert`, `CERT_PATH`).
     pub cert: Option<PathBuf>,
-    /// PEM private key matching `cert` (`--key`, `KEY_PATH`).
+    /// PEM private key matching `cert` (`--tls-key`, `KEY_PATH`).
     pub key: Option<PathBuf>,
     /// PEM bundle of root certificates used to verify peers
     /// (`--root-ca`, `ROOT_PATH`). `None` means the platform trust store.
