@@ -29,6 +29,17 @@
 //! input or exits the process.
 
 #![deny(clippy::let_underscore_future, unused_must_use)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
 #![warn(missing_docs, rustdoc::broken_intra_doc_links)]
 
 pub mod broker;
