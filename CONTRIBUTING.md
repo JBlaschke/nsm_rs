@@ -67,6 +67,11 @@ rules they follow. The short version:
 - Tests must not depend on the host: select the loopback address with
   `-i 127.` rather than an interface name, bind port 0, generate
   certificates with `rcgen`, and give every async test a deadline.
+- Tests must not depend on each other either. `cargo nextest run` executes
+  every test in its own process and is a supported way to run the suite, so
+  a test that needs the rustls crypto provider (anything that builds a
+  `reqwest::Client` directly) calls `nsm::tls::install_default_provider()`
+  itself instead of relying on another test having done so.
 
 ## Changing the protocol
 

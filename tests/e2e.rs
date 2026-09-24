@@ -399,6 +399,9 @@ async fn forged_heartbeats_are_ignored_by_parties() {
 #[tokio::test]
 async fn control_plane_enforces_its_bearer_token() {
     with_deadline(async {
+        // No Cluster here, so nothing else has installed the crypto provider
+        // that reqwest needs; under nextest every test is its own process.
+        nsm::tls::install_default_provider();
         let shutdown = tokio_util::sync::CancellationToken::new();
         let control = nsm::rest::serve(
             nsm::rest::ServeOpts {
