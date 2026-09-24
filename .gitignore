@@ -1,5 +1,5 @@
 # Build outputs (also catches Finder duplicates such as "target 2/")
-target*/
+/target*/
 
 # OS and editor noise
 **/.DS_Store
@@ -28,3 +28,20 @@ clusterrolebinding.yaml
 role.yaml
 rolebinding.yaml
 view-events-role.yaml
+
+# Vendored crates must be tracked completely: their .cargo-checksum.json
+# lists every file, test certificates and editor settings included, and an
+# offline build from a fresh clone fails when one is missing. None of the
+# rules above may apply below vendor/.
+!vendor/**/.vscode/
+!vendor/**/.idea/
+!vendor/**/*.pem
+!vendor/**/*.key
+!vendor/**/*.csr
+!vendor/**/*.crt
+!vendor/**/*.p12
+!vendor/**/*.tar
+!vendor/**/*.tar.*
+!vendor/**/*.log
+!vendor/**/.env
+!vendor/**/.env.*

@@ -93,7 +93,10 @@ Dependencies are vendored (decision D1 in [`docs/PLAN.md`](docs/PLAN.md)).
 1. Edit `Cargo.toml` or run `cargo update -p <crate>`; keep features narrow.
 2. Re-vendor: `cargo vendor` (this rewrites every `.cargo-checksum.json`, so
    expect a large diff). When only removing crates, delete the directories
-   that no longer appear in `Cargo.lock` instead.
+   that no longer appear in `Cargo.lock` instead. Then check that nothing
+   under `vendor/` is left untracked or ignored
+   (`git status --short --ignored vendor` must print nothing): a vendored
+   file that git drops breaks every offline build from a fresh clone.
 3. Run `cargo deny --all-features check`; extend the license allow-list in
    `deny.toml` only for licenses you have read, and never ignore an advisory
    without a reason and a follow-up.
