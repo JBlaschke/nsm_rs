@@ -7,7 +7,7 @@
 //!
 //! A message is a JSON object whose `"type"` field is the snake_case variant
 //! name, followed by the variant's fields, e.g.
-//! `{"type":"publish","key":42,"service_port":9000,"bind_addr":{...},"ping":false}`.
+//! `{"type":"publish","key":42,"service_port":9000,"bind_addr":"https://10.0.0.5:9001","ping":false}`.
 //! Variants without fields are just the tag: `{"type":"collect"}`. An unknown
 //! tag, a missing field, a wrong type or trailing bytes are decode errors;
 //! unknown fields are ignored so that a newer peer may add some.
@@ -16,8 +16,9 @@
 //! |---|---|---|
 //! | [`Publish`](Message::Publish) | service → broker | [`Registered`](Message::Registered) or [`Nack`](Message::Nack) |
 //! | [`Claim`](Message::Claim) | client → broker | [`Paired`](Message::Paired) or [`Nack`](Message::Nack) |
-//! | [`Ping`](Message::Ping) | party → broker (one-sided liveness) | [`HeartbeatAck`](Message::HeartbeatAck) or [`Nack`](Message::Nack) |
-//! | [`Deliver`](Message::Deliver) | `send` → client, then client → broker | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
+//! | [`Ping`](Message::Ping) | party → broker (one-sided liveness) | [`Heartbeat`](Message::Heartbeat) or [`Nack`](Message::Nack) |
+//! | [`Send`](Message::Send) | `send` → client | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
+//! | [`Deliver`](Message::Deliver) | client → broker (relay of a `Send`) | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
 //! | [`Heartbeat`](Message::Heartbeat) | broker → party (two-sided liveness) | [`HeartbeatAck`](Message::HeartbeatAck) |
 //! | [`Collect`](Message::Collect) | `collect` → party | [`Collected`](Message::Collected) |
 //!
@@ -93,30 +94,41 @@ pub enum Message {
     /// interval. The broker refreshes the party's liveness timestamp and
     /// removes parties that stay silent for the configured staleness.
     ///
-    /// Reply: [`Message::HeartbeatAck`] echoing `id`, or [`Message::Nack`]
-    /// when the id is unknown (the party should treat that as lost
-    /// registration).
-    ///
-    /// Nothing flows broker → party in this mode, so a pinging service does
-    /// not receive `inbox` text and a pinging client is not told about a new
-    /// pairing; both are only carried by [`Message::Heartbeat`].
+    /// Reply: a [`Message::Heartbeat`] carrying whatever is pending for the
+    /// party (delivered text for a service, a new pairing for a client), or
+    /// [`Message::Nack`] when the id is unknown (the party should treat that
+    /// as lost registration). The reply is the same message the broker would
+    /// have sent in two-sided mode, so both modes deliver the same things.
     Ping {
         /// The pinging party's own id.
         id: PartyId,
     },
 
+    /// Hand `text` to a client for its paired service.
+    ///
+    /// Sent by the `send` operation to a *client's* bind address; `send`
+    /// knows only that address, not the service's id. The client relays the
+    /// text to the broker as [`Message::Deliver`] with its paired service as
+    /// the target and passes the broker's answer back.
+    ///
+    /// Reply: [`Message::Delivered`], or [`Message::Nack`] when the party is
+    /// a service, or a client that is not paired.
+    Send {
+        /// The text itself, carried verbatim (no extra JSON encoding).
+        text: String,
+    },
+
     /// Carry `text` to the service `to`, to be delivered in its next
     /// heartbeat.
     ///
-    /// Two legs. First the `send` operation sends it to a *client's* bind
-    /// address; `send` knows only that address, so on this leg the client
-    /// ignores `to` and relays the text to the broker as
-    /// `Deliver { to: <its paired service>, text }`. The broker stores the
-    /// text as that service's pending `inbox` and hands it over in the next
-    /// [`Message::Heartbeat`]; `collect` on the service then returns it.
+    /// Sent by a client to the broker when relaying a [`Message::Send`]. The
+    /// broker stores the text as that service's pending `inbox` and hands it
+    /// over in the next [`Message::Heartbeat`] (or in the reply to the
+    /// service's next [`Message::Ping`]); `collect` on the service then
+    /// returns it. A later `Deliver` before the hand-over replaces the text.
     ///
-    /// Reply on both legs: [`Message::Delivered`], or [`Message::Nack`] when
-    /// the client has no paired service or the broker does not know `to`.
+    /// Reply: [`Message::Delivered`], or [`Message::Nack`] when the broker
+    /// does not know `to` or `to` is not a service.
     Deliver {
         /// Id of the service that should receive the text.
         to: PartyId,
@@ -129,14 +141,18 @@ pub enum Message {
     /// delivers whatever is pending for it.
     ///
     /// Sent by the broker to a party's bind address at the heartbeat
-    /// interval. `inbox` is text a service has been sent (see
+    /// interval, and also returned by the broker as the reply to a
+    /// [`Message::Ping`]. `inbox` is text a service has been sent (see
     /// [`Message::Deliver`]); `service` is a client's new pairing after the
     /// broker re-claimed on its behalf because its previous service went
-    /// away. Both are `None` on an ordinary beat. A party stores what it
-    /// receives so that `collect` can return it.
+    /// away. Both are `None` on an ordinary beat, and each pending item is
+    /// delivered once. A party stores what it receives so that `collect` can
+    /// return it.
     ///
-    /// Reply: [`Message::HeartbeatAck`] carrying the party's own id, which
-    /// the broker checks against the record it dialled.
+    /// Reply (when sent by the broker): [`Message::HeartbeatAck`] carrying the
+    /// party's own id, or `0` if the party has not processed its registration
+    /// reply yet; the broker logs a mismatch but treats any acknowledgement as
+    /// proof of life.
     Heartbeat {
         /// Text pending for a service, delivered once.
         inbox: Option<String>,
@@ -170,8 +186,7 @@ pub enum Message {
         service: ServiceHandle,
     },
 
-    /// Reply to [`Message::Heartbeat`] (from the party, with its own id) and
-    /// to [`Message::Ping`] (from the broker, echoing the pinger's id).
+    /// Reply to [`Message::Heartbeat`], from the party, with its own id.
     HeartbeatAck {
         /// The party the heartbeat concerns.
         id: PartyId,
@@ -230,6 +245,7 @@ impl Message {
             Message::Publish { .. } => "publish",
             Message::Claim { .. } => "claim",
             Message::Ping { .. } => "ping",
+            Message::Send { .. } => "send",
             Message::Deliver { .. } => "deliver",
             Message::Heartbeat { .. } => "heartbeat",
             Message::Collect => "collect",
@@ -268,6 +284,9 @@ pub(crate) fn all_variants() -> Vec<Message> {
             ping: true,
         },
         Message::Ping { id: PartyId(3) },
+        Message::Send {
+            text: "for the service".into(),
+        },
         Message::Deliver {
             to: PartyId(3),
             text: "hello \"world\" \u{1F600} \\ / \n".into(),
@@ -312,7 +331,7 @@ mod tests {
             kinds.len(),
             "duplicate variant in all_variants"
         );
-        assert_eq!(kinds.len(), 12, "a variant was added; extend all_variants");
+        assert_eq!(kinds.len(), 13, "a variant was added; extend all_variants");
     }
 
     #[test]
@@ -344,7 +363,7 @@ mod tests {
             serde_json::to_string(&msg).unwrap(),
             concat!(
                 r#"{"type":"publish","key":42,"service_port":9000,"#,
-                r#""bind_addr":{"transport":"https","host":"10.0.0.5","port":9001},"#,
+                r#""bind_addr":"https://10.0.0.5:9001","#,
                 r#""ping":false}"#
             )
         );
@@ -446,7 +465,7 @@ mod tests {
         assert!(decode(r#"{"type":"ping","id":"1"}"#).is_err());
         assert!(decode(r#"{"type":"ping","id":-1}"#).is_err());
         assert!(decode(r#"{"type":"deliver","to":1,"text":null}"#).is_err());
-        assert!(decode(r#"{"type":"claim","key":1,"bind_addr":"h:1","ping":false}"#).is_err());
+        assert!(decode(r#"{"type":"claim","key":1,"bind_addr":1,"ping":false}"#).is_err());
     }
 
     #[test]
