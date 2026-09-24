@@ -98,13 +98,33 @@ nsm collect 127.0.0.1:12010                                                     
 |---|---|
 | `--tls-cert PEM` (`CERT_PATH`), `--tls-key PEM` (`KEY_PATH`) | identity this process presents when it serves TLS |
 | `--tls` | serve TLS on a party's own listener (needs the two above) |
-| `--root-ca PEM` (`ROOT_PATH`) | CA bundle used to verify peers; the platform trust store when unset |
+| `--root-ca PEM` (`ROOT_PATH`) | CA bundle used to verify peers |
+| `--system-roots` | trust the platform certificate store instead of `--root-ca` (off by default) |
 
 A broker started with `--transport tls` or `https` needs a certificate and
-key. Clients verify the broker against `--root-ca`. Trust anchors never travel
-over the wire, and a connection configured for TLS never falls back to
-plaintext. Mutual TLS (authenticating parties to the broker) is not implemented
-yet; see the plan.
+key. Anything that dials a TLS peer needs `--root-ca` (or, explicitly,
+`--system-roots`); an internal mesh should name its own CA rather than accept
+every public one. Trust anchors never travel over the wire, and a connection
+configured for TLS never falls back to plaintext. Mutual TLS (authenticating
+parties to the broker) is not implemented yet; see the plan.
+
+### Tuning and admission
+
+Every interval, timeout and limit has a default in the `nsm::config` module
+and a flag to override it: `--heartbeat-interval`, `--heartbeat-timeout`,
+`--fail-threshold`, `--ping-staleness`, `--broker-watchdog`,
+`--request-timeout`, `--connect-timeout` (seconds, fractions allowed), and on
+the broker and control plane `--max-frame-bytes`, `--max-connections`,
+`--max-registrations`. With the defaults a silent party is removed after
+about 25 seconds and a party that stops hearing its broker gives up after
+30 seconds.
+
+The broker admits registrations from any address by default and caps them at
+64 per advertised host (`--max-registrations-per-host`).
+`--require-matching-host` additionally rejects a party whose advertised
+address is not the one it connected from, which stops a peer from pointing
+the broker's heartbeats at a third party; leave it off when parties sit
+behind NAT or advertise a different interface on purpose.
 
 ### REST control plane
 

@@ -9,8 +9,8 @@ Written 2026-09-24 against `main` at `edd23a33`. Companion document: [the audit]
 | `cleanup/01-repo-hygiene` | done | 5 commits; tracked files 23,449 → 11,914 |
 | `cleanup/02-foundation` | done | single `nsm` binary, lib crate, typed protocol, rustls module, 77 unit tests; legacy code runs under `src/legacy/` |
 | `cleanup/03-common-backend` | done | backend written once (transport trait; TCP, TLS, HTTP, HTTPS), registry actor with per-party monitors, party sessions, typed ops, REST control plane with jobs; legacy deleted; 129 unit + 11 end-to-end tests over all four transports |
-| `cleanup/04-hardening` | next | |
-| `cleanup/05-tests-ci` | planned | |
+| `cleanup/04-hardening` | done | platform trust store opt-in (`--system-roots`), broker admission policy (matching-host check, per-host registration cap), CLI overrides for every timing and limit, `deny(unwrap_used, expect_used, panic)` outside tests, release overflow checks |
+| `cleanup/05-tests-ci` | next | |
 | `cleanup/06-docs` | planned | |
 | `cleanup/07-deps` | planned | |
 
