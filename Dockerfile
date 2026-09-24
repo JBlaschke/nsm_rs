@@ -16,10 +16,12 @@ WORKDIR /app
 RUN apk add --no-cache musl-dev
 
 # Dependencies are fetched from crates.io with Cargo.lock enforced (--locked);
-# the in-repo vendor/ directory is not used inside the image.
+# the in-repo vendor/ directory is not used inside the image. README.md is the
+# crate documentation (src/lib.rs includes it), so it is part of the build.
 RUN --mount=type=bind,source=src,target=src \
     --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
     --mount=type=bind,source=Cargo.lock,target=Cargo.lock \
+    --mount=type=bind,source=README.md,target=README.md \
     --mount=type=cache,target=/app/target/ \
     --mount=type=cache,target=/usr/local/cargo/git/db \
     --mount=type=cache,target=/usr/local/cargo/registry/ \

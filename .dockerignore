@@ -1,5 +1,6 @@
-# Only src/, Cargo.toml and Cargo.lock are bind-mounted into the build stage;
-# keep everything heavy or secret out of the build context anyway.
+# Only src/, Cargo.toml, Cargo.lock and README.md (the crate documentation)
+# are bind-mounted into the build stage; keep everything heavy or secret out
+# of the build context anyway.
 **/.DS_Store
 **/.env
 **/.env.*
@@ -19,4 +20,3 @@ target*/
 vendor/
 docs/
 deploy/
-README.md
