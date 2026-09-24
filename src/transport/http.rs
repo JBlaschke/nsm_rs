@@ -211,6 +211,9 @@ pub(super) fn build_client(client: &Client, tls: bool) -> Result<reqwest::Client
     let mut builder = reqwest::Client::builder()
         .connect_timeout(t.connect_timeout)
         .timeout(t.request_timeout)
+        // A party that answers a heartbeat with a redirect must not turn the
+        // broker into a proxy toward a third host.
+        .redirect(reqwest::redirect::Policy::none())
         .pool_idle_timeout(Some(Duration::from_secs(30)))
         .no_proxy();
     let config = if tls {
@@ -354,10 +357,23 @@ mod tests {
             tokio::time::timeout(DEADLINE, async {
                 let (server, client, _certs) = start(transport, Echo).await;
                 let reply = client
-                    .call(&server.bound(), Message::Ping { id: PartyId(7) })
+                    .call(
+                        &server.bound(),
+                        Message::Ping {
+                            id: PartyId(7),
+                            token: crate::protocol::message::test_token(),
+                        },
+                    )
                     .await
                     .unwrap();
-                assert_eq!(reply, Message::Ping { id: PartyId(7) }, "{transport:?}");
+                assert_eq!(
+                    reply,
+                    Message::Ping {
+                        id: PartyId(7),
+                        token: crate::protocol::message::test_token()
+                    },
+                    "{transport:?}"
+                );
                 let reply = client
                     .call(&server.bound(), Message::nack("no"))
                     .await
@@ -577,7 +593,7 @@ mod tests {
     async fn foreign_replies_timeouts_and_refusals_are_mapped() {
         tokio::time::timeout(DEADLINE, async {
             let client = Client::new(TlsPaths::default(), Timing::fast(), Limits::default());
-            let ping = Message::Ping { id: PartyId(7) };
+            let ping = Message::Ping { id: PartyId(7), token: crate::protocol::message::test_token() };
 
             // Not our protocol at all: a plain-text error page.
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

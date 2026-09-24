@@ -155,7 +155,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
-    use crate::protocol::message::all_variants;
+    use crate::protocol::message::{all_variants, test_token};
     use crate::protocol::PartyId;
 
     fn frame(msg: &Message) -> BytesMut {
@@ -193,7 +193,10 @@ mod tests {
 
     #[test]
     fn owned_and_borrowed_encoders_agree() {
-        let msg = Message::Ping { id: PartyId(9) };
+        let msg = Message::Ping {
+            id: PartyId(9),
+            token: test_token(),
+        };
         let mut by_ref = BytesMut::new();
         let mut by_val = BytesMut::new();
         MessageCodec::default().encode(&msg, &mut by_ref).unwrap();
@@ -217,7 +220,10 @@ mod tests {
 
     #[test]
     fn two_frames_in_one_buffer_decode_in_order() {
-        let first = Message::Ping { id: PartyId(1) };
+        let first = Message::Ping {
+            id: PartyId(1),
+            token: test_token(),
+        };
         let second = nack_with_body_len(1024);
         let mut buf = frame(&first);
         buf.extend_from_slice(&frame(&second));
@@ -231,6 +237,8 @@ mod tests {
     #[test]
     fn frame_fed_one_byte_at_a_time() {
         let msg = Message::Deliver {
+            from: PartyId(4),
+            token: test_token(),
             to: PartyId(3),
             text: "split me".into(),
         };

@@ -16,19 +16,26 @@
 //! |---|---|---|
 //! | [`Publish`](Message::Publish) | service → broker | [`Registered`](Message::Registered) or [`Nack`](Message::Nack) |
 //! | [`Claim`](Message::Claim) | client → broker | [`Paired`](Message::Paired) or [`Nack`](Message::Nack) |
-//! | [`Ping`](Message::Ping) | party → broker (one-sided liveness) | [`Heartbeat`](Message::Heartbeat) or [`Nack`](Message::Nack) |
+//! | [`Ping`](Message::Ping) | ping-mode party → broker, with its token | [`Heartbeat`](Message::Heartbeat) or [`Nack`](Message::Nack) |
 //! | [`Send`](Message::Send) | `send` → client | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
-//! | [`Deliver`](Message::Deliver) | client → broker (relay of a `Send`) | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
+//! | [`Deliver`](Message::Deliver) | client → broker (relay of a `Send`), with its token | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
 //! | [`Heartbeat`](Message::Heartbeat) | broker → party (two-sided liveness) | [`HeartbeatAck`](Message::HeartbeatAck) |
 //! | [`Collect`](Message::Collect) | `collect` → party | [`Collected`](Message::Collected) |
 //!
 //! "Party" means a service or a client; each runs a small server on its
 //! `bind_addr` that the broker (and the `send` / `collect` operations) talk
 //! to. The broker is the only party with a fixed, well-known address.
+//!
+//! Registration returns a [`RegToken`]: a random secret that the party
+//! quotes in every [`Ping`](Message::Ping) and [`Deliver`](Message::Deliver),
+//! and that the broker quotes in every [`Heartbeat`](Message::Heartbeat) it
+//! sends. Party ids are small sequential integers and are not secrets; the
+//! token is what stops a third party from acting on another party's behalf
+//! or from spoofing its broker.
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{Key, PartyId, ServiceHandle};
+use super::types::{Key, PartyId, RegToken, ServiceHandle};
 use crate::net::Addr;
 
 /// Version of the wire protocol described in this module.
@@ -94,14 +101,21 @@ pub enum Message {
     /// interval. The broker refreshes the party's liveness timestamp and
     /// removes parties that stay silent for the configured staleness.
     ///
+    /// Only parties registered with `ping: true` may ping, and only with the
+    /// right `token`; anything else is refused without revealing whether the
+    /// id exists.
+    ///
     /// Reply: a [`Message::Heartbeat`] carrying whatever is pending for the
     /// party (delivered text for a service, a new pairing for a client), or
-    /// [`Message::Nack`] when the id is unknown (the party should treat that
-    /// as lost registration). The reply is the same message the broker would
-    /// have sent in two-sided mode, so both modes deliver the same things.
+    /// [`Message::Nack`] when the id or token is wrong (the party should treat
+    /// that as lost registration). The reply is the same message the broker
+    /// would have sent in two-sided mode, so both modes deliver the same
+    /// things.
     Ping {
         /// The pinging party's own id.
         id: PartyId,
+        /// The token the broker issued to that party at registration.
+        token: RegToken,
     },
 
     /// Hand `text` to a client for its paired service.
@@ -122,14 +136,21 @@ pub enum Message {
     /// heartbeat.
     ///
     /// Sent by a client to the broker when relaying a [`Message::Send`]. The
-    /// broker stores the text as that service's pending `inbox` and hands it
+    /// client identifies itself with `from` and its `token`, and the broker
+    /// accepts the text only when that client is currently paired with `to`;
+    /// it then stores the text as the service's pending `inbox` and hands it
     /// over in the next [`Message::Heartbeat`] (or in the reply to the
     /// service's next [`Message::Ping`]); `collect` on the service then
     /// returns it. A later `Deliver` before the hand-over replaces the text.
     ///
-    /// Reply: [`Message::Delivered`], or [`Message::Nack`] when the broker
-    /// does not know `to` or `to` is not a service.
+    /// Reply: [`Message::Delivered`], or [`Message::Nack`] when `from`/`token`
+    /// do not name a registered client, or that client is not paired with
+    /// `to`.
     Deliver {
+        /// Id of the relaying client.
+        from: PartyId,
+        /// The relaying client's registration token.
+        token: RegToken,
         /// Id of the service that should receive the text.
         to: PartyId,
         /// The text itself, carried verbatim (no extra JSON encoding).
@@ -149,11 +170,16 @@ pub enum Message {
     /// delivered once. A party stores what it receives so that `collect` can
     /// return it.
     ///
+    /// `token` is the party's own registration token; a party ignores (and
+    /// Nacks) a heartbeat that does not carry it, so nobody but the broker
+    /// can deliver text, re-pair a client or refresh its watchdog.
+    ///
     /// Reply (when sent by the broker): [`Message::HeartbeatAck`] carrying the
-    /// party's own id, or `0` if the party has not processed its registration
-    /// reply yet; the broker logs a mismatch but treats any acknowledgement as
-    /// proof of life.
+    /// party's own id; the broker logs a mismatch but treats any
+    /// acknowledgement as proof of life.
     Heartbeat {
+        /// The receiving party's registration token.
+        token: RegToken,
         /// Text pending for a service, delivered once.
         inbox: Option<String>,
         /// A client's new service after a re-pairing.
@@ -176,12 +202,17 @@ pub enum Message {
     Registered {
         /// Id assigned to the service; it quotes this in pings.
         id: PartyId,
+        /// Secret the service quotes in pings and expects in heartbeats.
+        token: RegToken,
     },
 
     /// Reply to [`Message::Claim`]: the client is registered and paired.
     Paired {
-        /// Id assigned to the client; it quotes this in pings.
+        /// Id assigned to the client; it quotes this in pings and relays.
         id: PartyId,
+        /// Secret the client quotes in pings and relays and expects in
+        /// heartbeats.
+        token: RegToken,
         /// The service the client was paired with.
         service: ServiceHandle,
     },
@@ -259,6 +290,12 @@ impl Message {
     }
 }
 
+/// A fixed token for tests across the crate.
+#[cfg(test)]
+pub(crate) fn test_token() -> RegToken {
+    RegToken::from_bytes([7; 16])
+}
+
 /// One instance of every variant, with every `Option` populated, for
 /// round-trip tests here and in the codec.
 #[cfg(test)]
@@ -267,10 +304,10 @@ pub(crate) fn all_variants() -> Vec<Message> {
 
     let handle = ServiceHandle {
         id: PartyId(3),
-        key: 42,
         host: "fe80::1".into(),
         service_port: 9000,
     };
+    let token = test_token();
     vec![
         Message::Publish {
             key: 42,
@@ -283,22 +320,32 @@ pub(crate) fn all_variants() -> Vec<Message> {
             bind_addr: Addr::tcp("10.0.0.6", 7000),
             ping: true,
         },
-        Message::Ping { id: PartyId(3) },
+        Message::Ping {
+            id: PartyId(3),
+            token,
+        },
         Message::Send {
             text: "for the service".into(),
         },
         Message::Deliver {
+            from: PartyId(4),
+            token,
             to: PartyId(3),
             text: "hello \"world\" \u{1F600} \\ / \n".into(),
         },
         Message::Heartbeat {
+            token,
             inbox: Some("pending".into()),
             service: Some(handle.clone()),
         },
         Message::Collect,
-        Message::Registered { id: PartyId(3) },
+        Message::Registered {
+            id: PartyId(3),
+            token,
+        },
         Message::Paired {
             id: PartyId(4),
+            token,
             service: handle.clone(),
         },
         Message::HeartbeatAck { id: PartyId(4) },
@@ -379,26 +426,33 @@ mod tests {
 
     #[test]
     fn ids_and_handles_json_shape() {
+        let hex = "07".repeat(16);
         assert_eq!(
-            serde_json::to_string(&Message::Registered { id: PartyId(7) }).unwrap(),
-            r#"{"type":"registered","id":7}"#
+            serde_json::to_string(&Message::Registered {
+                id: PartyId(7),
+                token: test_token(),
+            })
+            .unwrap(),
+            format!(r#"{{"type":"registered","id":7,"token":"{hex}"}}"#)
         );
-        let paired = decode(
-            r#"{"type":"paired","id":8,"service":{"id":7,"key":1,"host":"h","service_port":2}}"#,
-        )
+        let paired = decode(&format!(
+            r#"{{"type":"paired","id":8,"token":"{hex}","service":{{"id":7,"host":"h","service_port":2}}}}"#,
+        ))
         .unwrap();
         assert_eq!(
             paired,
             Message::Paired {
                 id: PartyId(8),
+                token: test_token(),
                 service: ServiceHandle {
                     id: PartyId(7),
-                    key: 1,
                     host: "h".into(),
                     service_port: 2,
                 },
             }
         );
+        // A handle on the wire never carries the rendezvous key.
+        assert!(!serde_json::to_string(&paired).unwrap().contains("key"));
     }
 
     #[test]
@@ -416,13 +470,17 @@ mod tests {
 
     #[test]
     fn missing_options_decode_as_none() {
+        let hex = "07".repeat(16);
         assert_eq!(
-            decode(r#"{"type":"heartbeat"}"#).unwrap(),
+            decode(&format!(r#"{{"type":"heartbeat","token":"{hex}"}}"#)).unwrap(),
             Message::Heartbeat {
+                token: test_token(),
                 inbox: None,
                 service: None,
             }
         );
+        // The token is not optional.
+        assert!(decode(r#"{"type":"heartbeat"}"#).is_err());
         assert_eq!(
             decode(r#"{"type":"collected","text":null}"#).unwrap(),
             Message::Collected {
@@ -434,9 +492,16 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_ignored() {
+        let json = format!(
+            r#"{{"type":"ping","id":1,"token":"{}","extra":true}}"#,
+            "07".repeat(16)
+        );
         assert_eq!(
-            decode(r#"{"type":"ping","id":1,"extra":true}"#).unwrap(),
-            Message::Ping { id: PartyId(1) }
+            decode(&json).unwrap(),
+            Message::Ping {
+                id: PartyId(1),
+                token: test_token()
+            }
         );
     }
 

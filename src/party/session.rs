@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 use super::{PartyHandler, PartyState, Role};
 use crate::config::{Limits, Timing, TlsPaths};
 use crate::net::Addr;
-use crate::protocol::{Key, Message, PartyId, ServiceHandle};
+use crate::protocol::{Key, Message, PartyId, RegToken, ServiceHandle};
 use crate::transport::{self, Client, Server};
 use crate::{Error, Result};
 
@@ -77,6 +77,7 @@ pub struct ClaimOpts {
 #[derive(Debug)]
 pub struct Session {
     id: PartyId,
+    token: RegToken,
     state: Arc<PartyState>,
     server: Server,
     opts: PartyOpts,
@@ -135,18 +136,20 @@ impl Session {
         let bound = server.bound();
         info!(%role, %bound, broker = %opts.broker, "listening; registering with the broker");
 
-        let id = match register(&client, &opts, &state, request(bound, opts.key, opts.ping)).await {
-            Ok(id) => id,
-            Err(e) => {
-                server.shutdown().await;
-                return Err(e);
-            }
-        };
+        let (id, token) =
+            match register(&client, &opts, &state, request(bound, opts.key, opts.ping)).await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    server.shutdown().await;
+                    return Err(e);
+                }
+            };
         state.touch();
         info!(%role, %id, "registered");
 
         Ok(Session {
             id,
+            token,
             state,
             server,
             opts,
@@ -157,6 +160,12 @@ impl Session {
     /// The broker-assigned id.
     pub fn id(&self) -> PartyId {
         self.id
+    }
+
+    /// The registration token the broker issued (needed to act on this
+    /// party's behalf; treat it like the rendezvous key).
+    pub fn token(&self) -> RegToken {
+        self.token
     }
 
     /// Service or client.
@@ -230,11 +239,25 @@ impl Session {
             match self
                 .state
                 .client()
-                .call(&self.opts.broker, Message::Ping { id: self.id })
+                .call(
+                    &self.opts.broker,
+                    Message::Ping {
+                        id: self.id,
+                        token: self.token,
+                    },
+                )
                 .await
             {
-                Ok(Message::Heartbeat { inbox, service }) => {
+                Ok(Message::Heartbeat {
+                    token,
+                    inbox,
+                    service,
+                }) if self.state.accepts_token(&token) => {
                     failures = 0;
+                    let service = match self.state.role() {
+                        Role::Publisher => None,
+                        Role::Claimer => service,
+                    };
                     self.state.apply_heartbeat(inbox, service);
                 }
                 Ok(Message::Nack { reason }) => {
@@ -265,7 +288,7 @@ async fn register(
     opts: &PartyOpts,
     state: &PartyState,
     request: Message,
-) -> Result<PartyId> {
+) -> Result<(PartyId, RegToken)> {
     let t = &opts.timing;
     let mut last_err: Option<Error> = None;
     for attempt in 1..=t.register_attempts.max(1) {
@@ -273,14 +296,16 @@ async fn register(
             sleep(t.register_backoff).await;
         }
         match client.call(&opts.broker, request.clone()).await {
-            Ok(Message::Registered { id }) if state.role() == Role::Publisher => {
+            Ok(Message::Registered { id, token }) if state.role() == Role::Publisher => {
+                state.set_token(token);
                 state.set_id(id);
-                return Ok(id);
+                return Ok((id, token));
             }
-            Ok(Message::Paired { id, service }) if state.role() == Role::Claimer => {
+            Ok(Message::Paired { id, token, service }) if state.role() == Role::Claimer => {
                 state.set_service(service);
+                state.set_token(token);
                 state.set_id(id);
-                return Ok(id);
+                return Ok((id, token));
             }
             Ok(Message::Nack { reason }) => return Err(Error::Rejected(reason)),
             Ok(other) => {

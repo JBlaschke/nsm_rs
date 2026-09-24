@@ -19,7 +19,7 @@ use nsm::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use nsm::net::{Addr, Transport};
 use nsm::ops::NetOpts;
 use nsm::party::{ClaimOpts, PartyOpts, PublishOpts, Session};
-use nsm::protocol::{Key, PartyId, ServiceHandle};
+use nsm::protocol::{Key, PartyId, RegToken, ServiceHandle};
 use nsm::Result;
 
 /// Every transport the suite runs over.
@@ -78,6 +78,7 @@ pub fn test_certs() -> (TempDir, TlsPaths) {
 pub struct Party {
     session: std::sync::Mutex<Option<Session>>,
     id: PartyId,
+    token: RegToken,
     bound: Addr,
     state: Arc<nsm::party::PartyState>,
 }
@@ -85,6 +86,9 @@ pub struct Party {
 impl Party {
     pub fn id(&self) -> PartyId {
         self.id
+    }
+    pub fn token(&self) -> RegToken {
+        self.token
     }
     pub fn bound(&self) -> Addr {
         self.bound.clone()
@@ -175,6 +179,15 @@ impl Cluster {
     pub fn timing(&self) -> &Timing {
         &self.net.timing
     }
+    /// A raw transport client with the cluster's settings, for hand-crafted
+    /// protocol messages.
+    pub fn raw_client(&self) -> nsm::transport::Client {
+        nsm::transport::Client::new(
+            self.net.tls.clone(),
+            self.net.timing.clone(),
+            self.net.limits.clone(),
+        )
+    }
 
     fn party_opts(&self, key: Key, ping: bool) -> PartyOpts {
         PartyOpts {
@@ -193,6 +206,7 @@ impl Cluster {
     fn wrap(session: Session) -> Party {
         Party {
             id: session.id(),
+            token: session.token(),
             bound: session.bound(),
             state: Arc::clone(session.state()),
             session: std::sync::Mutex::new(Some(session)),

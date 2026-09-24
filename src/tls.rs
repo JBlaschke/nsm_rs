@@ -85,6 +85,15 @@ fn provider() -> Result<Arc<CryptoProvider>> {
         })
 }
 
+/// Fill `buf` with cryptographically secure random bytes from the installed
+/// crypto provider (used for registration tokens).
+pub fn fill_random(buf: &mut [u8]) -> Result<()> {
+    provider()?
+        .secure_random
+        .fill(buf)
+        .map_err(|_| Error::config("the crypto provider could not produce random bytes"))
+}
+
 /// Map a PEM error for `path` onto the crate error, keeping I/O errors (a
 /// missing or unreadable file) as [`Error::Io`] so callers can tell them from
 /// malformed contents.

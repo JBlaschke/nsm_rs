@@ -209,7 +209,7 @@ async fn heartbeat_loop(broker: Arc<Broker>, id: PartyId) {
             return;
         };
         let pending = match &hb {
-            Message::Heartbeat { inbox, service } => (inbox.clone(), service.clone()),
+            Message::Heartbeat { inbox, service, .. } => (inbox.clone(), service.clone()),
             _ => (None, None),
         };
         match timeout(t.heartbeat_timeout, broker.client.call(&addr, hb)).await {

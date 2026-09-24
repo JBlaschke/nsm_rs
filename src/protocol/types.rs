@@ -45,6 +45,90 @@ impl From<PartyId> for u64 {
     }
 }
 
+/// Secret the broker issues to a party when it registers.
+///
+/// Every later message that acts on the party's behalf ([`Message::Ping`],
+/// [`Message::Deliver`]) must carry it, and the broker's heartbeats to the
+/// party carry it too, so a third party that merely knows a party's id (ids
+/// are small sequential integers) can neither impersonate it nor spoof its
+/// broker. 128 random bits, sent as 32 hex characters, compared in constant
+/// time and never printed (`Debug` redacts it). Like the rendezvous key it is
+/// confidential only as far as the transport is: use TLS on untrusted links.
+///
+/// [`Message::Ping`]: super::Message::Ping
+/// [`Message::Deliver`]: super::Message::Deliver
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RegToken([u8; 16]);
+
+impl RegToken {
+    /// A fresh random token from the installed crypto provider.
+    pub fn generate() -> crate::Result<Self> {
+        let mut bytes = [0u8; 16];
+        crate::tls::fill_random(&mut bytes)?;
+        Ok(RegToken(bytes))
+    }
+
+    /// A token from fixed bytes (tests and deterministic fixtures).
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        RegToken(bytes)
+    }
+
+    /// Constant-time equality.
+    pub fn ct_eq(&self, other: &RegToken) -> bool {
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+    }
+
+    /// The 32-character lowercase hex form used on the wire.
+    pub fn to_hex(&self) -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(32);
+        for b in self.0 {
+            out.push(DIGITS[usize::from(b >> 4)] as char);
+            out.push(DIGITS[usize::from(b & 0x0f)] as char);
+        }
+        out
+    }
+
+    /// Parse the hex form; `None` unless exactly 32 hex digits.
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text.len() != 32 || !text.is_ascii() {
+            return None;
+        }
+        let mut bytes = [0u8; 16];
+        for (i, chunk) in text.as_bytes().chunks(2).enumerate() {
+            let hi = (chunk[0] as char).to_digit(16)?;
+            let lo = (chunk[1] as char).to_digit(16)?;
+            bytes[i] = ((hi << 4) | lo) as u8;
+        }
+        Some(RegToken(bytes))
+    }
+}
+
+impl fmt::Debug for RegToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RegToken(redacted)")
+    }
+}
+
+impl Serialize for RegToken {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for RegToken {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        RegToken::from_hex(&text)
+            .ok_or_else(|| serde::de::Error::custom("expected a 32-character hex token"))
+    }
+}
+
 /// Rendezvous key shared by a service and the clients allowed to claim it.
 ///
 /// Services publish under a key; a claim for the same key is paired with one
@@ -55,13 +139,13 @@ pub type Key = u64;
 ///
 /// This is the value printed by `nsm claim` and returned by `nsm collect`
 /// when asked of a client. It deliberately omits the service's heartbeat
-/// endpoint, which is the broker's business only.
+/// endpoint, which is the broker's business only, and the rendezvous key,
+/// which the claimer already holds and which must not leak to whoever asks a
+/// client what it is paired with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceHandle {
     /// The service's broker-assigned id.
     pub id: PartyId,
-    /// The key the service published under.
-    pub key: Key,
     /// Host of the service's data-plane endpoint: a DNS name or an IP
     /// literal (IPv6 without brackets).
     pub host: String,
@@ -108,7 +192,6 @@ impl ServiceRecord {
     pub fn handle(&self) -> ServiceHandle {
         ServiceHandle {
             id: self.id,
-            key: self.key,
             host: self.service_addr.host.clone(),
             service_port: self.service_addr.port,
         }
@@ -185,11 +268,44 @@ mod tests {
             s.handle(),
             ServiceHandle {
                 id: PartyId(3),
-                key: 42,
                 host: "10.0.0.5".into(),
                 service_port: 9000,
             }
         );
+    }
+
+    #[test]
+    fn reg_token_hex_round_trip_constant_time_and_redacted() {
+        let t = RegToken::from_bytes([0x0f, 0xa0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 0xff]);
+        let hex = t.to_hex();
+        assert_eq!(hex.len(), 32);
+        assert!(hex.starts_with("0fa0") && hex.ends_with("ff"));
+        assert_eq!(RegToken::from_hex(&hex), Some(t));
+        assert_eq!(RegToken::from_hex(&hex.to_uppercase()), Some(t));
+        assert_eq!(RegToken::from_hex("short"), None);
+        assert_eq!(RegToken::from_hex(&"zz".repeat(16)), None);
+        assert!(t.ct_eq(&t));
+        assert!(!t.ct_eq(&RegToken::from_bytes([0; 16])));
+        assert_eq!(format!("{t:?}"), "RegToken(redacted)");
+        assert_eq!(serde_json::to_string(&t).unwrap(), format!("\"{hex}\""));
+        let back: RegToken = serde_json::from_str(&format!("\"{hex}\"")).unwrap();
+        assert_eq!(back, t);
+        assert!(serde_json::from_str::<RegToken>("\"nope\"").is_err());
+        assert!(serde_json::from_str::<RegToken>("7").is_err());
+    }
+
+    #[test]
+    fn generated_tokens_are_distinct() {
+        crate::tls::install_default_provider();
+        let a = RegToken::generate().unwrap();
+        let b = RegToken::generate().unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn service_handle_never_carries_the_key() {
+        let json = serde_json::to_value(service().handle()).unwrap();
+        assert!(json.get("key").is_none(), "{json}");
     }
 
     #[test]
@@ -210,10 +326,7 @@ mod tests {
 
         let h = s.handle();
         let json = serde_json::to_string(&h).unwrap();
-        assert_eq!(
-            json,
-            r#"{"id":3,"key":42,"host":"10.0.0.5","service_port":9000}"#
-        );
+        assert_eq!(json, r#"{"id":3,"host":"10.0.0.5","service_port":9000}"#);
         assert_eq!(serde_json::from_str::<ServiceHandle>(&json).unwrap(), h);
     }
 }

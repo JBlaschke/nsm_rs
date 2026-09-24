@@ -52,6 +52,11 @@ cargo build --release --no-default-features --features ring
   heartbeat; if there is none, they are removed.
 - A party that stops hearing from the broker exits with an error (exit code 1);
   nothing exits from inside a handler.
+- Every registration reply carries a **registration token** (128 random
+  bits) that only the broker and that party know. Pings, relayed messages and
+  the broker's heartbeats must present it, so a peer that knows an id or the
+  rendezvous key cannot inject text, re-pair a party or keep a dead one
+  alive. The token never appears in a service handle, a job view or a log.
 
 ## Usage
 

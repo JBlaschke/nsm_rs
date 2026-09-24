@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use nsm::config::BrokerPolicy;
 use nsm::net::Transport;
-use nsm::protocol::PartyId;
+use nsm::protocol::{Message, PartyId, RegToken, ServiceHandle};
 use nsm::{ops, Error};
 
 use common::{Cluster, TRANSPORTS};
@@ -30,7 +30,10 @@ async fn publish_then_claim_pairs_over_every_transport() {
             let handle = client.service().expect("paired");
             assert_eq!(handle.id, service.id());
             assert_eq!(handle.service_port, 9000);
-            assert_eq!(handle.key, 42);
+            assert!(
+                serde_json::to_value(&handle).unwrap().get("key").is_none(),
+                "a handle must not carry the rendezvous key"
+            );
             assert_eq!(c.broker().snapshot().len(), 2, "{t:?}");
             c.stop().await;
         })
@@ -257,6 +260,178 @@ async fn per_host_registration_cap_is_enforced() {
             "{err}"
         );
         c.stop().await;
+    })
+    .await;
+}
+
+fn wrong_token() -> RegToken {
+    RegToken::from_bytes([0xee; 16])
+}
+
+#[tokio::test]
+async fn ping_and_deliver_require_the_registration_token() {
+    with_deadline(async {
+        let c = Cluster::start(Transport::Tcp).await;
+        let raw = c.raw_client();
+        let broker = c.broker_addr();
+        let two_sided = c.publish(1, 9001).await;
+        let pinger = c.publish_ping(2, 9002).await;
+        let client = c.claim(1).await;
+        assert_eq!(client.service().unwrap().id, two_sided.id());
+
+        // Ping: wrong token and unknown id are indistinguishable refusals.
+        let bad = raw
+            .call(
+                &broker,
+                Message::Ping {
+                    id: pinger.id(),
+                    token: wrong_token(),
+                },
+            )
+            .await
+            .unwrap();
+        let unknown = raw
+            .call(
+                &broker,
+                Message::Ping {
+                    id: PartyId(999),
+                    token: wrong_token(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(bad, Message::Nack { .. }), "{bad:?}");
+        assert_eq!(bad, unknown);
+        // A two-sided party cannot be pinged on, even with its own token.
+        let reply = raw
+            .call(
+                &broker,
+                Message::Ping {
+                    id: two_sided.id(),
+                    token: two_sided.token(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(reply, Message::Nack { .. }), "{reply:?}");
+        // The ping-mode party with its token gets a heartbeat carrying it.
+        let reply = raw
+            .call(
+                &broker,
+                Message::Ping {
+                    id: pinger.id(),
+                    token: pinger.token(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(reply, Message::Heartbeat { token, .. } if token == pinger.token()),
+            "{reply:?}"
+        );
+
+        // Deliver: needs the paired client's token and the right target.
+        let deliver = |from, token, to| Message::Deliver {
+            from,
+            token,
+            to,
+            text: "injected".into(),
+        };
+        for (from, token, to) in [
+            (client.id(), wrong_token(), two_sided.id()),
+            (client.id(), client.token(), pinger.id()),
+            (two_sided.id(), two_sided.token(), two_sided.id()),
+        ] {
+            let reply = raw.call(&broker, deliver(from, token, to)).await.unwrap();
+            assert!(matches!(reply, Message::Nack { .. }), "{reply:?}");
+        }
+        assert_eq!(
+            raw.call(
+                &broker,
+                deliver(client.id(), client.token(), two_sided.id())
+            )
+            .await
+            .unwrap(),
+            Message::Delivered
+        );
+        c.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn forged_heartbeats_are_ignored_by_parties() {
+    with_deadline(async {
+        let c = Cluster::start(Transport::Tcp).await;
+        let raw = c.raw_client();
+        let service = c.publish(1, 9001).await;
+        let client = c.claim(1).await;
+        let paired = client.service().unwrap();
+        let bogus = ServiceHandle {
+            id: PartyId(999),
+            host: "attacker".into(),
+            service_port: 1,
+        };
+        let forged = Message::Heartbeat {
+            token: wrong_token(),
+            inbox: Some("planted".into()),
+            service: Some(bogus.clone()),
+        };
+        let reply = raw.call(&client.bound(), forged.clone()).await.unwrap();
+        assert!(matches!(reply, Message::Nack { .. }), "{reply:?}");
+        assert_eq!(client.service(), Some(paired.clone()));
+        let reply = raw.call(&service.bound(), forged).await.unwrap();
+        assert!(matches!(reply, Message::Nack { .. }), "{reply:?}");
+        assert_eq!(service.state().inbox(), None);
+        // The real broker keeps working: a send still lands on the service.
+        ops::send(&client.bound(), "genuine".into(), c.net())
+            .await
+            .unwrap();
+        c.wait_until_true(|| service.state().inbox().is_some())
+            .await;
+        assert_eq!(service.state().inbox().as_deref(), Some("genuine"));
+        assert_eq!(client.service(), Some(paired));
+        c.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn control_plane_enforces_its_bearer_token() {
+    with_deadline(async {
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let control = nsm::rest::serve(
+            nsm::rest::ServeOpts {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                token: Some("s3cret".into()),
+                net: nsm::ops::NetOpts::default(),
+            },
+            shutdown.clone(),
+        )
+        .await
+        .unwrap();
+        let url = format!("http://{}/v1/jobs", control.local_addr());
+        let http = reqwest::Client::new();
+        assert_eq!(http.get(&url).send().await.unwrap().status(), 401);
+        assert_eq!(
+            http.get(&url)
+                .bearer_auth("wrong")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        assert_eq!(
+            http.get(&url)
+                .bearer_auth("s3cret")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        control.shutdown().await;
     })
     .await;
 }

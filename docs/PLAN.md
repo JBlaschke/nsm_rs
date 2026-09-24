@@ -9,7 +9,7 @@ Written 2026-09-24 against `main` at `edd23a33`. Companion document: [the audit]
 | `cleanup/01-repo-hygiene` | done | 5 commits; tracked files 23,449 → 11,914 |
 | `cleanup/02-foundation` | done | single `nsm` binary, lib crate, typed protocol, rustls module, 77 unit tests; legacy code runs under `src/legacy/` |
 | `cleanup/03-common-backend` | done | backend written once (transport trait; TCP, TLS, HTTP, HTTPS), registry actor with per-party monitors, party sessions, typed ops, REST control plane with jobs; legacy deleted; 129 unit + 11 end-to-end tests over all four transports |
-| `cleanup/04-hardening` | done | platform trust store opt-in (`--system-roots`), broker admission policy (matching-host check, per-host registration cap), CLI overrides for every timing and limit, `deny(unwrap_used, expect_used, panic)` outside tests, release overflow checks |
+| `cleanup/04-hardening` | done | platform trust store opt-in (`--system-roots`), broker admission policy (matching-host check, per-host registration cap), CLI overrides for every timing and limit, `deny(unwrap_used, expect_used, panic)` outside tests, release overflow checks; security review of the branch found 4 items (unauthenticated `Ping`/`Deliver`, forgeable party heartbeats, the rendezvous key inside `ServiceHandle` and job views), all fixed with per-registration tokens |
 | `cleanup/05-tests-ci` | next | |
 | `cleanup/06-docs` | planned | |
 | `cleanup/07-deps` | planned | |
@@ -161,6 +161,7 @@ Behaviour-changing safety limits and the remaining audit items.
 - Graceful shutdown on SIGINT/SIGTERM through a cancellation token.
 - Lint policy: `deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)` outside tests.
 - Acceptance: a security review of the diff (the `/security-review` skill) reports no open critical or high item from the audit's security lens.
+- Outcome of that review (2026-09-24): four findings, all fixed on the branch. The broker now issues a 128-bit registration token (`protocol::RegToken`) in every `Registered`/`Paired` reply; `Ping` and `Deliver` must present it (`Deliver` also names the sending client, which must be paired with the target), the broker's `Heartbeat` carries it and parties ignore heartbeats without it (services also ignore pairings), `ServiceHandle` no longer contains the rendezvous key, and the HTTP client follows no redirects. Refusals for "unknown id" and "wrong token" share one text. Wire format changed again (still within D3).
 
 ### 05 `cleanup/05-tests-ci`
 

@@ -226,10 +226,23 @@ mod tests {
             tokio::time::timeout(DEADLINE, async {
                 let (server, client, _certs) = start(transport, Echo).await;
                 let reply = client
-                    .call(&server.bound(), Message::Ping { id: PartyId(7) })
+                    .call(
+                        &server.bound(),
+                        Message::Ping {
+                            id: PartyId(7),
+                            token: crate::protocol::message::test_token(),
+                        },
+                    )
                     .await
                     .unwrap();
-                assert_eq!(reply, Message::Ping { id: PartyId(7) }, "{transport:?}");
+                assert_eq!(
+                    reply,
+                    Message::Ping {
+                        id: PartyId(7),
+                        token: crate::protocol::message::test_token()
+                    },
+                    "{transport:?}"
+                );
                 // A Nack is a reply like any other.
                 let reply = client
                     .call(&server.bound(), Message::nack("no"))

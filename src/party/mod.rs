@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::time::Instant;
 
 use crate::net::Addr;
-use crate::protocol::{Key, PartyId, ServiceHandle};
+use crate::protocol::{Key, PartyId, RegToken, ServiceHandle};
 use crate::transport::Client;
 
 pub use handler::PartyHandler;
@@ -52,6 +52,7 @@ pub struct PartyState {
     broker: Addr,
     key: Key,
     id: OnceLock<PartyId>,
+    token: OnceLock<RegToken>,
     inbox: Mutex<Option<String>>,
     service: Mutex<Option<ServiceHandle>>,
     last_contact: Mutex<Instant>,
@@ -66,6 +67,7 @@ impl PartyState {
             broker,
             key,
             id: OnceLock::new(),
+            token: OnceLock::new(),
             inbox: Mutex::new(None),
             service: Mutex::new(None),
             last_contact: Mutex::new(Instant::now()),
@@ -102,6 +104,22 @@ impl PartyState {
     /// was already set (the first one wins).
     pub fn set_id(&self, id: PartyId) -> bool {
         self.id.set(id).is_ok()
+    }
+
+    /// The registration token, once registered.
+    pub fn token(&self) -> Option<RegToken> {
+        self.token.get().copied()
+    }
+
+    /// Record the token from the registration reply (the first one wins).
+    pub fn set_token(&self, token: RegToken) -> bool {
+        self.token.set(token).is_ok()
+    }
+
+    /// True when `presented` is this party's registration token. Before
+    /// registration nothing is accepted.
+    pub fn accepts_token(&self, presented: &RegToken) -> bool {
+        self.token.get().is_some_and(|own| own.ct_eq(presented))
     }
 
     /// Last text delivered to this service, if any.
@@ -178,7 +196,6 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
         let handle = ServiceHandle {
             id: PartyId(1),
-            key: 42,
             host: "10.0.0.1".into(),
             service_port: 9000,
         };

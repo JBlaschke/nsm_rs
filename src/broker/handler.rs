@@ -12,7 +12,7 @@ use tracing::{debug, trace};
 
 use super::monitor::Broker;
 use crate::net::Addr;
-use crate::protocol::Message;
+use crate::protocol::{Message, RegToken};
 use crate::transport::{Handler, PeerInfo};
 use crate::{Error, Result};
 
@@ -71,14 +71,15 @@ impl BrokerHandler {
                     return Ok(refusal);
                 }
                 let service_addr = Addr::tcp(bind_addr.host.clone(), service_port);
+                let token = RegToken::generate()?;
                 let now = Instant::now();
                 match self
                     .broker
-                    .with_registry(|r| r.publish(key, service_addr, bind_addr, ping, now))
+                    .with_registry(|r| r.publish(key, service_addr, bind_addr, ping, token, now))
                 {
                     Ok(id) => {
                         self.broker.watch(id);
-                        Ok(Message::Registered { id })
+                        Ok(Message::Registered { id, token })
                     }
                     Err(Error::Rejected(reason)) => Ok(Message::nack(reason)),
                     Err(e) => Err(e),
@@ -96,15 +97,16 @@ impl BrokerHandler {
                 let t = self.broker.timing();
                 let deadline = Instant::now() + t.claim_wait;
                 let pause = (t.claim_wait / 5).max(std::time::Duration::from_millis(1));
+                let token = RegToken::generate()?;
                 loop {
                     let now = Instant::now();
                     match self
                         .broker
-                        .with_registry(|r| r.claim(key, bind_addr.clone(), ping, now))
+                        .with_registry(|r| r.claim(key, bind_addr.clone(), ping, token, now))
                     {
                         Ok((id, service)) => {
                             self.broker.watch(id);
-                            return Ok(Message::Paired { id, service });
+                            return Ok(Message::Paired { id, token, service });
                         }
                         Err(Error::NoService(_)) if Instant::now() < deadline => {
                             // A client may start before its service has
@@ -120,21 +122,45 @@ impl BrokerHandler {
                 }
             }
 
-            Message::Ping { id } => {
+            Message::Ping { id, token } => {
                 let now = Instant::now();
+                // One refusal text for "unknown id" and "wrong token", so a
+                // caller cannot enumerate ids; only ping-mode parties may ping.
                 let reply = self.broker.with_registry(|r| {
-                    if r.mark_alive(id, now) {
-                        r.heartbeat_for(id)
-                    } else {
-                        None
+                    if !r.verify(id, &token) {
+                        return Err("unknown party or wrong token");
                     }
+                    if r.is_ping(id) != Some(true) {
+                        return Err("party is not in ping mode");
+                    }
+                    r.mark_alive(id, now);
+                    Ok(r.heartbeat_for(id))
                 });
-                Ok(reply.unwrap_or_else(|| Message::nack(format!("unknown party {id}"))))
+                Ok(match reply {
+                    Ok(Some(heartbeat)) => heartbeat,
+                    Ok(None) => Message::nack("unknown party or wrong token"),
+                    Err(reason) => Message::nack(reason),
+                })
             }
 
-            Message::Deliver { to, text } => {
-                match self.broker.with_registry(|r| r.deliver(to, text)) {
-                    Ok(()) => Ok(Message::Delivered),
+            Message::Deliver {
+                from,
+                token,
+                to,
+                text,
+            } => {
+                let outcome = self.broker.with_registry(|r| {
+                    if !r.verify(from, &token) {
+                        return Ok(Err("unknown party or wrong token"));
+                    }
+                    if r.paired_service(from) != Some(to) {
+                        return Ok(Err("client is not paired with that service"));
+                    }
+                    r.deliver(to, text).map(Ok)
+                });
+                match outcome {
+                    Ok(Ok(())) => Ok(Message::Delivered),
+                    Ok(Err(reason)) => Ok(Message::nack(reason)),
                     Err(Error::Rejected(reason)) => Ok(Message::nack(reason)),
                     Err(e) => Err(e),
                 }
@@ -196,6 +222,158 @@ mod tests {
             bind_addr: Addr::tcp(host, port),
             ping: true, // no heartbeat task is spawned for ping parties
         }
+    }
+
+    fn registered(reply: Message) -> (PartyId, RegToken) {
+        match reply {
+            Message::Registered { id, token } => (id, token),
+            other => panic!("expected Registered, got {other:?}"),
+        }
+    }
+
+    fn paired(reply: Message) -> (PartyId, RegToken, PartyId) {
+        match reply {
+            Message::Paired { id, token, service } => (id, token, service.id),
+            other => panic!("expected Paired, got {other:?}"),
+        }
+    }
+
+    fn wrong() -> RegToken {
+        RegToken::from_bytes([0xee; 16])
+    }
+
+    #[tokio::test]
+    async fn ping_needs_the_right_token_and_ping_mode() {
+        crate::tls::install_default_provider();
+        let h = handler(BrokerPolicy::default());
+        let (pinger, token) = registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
+        let two_sided = Message::Publish {
+            key: 1,
+            service_port: 9000,
+            bind_addr: Addr::tcp("127.0.0.1", 2),
+            ping: false,
+        };
+        let (quiet, quiet_token) = registered(h.handle(two_sided, peer()).await.unwrap());
+        assert_ne!(token, quiet_token);
+
+        // Wrong token: refused, with the same text as an unknown id.
+        let bad = h
+            .handle(
+                Message::Ping {
+                    id: pinger,
+                    token: wrong(),
+                },
+                peer(),
+            )
+            .await
+            .unwrap();
+        let unknown = h
+            .handle(
+                Message::Ping {
+                    id: PartyId(99),
+                    token: wrong(),
+                },
+                peer(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(bad, Message::Nack { .. }), "{bad:?}");
+        assert_eq!(bad, unknown);
+        // Right token, but a two-sided party: refused.
+        let reply = h
+            .handle(
+                Message::Ping {
+                    id: quiet,
+                    token: quiet_token,
+                },
+                peer(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(reply, Message::Nack { .. }), "{reply:?}");
+        // Right token, ping-mode party: a heartbeat carrying that token.
+        let reply = h
+            .handle(Message::Ping { id: pinger, token }, peer())
+            .await
+            .unwrap();
+        assert_eq!(
+            reply,
+            Message::Heartbeat {
+                token,
+                inbox: None,
+                service: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn deliver_needs_the_paired_clients_token() {
+        crate::tls::install_default_provider();
+        let h = handler(BrokerPolicy::default());
+        let (service, service_token) =
+            registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
+        let (other, _) = registered(h.handle(publish("10.0.0.2", 3), peer()).await.unwrap());
+        let claim = Message::Claim {
+            key: 1,
+            bind_addr: Addr::tcp("127.0.0.1", 2),
+            ping: true,
+        };
+        let (client, client_token, paired_with) = paired(h.handle(claim, peer()).await.unwrap());
+        assert_eq!(paired_with, service);
+
+        let deliver = |from, token, to| Message::Deliver {
+            from,
+            token,
+            to,
+            text: "x".into(),
+        };
+        // Wrong token.
+        assert!(matches!(
+            h.handle(deliver(client, wrong(), service), peer())
+                .await
+                .unwrap(),
+            Message::Nack { .. }
+        ));
+        // A service's own token cannot deliver (it is not a client).
+        assert!(matches!(
+            h.handle(deliver(service, service_token, service), peer())
+                .await
+                .unwrap(),
+            Message::Nack { .. }
+        ));
+        // Right client, but not its service.
+        assert!(matches!(
+            h.handle(deliver(client, client_token, other), peer())
+                .await
+                .unwrap(),
+            Message::Nack { .. }
+        ));
+        // The paired client with its token.
+        assert_eq!(
+            h.handle(deliver(client, client_token, service), peer())
+                .await
+                .unwrap(),
+            Message::Delivered
+        );
+        // The text reached the service's inbox and rides on its next heartbeat.
+        let hb = h
+            .handle(
+                Message::Ping {
+                    id: service,
+                    token: service_token,
+                },
+                peer(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            hb,
+            Message::Heartbeat {
+                token: service_token,
+                inbox: Some("x".into()),
+                service: None
+            }
+        );
     }
 
     #[tokio::test]
@@ -264,14 +442,21 @@ mod tests {
     async fn unknown_ping_and_unexpected_messages_are_nacked() {
         let h = handler(BrokerPolicy::default());
         assert!(matches!(
-            h.handle(Message::Ping { id: PartyId(99) }, peer())
-                .await
-                .unwrap(),
+            h.handle(
+                Message::Ping {
+                    id: PartyId(99),
+                    token: wrong()
+                },
+                peer()
+            )
+            .await
+            .unwrap(),
             Message::Nack { .. }
         ));
         for msg in [
             Message::Collect,
             Message::Heartbeat {
+                token: wrong(),
                 inbox: None,
                 service: None,
             },

@@ -15,4 +15,4 @@ pub mod types;
 
 pub use codec::{decode, encode, framed, Framed, MessageCodec};
 pub use message::{Message, PROTOCOL_VERSION};
-pub use types::{ClientRecord, Key, PartyId, ServiceHandle, ServiceRecord};
+pub use types::{ClientRecord, Key, PartyId, RegToken, ServiceHandle, ServiceRecord};

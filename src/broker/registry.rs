@@ -49,7 +49,9 @@ use tokio::time::Instant;
 
 use crate::config::Limits;
 use crate::net::Addr;
-use crate::protocol::{ClientRecord, Key, Message, PartyId, ServiceHandle, ServiceRecord};
+use crate::protocol::{
+    ClientRecord, Key, Message, PartyId, RegToken, ServiceHandle, ServiceRecord,
+};
 use crate::{Error, Result};
 
 /// A published service as the broker tracks it.
@@ -57,6 +59,8 @@ use crate::{Error, Result};
 pub struct ServiceEntry {
     /// Id, key, data-plane and heartbeat endpoints, liveness mode.
     pub record: ServiceRecord,
+    /// Secret issued at registration; the service proves itself with it.
+    pub token: RegToken,
     /// The client holding this service, or `None` while it is unclaimed.
     pub claimed_by: Option<PartyId>,
     /// Text delivered to this service and not yet carried by a heartbeat. A
@@ -77,6 +81,8 @@ pub struct ClientEntry {
     /// service died, `record.service` keeps naming it until
     /// [`Registry::reclaim`] re-pairs the client.
     pub record: ClientRecord,
+    /// Secret issued at registration; the client proves itself with it.
+    pub token: RegToken,
     /// A new pairing from [`Registry::reclaim`] that the client has not been
     /// told about yet; carried by its next heartbeat.
     pub pending_service: Option<ServiceHandle>,
@@ -242,6 +248,7 @@ impl Registry {
         service_addr: Addr,
         bind_addr: Addr,
         ping: bool,
+        token: RegToken,
         now: Instant,
     ) -> Result<PartyId> {
         self.check_capacity()?;
@@ -256,6 +263,7 @@ impl Registry {
                     bind_addr,
                     ping,
                 },
+                token,
                 claimed_by: None,
                 inbox: None,
                 failures: 0,
@@ -283,6 +291,7 @@ impl Registry {
         key: Key,
         bind_addr: Addr,
         ping: bool,
+        token: RegToken,
         now: Instant,
     ) -> Result<(PartyId, ServiceHandle)> {
         self.check_capacity()?;
@@ -294,6 +303,7 @@ impl Registry {
         self.clients.insert(
             id,
             ClientEntry {
+                token,
                 record: ClientRecord {
                     id,
                     key,
@@ -406,15 +416,38 @@ impl Registry {
     pub fn heartbeat_for(&mut self, id: PartyId) -> Option<Message> {
         if let Some(service) = self.services.get_mut(&id) {
             return Some(Message::Heartbeat {
+                token: service.token,
                 inbox: service.inbox.take(),
                 service: None,
             });
         }
         let client = self.clients.get_mut(&id)?;
         Some(Message::Heartbeat {
+            token: client.token,
             inbox: None,
             service: client.pending_service.take(),
         })
+    }
+
+    /// True when `token` is the registration token of party `id` (constant
+    /// time; false for unknown ids, so callers cannot tell the two apart).
+    pub fn verify(&self, id: PartyId, token: &RegToken) -> bool {
+        let stored = self
+            .services
+            .get(&id)
+            .map(|s| s.token)
+            .or_else(|| self.clients.get(&id).map(|c| c.token));
+        match stored {
+            Some(stored) => stored.ct_eq(token),
+            None => false,
+        }
+    }
+
+    /// The service a client is currently paired with (or, after its service
+    /// died and before a re-pairing, the dead service's id). `None` for
+    /// anything that is not a registered client.
+    pub fn paired_service(&self, client: PartyId) -> Option<PartyId> {
+        self.clients.get(&client).map(|c| c.record.service)
     }
 
     /// Put back pending items taken by [`Registry::heartbeat_for`] when the
@@ -621,12 +654,17 @@ mod tests {
         Addr::tcp("10.0.0.1", port)
     }
 
+    fn tok() -> RegToken {
+        RegToken::from_bytes([7; 16])
+    }
+
     fn publish(r: &mut Registry, key: Key, ping: bool, t: Instant) -> PartyId {
-        r.publish(key, addr(9000), addr(9001), ping, t).unwrap()
+        r.publish(key, addr(9000), addr(9001), ping, tok(), t)
+            .unwrap()
     }
 
     fn claim(r: &mut Registry, key: Key, ping: bool, t: Instant) -> (PartyId, ServiceHandle) {
-        r.claim(key, addr(7000), ping, t).unwrap()
+        r.claim(key, addr(7000), ping, tok(), t).unwrap()
     }
 
     fn handle_of(r: &Registry, service: PartyId) -> ServiceHandle {
@@ -639,6 +677,7 @@ mod tests {
 
     fn heartbeat(inbox: Option<&str>, service: Option<ServiceHandle>) -> Message {
         Message::Heartbeat {
+            token: tok(),
             inbox: inbox.map(str::to_owned),
             service,
         }
@@ -667,10 +706,13 @@ mod tests {
         let mut r = registry(8);
         let t = now();
         let bind = Addr::new(Transport::Https, "10.0.0.1", 9001);
-        let id = r.publish(7, addr(9000), bind.clone(), true, t).unwrap();
+        let id = r
+            .publish(7, addr(9000), bind.clone(), true, tok(), t)
+            .unwrap();
         assert_eq!(
             r.service(id).unwrap(),
             &ServiceEntry {
+                token: tok(),
                 record: ServiceRecord {
                     id,
                     key: 7,
@@ -701,6 +743,7 @@ mod tests {
         assert_eq!(
             r.client(c1).unwrap(),
             &ClientEntry {
+                token: tok(),
                 record: ClientRecord {
                     id: c1,
                     key: KEY,
@@ -720,7 +763,7 @@ mod tests {
         assert_eq!((c2, h2), (PartyId(5), handle_of(&r, s2)));
         assert_eq!(claimed_by(&r, s2), Some(c2));
         assert!(matches!(
-            r.claim(KEY, addr(7000), false, t),
+            r.claim(KEY, addr(7000), false, tok(), t),
             Err(Error::NoService(KEY))
         ));
         assert_eq!(r.len(), 5, "a failed claim registers nothing");
@@ -731,7 +774,7 @@ mod tests {
         let mut r = registry(8);
         let t = now();
         assert!(matches!(
-            r.claim(99, addr(7000), false, t),
+            r.claim(99, addr(7000), false, tok(), t),
             Err(Error::NoService(99))
         ));
         assert!(r.is_empty());
@@ -1130,9 +1173,16 @@ mod tests {
         let (c1, _) = claim(&mut r, KEY, false, t);
         assert_eq!(r.len(), 3);
 
-        assert!(is_full(r.publish(KEY, addr(9000), addr(9001), false, t)));
+        assert!(is_full(r.publish(
+            KEY,
+            addr(9000),
+            addr(9001),
+            false,
+            tok(),
+            t
+        )));
         assert!(
-            is_full(r.claim(KEY, addr(7000), false, t)),
+            is_full(r.claim(KEY, addr(7000), false, tok(), t)),
             "rejected although s2 is free"
         );
         assert_eq!(r.len(), 3, "rejected requests register nothing");
@@ -1145,7 +1195,7 @@ mod tests {
             }
         );
         assert_eq!(publish(&mut r, KEY, false, t), PartyId(4));
-        assert!(is_full(r.claim(KEY, addr(7000), false, t)));
+        assert!(is_full(r.claim(KEY, addr(7000), false, tok(), t)));
         assert_eq!(
             r.remove(s1),
             Removed::Service {
@@ -1153,7 +1203,14 @@ mod tests {
             }
         );
         assert_eq!(claim(&mut r, KEY, false, t).0, PartyId(5));
-        assert!(is_full(r.publish(KEY, addr(9000), addr(9001), false, t)));
+        assert!(is_full(r.publish(
+            KEY,
+            addr(9000),
+            addr(9001),
+            false,
+            tok(),
+            t
+        )));
     }
 
     #[test]
@@ -1163,16 +1220,23 @@ mod tests {
         let _s = publish(&mut r, KEY, false, t);
         let _c = claim(&mut r, KEY, false, t);
         // No unclaimed service either way; the answer is still "full".
-        assert!(is_full(r.claim(KEY, addr(7000), false, t)));
-        assert!(is_full(r.claim(KEY + 1, addr(7000), false, t)));
+        assert!(is_full(r.claim(KEY, addr(7000), false, tok(), t)));
+        assert!(is_full(r.claim(KEY + 1, addr(7000), false, tok(), t)));
     }
 
     #[test]
     fn a_zero_limit_admits_nobody() {
         let mut r = registry(0);
         let t = now();
-        assert!(is_full(r.publish(KEY, addr(9000), addr(9001), false, t)));
-        assert!(is_full(r.claim(KEY, addr(7000), false, t)));
+        assert!(is_full(r.publish(
+            KEY,
+            addr(9000),
+            addr(9001),
+            false,
+            tok(),
+            t
+        )));
+        assert!(is_full(r.claim(KEY, addr(7000), false, tok(), t)));
         assert!(r.is_empty());
     }
 
@@ -1185,9 +1249,9 @@ mod tests {
         let s_bind = Addr::new(Transport::Tls, "svc.example", 9001);
         let c_bind = Addr::new(Transport::Http, "fe80::1", 7000);
         let s = r
-            .publish(KEY, addr(9000), s_bind.clone(), false, t)
+            .publish(KEY, addr(9000), s_bind.clone(), false, tok(), t)
             .unwrap();
-        let (c, _) = r.claim(KEY, c_bind.clone(), true, t).unwrap();
+        let (c, _) = r.claim(KEY, c_bind.clone(), true, tok(), t).unwrap();
 
         match r.get(s) {
             Some(Party::Service(entry)) => assert_eq!(entry, r.service(s).unwrap()),

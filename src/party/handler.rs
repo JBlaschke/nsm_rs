@@ -35,11 +35,24 @@ impl PartyHandler {
     async fn dispatch(&self, msg: Message, peer: PeerInfo) -> Result<Message> {
         trace!(kind = msg.kind(), remote = %peer.remote, "party request");
         match msg {
-            Message::Heartbeat { inbox, service } => {
+            Message::Heartbeat {
+                token,
+                inbox,
+                service,
+            } => {
+                // Only the broker knows this party's token; anything else is
+                // a stranger trying to deliver text, re-pair us or keep our
+                // watchdog quiet.
+                if !self.state.accepts_token(&token) {
+                    debug!(remote = %peer.remote, "heartbeat without our token ignored");
+                    return Ok(Message::nack("heartbeat does not carry this party's token"));
+                }
+                // A service has no pairing to update.
+                let service = match self.state.role() {
+                    Role::Publisher => None,
+                    Role::Claimer => service,
+                };
                 self.state.apply_heartbeat(inbox, service);
-                // Before the registration reply has been processed the id is
-                // unknown; the broker accepts any id in the acknowledgement
-                // and only uses it for logging.
                 Ok(Message::HeartbeatAck {
                     id: self.state.id().unwrap_or(PartyId(0)),
                 })
@@ -56,6 +69,9 @@ impl PartyHandler {
                     let Some(service) = self.state.service() else {
                         return Ok(Message::nack("client is not paired with a service"));
                     };
+                    let (Some(from), Some(token)) = (self.state.id(), self.state.token()) else {
+                        return Ok(Message::nack("client is not registered yet"));
+                    };
                     debug!(to = %service.id, "relaying message to the broker");
                     let reply = self
                         .state
@@ -63,6 +79,8 @@ impl PartyHandler {
                         .call(
                             self.state.broker(),
                             Message::Deliver {
+                                from,
+                                token,
                                 to: service.id,
                                 text,
                             },
@@ -100,8 +118,17 @@ mod tests {
     use super::*;
     use crate::config::{Limits, Timing, TlsPaths};
     use crate::net::{Addr, Transport};
-    use crate::protocol::ServiceHandle;
+    use crate::protocol::{RegToken, ServiceHandle};
     use crate::transport::Client;
+
+    fn tok() -> RegToken {
+        RegToken::from_bytes([7; 16])
+    }
+
+    fn registered(h: &PartyHandler, id: u64) {
+        h.state().set_id(PartyId(id));
+        h.state().set_token(tok());
+    }
 
     fn handler(role: Role) -> PartyHandler {
         let client = Arc::new(Client::new(
@@ -122,31 +149,39 @@ mod tests {
     fn handle() -> ServiceHandle {
         ServiceHandle {
             id: PartyId(9),
-            key: 42,
             host: "10.0.0.9".into(),
             service_port: 9000,
         }
     }
 
     #[tokio::test]
-    async fn heartbeat_is_acked_and_applied() {
+    async fn heartbeat_is_acked_and_applied_only_with_our_token() {
         let h = handler(Role::Publisher);
+        let forged = Message::Heartbeat {
+            token: RegToken::from_bytes([0xee; 16]),
+            inbox: Some("planted".into()),
+            service: None,
+        };
+        // Not registered yet: nothing is accepted.
+        assert!(matches!(
+            h.handle(forged.clone(), peer()).await.unwrap(),
+            Message::Nack { .. }
+        ));
+        registered(&h, 3);
+        let before = h.state().last_contact();
+        // Wrong token: refused, nothing stored, watchdog not refreshed.
+        assert!(matches!(
+            h.handle(forged, peer()).await.unwrap(),
+            Message::Nack { .. }
+        ));
+        assert_eq!(h.state().inbox(), None);
+        assert_eq!(h.state().last_contact(), before);
+        // Our token: applied and acknowledged with our id.
         let reply = h
             .handle(
                 Message::Heartbeat {
+                    token: tok(),
                     inbox: Some("job 7".into()),
-                    service: None,
-                },
-                peer(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(reply, Message::HeartbeatAck { id: PartyId(0) });
-        h.state().set_id(PartyId(3));
-        let reply = h
-            .handle(
-                Message::Heartbeat {
-                    inbox: None,
                     service: None,
                 },
                 peer(),
@@ -155,6 +190,37 @@ mod tests {
             .unwrap();
         assert_eq!(reply, Message::HeartbeatAck { id: PartyId(3) });
         assert_eq!(h.state().inbox().as_deref(), Some("job 7"));
+    }
+
+    #[tokio::test]
+    async fn services_ignore_pairings_and_clients_take_them() {
+        let s = handler(Role::Publisher);
+        registered(&s, 1);
+        s.handle(
+            Message::Heartbeat {
+                token: tok(),
+                inbox: None,
+                service: Some(handle()),
+            },
+            peer(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.state().service(), None);
+
+        let c = handler(Role::Claimer);
+        registered(&c, 2);
+        c.handle(
+            Message::Heartbeat {
+                token: tok(),
+                inbox: None,
+                service: Some(handle()),
+            },
+            peer(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(c.state().service(), Some(handle()));
     }
 
     #[tokio::test]
@@ -220,12 +286,20 @@ mod tests {
                 bind_addr: Addr::tcp("h", 1),
                 ping: false,
             },
-            Message::Ping { id: PartyId(1) },
+            Message::Ping {
+                id: PartyId(1),
+                token: tok(),
+            },
             Message::Deliver {
+                from: PartyId(2),
+                token: tok(),
                 to: PartyId(1),
                 text: "x".into(),
             },
-            Message::Registered { id: PartyId(1) },
+            Message::Registered {
+                id: PartyId(1),
+                token: tok(),
+            },
             Message::Delivered,
             Message::nack("x"),
         ] {
