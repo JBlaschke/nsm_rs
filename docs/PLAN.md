@@ -11,8 +11,8 @@ Written 2026-09-24 against `main` at `edd23a33`. Companion document: [the audit]
 | `cleanup/03-common-backend` | done | backend written once (transport trait; TCP, TLS, HTTP, HTTPS), registry actor with per-party monitors, party sessions, typed ops, REST control plane with jobs; legacy deleted; 129 unit + 11 end-to-end tests over all four transports |
 | `cleanup/04-hardening` | done | platform trust store opt-in (`--system-roots`), broker admission policy (matching-host check, per-host registration cap), CLI overrides for every timing and limit, `deny(unwrap_used, expect_used, panic)` outside tests, release overflow checks; security review of the branch found 4 items (unauthenticated `Ping`/`Deliver`, forgeable party heartbeats, the rendezvous key inside `ServiceHandle` and job views), all fixed with per-registration tokens |
 | `cleanup/05-tests-ci` | done | randomized address/framing tests, monitor decision tables, REST and CLI integration suites, 50-party stress test; CI adds cargo-deny, cargo-machete, a Docker build and a coverage floor; two fixes the new tests found (IP literals canonicalised, TLS configuration checked before dialling) |
-| `cleanup/06-docs` | next | |
-| `cleanup/07-deps` | planned | |
+| `cleanup/06-docs` | done | README rewritten with the full command-line reference and TLS, deployment and HPC sections; `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, `docs/REST_API.md`, `CONTRIBUTING.md`, `CHANGELOG.md`; README is the rustdoc front page, `missing_docs` denied; Pages publishes rustdoc plus the rendered guides; REST maps unreachable peers to 502 as documented |
+| `cleanup/07-deps` | next | |
 
 Commits inside a branch group changes by topic for reading; only the branch tip is guaranteed to build. Vendor updates are always their own commit (`chore: re-vendor`) so they can be skipped in review.
 
@@ -34,7 +34,7 @@ These are outside what a branch can fix.
 1. **Rotate the TLS key.** `server.key` and `server.csr` were committed in `01a90972` (2025-01-03) and deleted in `ca85e236`, but the blobs remain reachable from `origin/main`, `origin/jpb/sync` and `origin/jpb/sync1`. Treat the certificate that key backs as compromised.
 2. **Decide on a history rewrite.** The pack is 330 MB, dominated by `target 2/` and `target 3/` debug binaries (20 to 32 MB each), the Docker tarball, `docs/` and `vendor/`. A one-time `git filter-repo` pass would shrink it to single-digit megabytes and remove the key, but it changes every commit hash and requires collaborators to re-clone. This plan does not perform the rewrite; branch 01 removes the files from the tip so a rewrite later is a pure history operation.
 3. **Switch GitHub Pages to "GitHub Actions".** Pages currently serves the stale rustdoc from `main:/docs` in legacy mode. Branch 01 deletes `docs/` (generated HTML) and adds a Pages workflow; the docs site will be empty until the repository setting is flipped (Settings, Pages, Source).
-4. **Choose a license.** The repository is public with no `LICENSE` file and no `license` field. This is a legal call, so the plan leaves it out; the Cargo metadata and README are written so a license can be dropped in.
+4. **Choose a license.** The repository is public with no `LICENSE` file and no `license` field. This is a legal call, so the plan leaves it out; the Cargo metadata and README are written so a license can be dropped in. Until then the crate is `publish = false` and cargo-deny skips its own missing license (`private = { ignore = true }` in `deny.toml`).
 5. **Delete stale remote branches** once you have confirmed nothing on them is wanted: `condvar` (one broken experiment), `sofia_nsm_rs` (one commit deleting a script), and the fully merged `rest_api`, `jpb/code_cleanup`, `jpb/sync`, `jpb/sync1`, `merge`.
 
 ## 3. Decisions taken in this plan
@@ -176,6 +176,7 @@ Behaviour-changing safety limits and the remaining audit items.
 - `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md` (message schemas, sequence diagrams, timings, failure and re-claim rules), `docs/REST_API.md`, `CONTRIBUTING.md`, `CHANGELOG.md` (with the breaking changes of D2/D3 listed).
 - Rustdoc on every public item, `#![deny(missing_docs)]`, README included as crate docs; Pages workflow publishes `cargo doc` plus the markdown docs.
 - Acceptance: `cargo doc -D warnings` clean; every CLI flag and REST route documented.
+- Outcome (2026-09-24): done. Every flag appears in the README's reference tables (the CLI test `version_and_help_for_every_command` checks `--help` lists them) and every route in `docs/REST_API.md`. The README is included as the crate documentation (`#![doc = include_str!]`), so its file links use explicit `./` paths, which rustdoc leaves alone; on the Pages site the guides are rendered by `scripts/render-docs.sh` (pandoc) with `.md` links rewritten and links to other repository files sent to GitHub. Writing the docs surfaced two stale module docs (TLS trust store, logging) and one behaviour that did not match its documentation: the control plane answered 500 for an unreachable broker or party, now 502.
 
 ### 07 `cleanup/07-deps`
 
