@@ -111,8 +111,13 @@ pub struct TlsPaths {
     /// PEM private key matching `cert` (`--tls-key`, `KEY_PATH`).
     pub key: Option<PathBuf>,
     /// PEM bundle of root certificates used to verify peers
-    /// (`--root-ca`, `ROOT_PATH`). `None` means the platform trust store.
+    /// (`--root-ca`, `ROOT_PATH`).
     pub root_ca: Option<PathBuf>,
+    /// Trust the platform certificate store when `root_ca` is `None`
+    /// (`--system-roots`). Off by default: an internal mesh should name its
+    /// CA explicitly, otherwise any public CA could issue a certificate the
+    /// mesh accepts.
+    pub system_roots: bool,
 }
 
 impl TlsPaths {
@@ -120,6 +125,29 @@ impl TlsPaths {
     /// process can act as a TLS server.
     pub fn has_server_identity(&self) -> bool {
         self.cert.is_some() && self.key.is_some()
+    }
+}
+
+/// Broker-side admission policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokerPolicy {
+    /// Reject registrations whose advertised bind host differs from the
+    /// address the request came from. Off by default: parties behind NAT or
+    /// with several interfaces legitimately advertise another address, but
+    /// on a flat HPC network turning this on stops a peer from pointing the
+    /// broker's heartbeats at a third party.
+    pub require_matching_host: bool,
+    /// Registrations (services plus clients) accepted per advertised host,
+    /// so one misbehaving node cannot fill the registry.
+    pub max_registrations_per_host: usize,
+}
+
+impl Default for BrokerPolicy {
+    fn default() -> Self {
+        BrokerPolicy {
+            require_matching_host: false,
+            max_registrations_per_host: 64,
+        }
     }
 }
 
@@ -152,6 +180,13 @@ mod tests {
         assert!(!p.has_server_identity());
         p.key = Some("k.pem".into());
         assert!(p.has_server_identity());
+    }
+
+    #[test]
+    fn policy_defaults_are_permissive_but_bounded() {
+        let p = BrokerPolicy::default();
+        assert!(!p.require_matching_host);
+        assert!(p.max_registrations_per_host >= 2);
     }
 
     #[test]

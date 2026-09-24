@@ -10,10 +10,11 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::config::TlsPaths;
+use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, Selector, Transport};
 
 /// NERSC Service Mesh: publish, claim and broker services across HPC systems.
@@ -72,7 +73,6 @@ pub struct TlsOpts {
     pub tls_key: Option<PathBuf>,
 
     /// PEM bundle of root certificates used to verify peers.
-    /// Defaults to the platform trust store.
     #[arg(
         long = "root-ca",
         alias = "root_ca",
@@ -80,6 +80,10 @@ pub struct TlsOpts {
         env = "ROOT_PATH"
     )]
     pub root_ca: Option<PathBuf>,
+
+    /// Trust the platform certificate store when no --root-ca is given.
+    #[arg(long)]
+    pub system_roots: bool,
 }
 
 impl TlsOpts {
@@ -89,7 +93,134 @@ impl TlsOpts {
             cert: self.tls_cert.clone(),
             key: self.tls_key.clone(),
             root_ca: self.root_ca.clone(),
+            system_roots: self.system_roots,
         }
+    }
+}
+
+/// Positive number of seconds, fractions allowed.
+fn parse_secs(s: &str) -> Result<Duration, String> {
+    let secs: f64 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("{s:?} is not a number of seconds"))?;
+    if !secs.is_finite() || secs <= 0.0 {
+        return Err("must be a positive number of seconds".to_owned());
+    }
+    Ok(Duration::from_secs_f64(secs))
+}
+
+/// Overrides for heartbeat and request timing, in seconds. Anything not
+/// given keeps the default from [`Timing`].
+#[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
+pub struct TimingOpts {
+    /// Seconds between heartbeats (broker to party, or party pings).
+    #[arg(long, value_name = "SECS", value_parser = parse_secs)]
+    pub heartbeat_interval: Option<Duration>,
+    /// Seconds one heartbeat may take before it counts as failed.
+    #[arg(long, value_name = "SECS", value_parser = parse_secs)]
+    pub heartbeat_timeout: Option<Duration>,
+    /// Consecutive failed heartbeats after which a party is removed.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+    pub fail_threshold: Option<u32>,
+    /// Seconds of silence after which a pinging party is removed.
+    #[arg(long, value_name = "SECS", value_parser = parse_secs)]
+    pub ping_staleness: Option<Duration>,
+    /// Seconds without a heartbeat after which a party gives up on its broker.
+    #[arg(long, value_name = "SECS", value_parser = parse_secs)]
+    pub broker_watchdog: Option<Duration>,
+    /// Seconds allowed for one request/response exchange.
+    #[arg(long, value_name = "SECS", value_parser = parse_secs)]
+    pub request_timeout: Option<Duration>,
+    /// Seconds allowed for connecting (and the TLS handshake).
+    #[arg(long, value_name = "SECS", value_parser = parse_secs)]
+    pub connect_timeout: Option<Duration>,
+}
+
+impl TimingOpts {
+    /// The defaults with these overrides applied.
+    pub fn timing(&self) -> Timing {
+        let mut t = Timing::default();
+        if let Some(v) = self.heartbeat_interval {
+            t.heartbeat_interval = v;
+        }
+        if let Some(v) = self.heartbeat_timeout {
+            t.heartbeat_timeout = v;
+        }
+        if let Some(v) = self.fail_threshold {
+            t.fail_threshold = v;
+        }
+        if let Some(v) = self.ping_staleness {
+            t.ping_staleness = v;
+        }
+        if let Some(v) = self.broker_watchdog {
+            t.broker_watchdog = v;
+        }
+        if let Some(v) = self.request_timeout {
+            t.request_timeout = v;
+        }
+        if let Some(v) = self.connect_timeout {
+            t.connect_timeout = v;
+        }
+        t
+    }
+}
+
+/// Overrides for size and count limits. Anything not given keeps the
+/// default from [`Limits`].
+#[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
+pub struct LimitsOpts {
+    /// Largest message accepted on any transport, in bytes (at least 1024).
+    #[arg(long, value_name = "BYTES", value_parser = clap::value_parser!(u64).range(1024..))]
+    pub max_frame_bytes: Option<u64>,
+    /// Connections a listener serves concurrently.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_connections: Option<u64>,
+    /// Registrations (services plus clients) a broker holds at once.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_registrations: Option<u64>,
+}
+
+impl LimitsOpts {
+    /// The defaults with these overrides applied.
+    pub fn limits(&self) -> Limits {
+        let mut l = Limits::default();
+        if let Some(v) = self.max_frame_bytes {
+            l.max_frame_bytes = usize::try_from(v).unwrap_or(usize::MAX);
+        }
+        if let Some(v) = self.max_connections {
+            l.max_connections = usize::try_from(v).unwrap_or(usize::MAX);
+        }
+        if let Some(v) = self.max_registrations {
+            l.max_registrations = usize::try_from(v).unwrap_or(usize::MAX);
+        }
+        l
+    }
+}
+
+/// Broker admission policy.
+#[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
+pub struct BrokerOpts {
+    /// Reject parties whose advertised address differs from the one they
+    /// connect from.
+    #[arg(long)]
+    pub require_matching_host: bool,
+    /// Registrations accepted per advertised host.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_registrations_per_host: Option<u64>,
+}
+
+impl BrokerOpts {
+    /// The defaults with these overrides applied.
+    pub fn policy(&self) -> BrokerPolicy {
+        let mut p = BrokerPolicy {
+            require_matching_host: self.require_matching_host,
+            ..BrokerPolicy::default()
+        };
+        if let Some(v) = self.max_registrations_per_host {
+            p.max_registrations_per_host = usize::try_from(v).unwrap_or(usize::MAX);
+        }
+        p
     }
 }
 
@@ -132,6 +263,15 @@ pub enum Command {
         /// TLS options.
         #[command(flatten)]
         tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+        /// Limit overrides.
+        #[command(flatten)]
+        limits: LimitsOpts,
+        /// Admission policy.
+        #[command(flatten)]
+        policy: BrokerOpts,
     },
 
     /// Announce a service to the broker and keep it registered.
@@ -156,6 +296,9 @@ pub enum Command {
         /// TLS options.
         #[command(flatten)]
         tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
     },
 
     /// Ask the broker for a service with a given key and stay paired with it.
@@ -177,6 +320,9 @@ pub enum Command {
         /// TLS options.
         #[command(flatten)]
         tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
     },
 
     /// Fetch what a party is holding: a service's last received message, or a
@@ -193,6 +339,9 @@ pub enum Command {
         /// TLS options.
         #[command(flatten)]
         tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
     },
 
     /// Send a message to a client, to be relayed through the broker to its service.
@@ -211,6 +360,9 @@ pub enum Command {
         /// TLS options.
         #[command(flatten)]
         tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
     },
 
     /// Run the REST control plane that exposes the operations above over HTTP.
@@ -222,6 +374,16 @@ pub enum Command {
         /// Bearer token clients must present (`Authorization: Bearer <TOKEN>`).
         #[arg(long, env = "NSM_TOKEN", value_name = "TOKEN", hide_env_values = true)]
         token: Option<String>,
+        /// TLS material handed to the parties this server starts (`--tls`
+        /// itself has no effect here; a job asks for TLS in its request body).
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides for the parties this server starts.
+        #[command(flatten)]
+        timing: TimingOpts,
+        /// Limit overrides for the parties this server starts.
+        #[command(flatten)]
+        limits: LimitsOpts,
     },
 }
 
@@ -265,6 +427,7 @@ mod tests {
                 ping,
                 iface,
                 tls,
+                timing: _,
             } => {
                 assert_eq!(broker.to_string(), "https://broker:12000");
                 assert_eq!(
@@ -319,11 +482,62 @@ mod tests {
             other => panic!("{other:?}"),
         }
         match parse(&["serve"]).command {
-            Command::Serve { bind, token } => {
+            Command::Serve { bind, token, .. } => {
                 assert!(bind.ip().is_loopback());
                 assert!(token.is_none());
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn timing_and_limit_overrides_parse_and_validate() {
+        match parse(&[
+            "listen",
+            "--bind-port",
+            "1",
+            "--heartbeat-interval",
+            "0.5",
+            "--fail-threshold",
+            "3",
+            "--max-frame-bytes",
+            "4096",
+            "--require-matching-host",
+            "--max-registrations-per-host",
+            "5",
+        ])
+        .command
+        {
+            Command::Listen {
+                timing,
+                limits,
+                policy,
+                ..
+            } => {
+                let t = timing.timing();
+                assert_eq!(t.heartbeat_interval, Duration::from_millis(500));
+                assert_eq!(t.fail_threshold, 3);
+                assert_eq!(t.request_timeout, Timing::default().request_timeout);
+                assert_eq!(limits.limits().max_frame_bytes, 4096);
+                let p = policy.policy();
+                assert!(p.require_matching_host);
+                assert_eq!(p.max_registrations_per_host, 5);
+            }
+            other => panic!("{other:?}"),
+        }
+        for bad in [
+            &["listen", "--bind-port", "1", "--heartbeat-interval", "0"][..],
+            &["listen", "--bind-port", "1", "--heartbeat-interval", "soon"],
+            &["listen", "--bind-port", "1", "--max-frame-bytes", "10"],
+            &["listen", "--bind-port", "1", "--fail-threshold", "0"],
+        ] {
+            let err =
+                Cli::try_parse_from(std::iter::once("nsm").chain(bad.iter().copied())).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{bad:?}"
+            );
         }
     }
 
@@ -344,6 +558,7 @@ mod tests {
                 let p = tls.paths();
                 assert!(p.has_server_identity());
                 assert_eq!(p.root_ca, None);
+                assert!(!p.system_roots);
             }
             other => panic!("{other:?}"),
         }

@@ -7,8 +7,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
-use nsm::cli::{Cli, Command, IfaceOpts, TlsOpts};
-use nsm::config::{Limits, Timing};
+use nsm::cli::{Cli, Command, LimitsOpts, TimingOpts, TlsOpts};
 use nsm::net::Transport;
 use nsm::ops::{self, NetOpts};
 use nsm::{Error, Result};
@@ -38,18 +37,17 @@ fn spawn_signal_handler(shutdown: CancellationToken) {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
-            let mut term = match signal(SignalKind::terminate()) {
-                Ok(s) => s,
+            match signal(SignalKind::terminate()) {
+                Ok(mut term) => {
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {}
+                        _ = term.recv() => {}
+                    }
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "cannot listen for SIGTERM");
                     let _ = tokio::signal::ctrl_c().await;
-                    shutdown.cancel();
-                    return;
                 }
-            };
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
             }
         }
         #[cfg(not(unix))]
@@ -61,21 +59,23 @@ fn spawn_signal_handler(shutdown: CancellationToken) {
     });
 }
 
-fn net_opts(tls: &TlsOpts) -> NetOpts {
+fn net_opts(tls: &TlsOpts, timing: &TimingOpts, limits: &LimitsOpts) -> NetOpts {
     NetOpts {
         tls: tls.paths(),
-        timing: Timing::default(),
-        limits: Limits::default(),
+        timing: timing.timing(),
+        limits: limits.limits(),
     }
 }
 
+/// Whether a party serves TLS on its own listener: when asked with `--tls`
+/// (which then needs an identity), or automatically when its broker speaks
+/// TLS and an identity is configured.
 fn serve_tls(tls: &TlsOpts, broker: Transport) -> Result<bool> {
     if tls.tls && !tls.paths().has_server_identity() {
         return Err(Error::config(
             "--tls needs --tls-cert and --tls-key (or CERT_PATH and KEY_PATH)",
         ));
     }
-    // A party of a TLS broker serves TLS itself when it has an identity.
     Ok(tls.tls || (broker.is_tls() && tls.paths().has_server_identity()))
 }
 
@@ -111,13 +111,17 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
             transport,
             iface,
             tls,
+            timing,
+            limits,
+            policy,
         } => {
             let broker = ops::listen(
                 ops::ListenRequest {
                     transport,
                     bind_port,
                     selector: iface.selector(),
-                    net: net_opts(&tls),
+                    net: net_opts(&tls, &timing, &limits),
+                    policy: policy.policy(),
                 },
                 shutdown,
             )
@@ -133,6 +137,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
             ping,
             iface,
             tls,
+            timing,
         } => {
             let serve_tls = serve_tls(&tls, broker.transport)?;
             let session = ops::publish(ops::PublishRequest {
@@ -143,7 +148,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
                 selector: iface.selector(),
                 serve_tls,
                 ping,
-                net: net_opts(&tls),
+                net: net_opts(&tls, &timing, &LimitsOpts::default()),
             })
             .await?;
             eprintln!(
@@ -160,6 +165,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
             ping,
             iface,
             tls,
+            timing,
         } => {
             let serve_tls = serve_tls(&tls, broker.transport)?;
             let session = ops::claim(ops::ClaimRequest {
@@ -169,7 +175,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
                 selector: iface.selector(),
                 serve_tls,
                 ping,
-                net: net_opts(&tls),
+                net: net_opts(&tls, &timing, &LimitsOpts::default()),
             })
             .await?;
             match session.service() {
@@ -189,8 +195,10 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
             key: _,
             iface: _,
             tls,
+            timing,
         } => {
-            let collected = ops::collect(&party, &net_opts(&tls)).await?;
+            let collected =
+                ops::collect(&party, &net_opts(&tls, &timing, &LimitsOpts::default())).await?;
             match (collected.text, collected.service) {
                 (Some(text), _) => println!("{text}"),
                 (None, Some(service)) => println!("{service}"),
@@ -203,16 +211,28 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
             key: _,
             iface: _,
             tls,
+            timing,
         } => {
-            ops::send(&party, msg, &net_opts(&tls)).await?;
+            ops::send(
+                &party,
+                msg,
+                &net_opts(&tls, &timing, &LimitsOpts::default()),
+            )
+            .await?;
             eprintln!("nsm: delivered");
         }
-        Command::Serve { bind, token } => {
+        Command::Serve {
+            bind,
+            token,
+            tls,
+            timing,
+            limits,
+        } => {
             let control = nsm::rest::serve(
                 nsm::rest::ServeOpts {
                     bind,
                     token,
-                    net: NetOpts::default(),
+                    net: net_opts(&tls, &timing, &limits),
                 },
                 shutdown,
             )
@@ -236,6 +256,3 @@ async fn run_session(session: nsm::party::Session, shutdown: CancellationToken) 
     });
     session.run().await
 }
-
-#[allow(dead_code)]
-fn _unused(_: IfaceOpts) {}

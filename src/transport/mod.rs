@@ -314,6 +314,7 @@ pub(crate) mod testing {
                 cert: Some(cert),
                 key: Some(key),
                 root_ca: Some(ca),
+                system_roots: false,
             },
         )
     }

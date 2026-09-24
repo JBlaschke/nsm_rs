@@ -142,7 +142,7 @@ pub fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
 /// operators there must pass `--root-ca` instead. Note that with the platform
 /// store *any* public CA can issue a certificate the mesh will accept, so an
 /// explicit `--root-ca` is the recommended configuration for mesh traffic.
-pub fn root_store(root_ca: Option<&Path>) -> Result<RootCertStore> {
+pub fn root_store(root_ca: Option<&Path>, system_roots: bool) -> Result<RootCertStore> {
     let mut store = RootCertStore::empty();
     match root_ca {
         Some(path) => {
@@ -164,6 +164,12 @@ pub fn root_store(root_ca: Option<&Path>) -> Result<RootCertStore> {
             debug!(path = %path.display(), added, "loaded root certificates");
         }
         None => {
+            if !system_roots {
+                return Err(Error::config(
+                    "verifying TLS peers needs --root-ca (or --system-roots to trust the \
+                     platform certificate store)",
+                ));
+            }
             let native = rustls_native_certs::load_native_certs();
             for err in &native.errors {
                 warn!(error = %err, "problem loading the platform trust store");
@@ -236,7 +242,7 @@ pub fn server_config(paths: &TlsPaths, alpn: &[&str]) -> Result<Arc<ServerConfig
 ///
 /// Errors are those of [`root_store`].
 pub fn client_config(paths: &TlsPaths, alpn: &[&str]) -> Result<Arc<ClientConfig>> {
-    let roots = root_store(paths.root_ca.as_deref())?;
+    let roots = root_store(paths.root_ca.as_deref(), paths.system_roots)?;
     let mut config = ClientConfig::builder_with_provider(provider()?)
         .with_safe_default_protocol_versions()?
         .with_root_certificates(roots)
@@ -326,6 +332,7 @@ mod tests {
             cert: Some(cert),
             key: Some(key),
             root_ca: Some(ca),
+            system_roots: false,
         };
         (dir, paths)
     }
@@ -344,7 +351,7 @@ mod tests {
         let certs = load_certs(paths.cert.as_deref().expect("cert path")).expect("load certs");
         assert_eq!(certs.len(), 1);
         load_private_key(paths.key.as_deref().expect("key path")).expect("load key");
-        let roots = root_store(paths.root_ca.as_deref()).expect("root store");
+        let roots = root_store(paths.root_ca.as_deref(), false).expect("root store");
         assert_eq!(roots.len(), 1);
     }
 
@@ -354,7 +361,10 @@ mod tests {
         let missing = dir.path().join("does-not-exist.pem");
         assert!(matches!(load_certs(&missing), Err(Error::Io(_))));
         assert!(matches!(load_private_key(&missing), Err(Error::Io(_))));
-        assert!(matches!(root_store(Some(&missing)), Err(Error::Io(_))));
+        assert!(matches!(
+            root_store(Some(&missing), false),
+            Err(Error::Io(_))
+        ));
     }
 
     #[test]
@@ -364,7 +374,10 @@ mod tests {
         std::fs::write(&junk, "this is not PEM\n").expect("write junk");
         assert!(matches!(load_certs(&junk), Err(Error::Config(_))));
         assert!(matches!(load_private_key(&junk), Err(Error::Pem(_))));
-        assert!(matches!(root_store(Some(&junk)), Err(Error::Config(_))));
+        assert!(matches!(
+            root_store(Some(&junk), false),
+            Err(Error::Config(_))
+        ));
 
         let truncated = dir.path().join("truncated.pem");
         std::fs::write(&truncated, "-----BEGIN CERTIFICATE-----\nAAAA\n").expect("write");
@@ -417,7 +430,11 @@ mod tests {
 
     #[test]
     fn platform_trust_store_is_an_error_or_a_store_never_a_panic() {
-        match root_store(None) {
+        match root_store(None, false) {
+            Err(Error::Config(msg)) => assert!(msg.contains("--root-ca"), "{msg}"),
+            other => panic!("the platform store must be opt-in, got {other:?}"),
+        }
+        match root_store(None, true) {
             Ok(store) => assert!(!store.is_empty()),
             Err(Error::Config(_)) => {}
             Err(other) => panic!("unexpected error from the platform store: {other}"),
