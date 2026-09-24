@@ -16,26 +16,32 @@
 //! | [`net`] | address grammar and local interface enumeration |
 //! | [`protocol`] | typed wire messages and framing shared by all transports |
 //! | [`tls`] | rustls configuration from PEM files |
+//! | [`transport`] | one request, one reply over TCP, TLS, HTTP or HTTPS; the `Handler` trait |
+//! | [`broker`] | registry, heartbeat monitor and request handler of the broker |
+//! | [`party`] | the service and client sides: bind, register, stay alive |
+//! | [`ops`] | the operations, typed and print-free, shared by the CLI and the control plane |
+//! | [`rest`] | the REST control plane behind `nsm serve` |
 //! | [`logging`] | `tracing` initialisation honouring `NSM_LOG_LEVEL` |
-//! | [`legacy`] | the pre-cleanup implementation, kept compiling until the new backend replaces it |
 //!
-//! The `legacy` module is on its way out: it is excluded from formatting and
-//! lints and will be deleted by the `cleanup/03-common-backend` branch. New
-//! code must not depend on it except through [`legacy::run`].
+//! Import direction is strictly downward: `main` → [`cli`] → [`rest`]/[`ops`]
+//! → [`broker`]/[`party`] → [`transport`] → [`protocol`]/[`net`]/[`tls`] →
+//! [`config`]/[`error`]. Nothing below `main` prints to stdout, panics on peer
+//! input or exits the process.
 
 #![deny(clippy::let_underscore_future, unused_must_use)]
 #![warn(missing_docs, rustdoc::broken_intra_doc_links)]
 
+pub mod broker;
 pub mod cli;
 pub mod config;
 pub mod error;
 pub mod logging;
 pub mod net;
+pub mod ops;
+pub mod party;
 pub mod protocol;
+pub mod rest;
 pub mod tls;
-
-#[allow(warnings, clippy::all, missing_docs)]
-#[rustfmt::skip]
-pub mod legacy;
+pub mod transport;
 
 pub use error::{Error, Result};
