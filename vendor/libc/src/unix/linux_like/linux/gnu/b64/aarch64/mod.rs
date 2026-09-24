@@ -1,22 +1,24 @@
 //! AArch64-specific definitions for 64-bit linux-like values
 
 use crate::prelude::*;
-use crate::{off64_t, off_t};
+use crate::{
+    off64_t,
+    off_t,
+};
 
-pub type c_char = u8;
 pub type wchar_t = u32;
 pub type nlink_t = u32;
 pub type blksize_t = i32;
 pub type suseconds_t = i64;
-pub type __u64 = c_ulonglong;
-pub type __s64 = c_longlong;
 
 s! {
+    // FIXME(1.0): This should not implement `PartialEq`
+    #[allow(unpredictable_function_pointer_comparisons)]
     pub struct sigaction {
         pub sa_sigaction: crate::sighandler_t,
         pub sa_mask: crate::sigset_t,
         #[cfg(target_arch = "sparc64")]
-        __reserved0: c_int,
+        __reserved0: Padding<c_int>,
         pub sa_flags: c_int,
         pub sa_restorer: Option<extern "C" fn()>,
     }
@@ -61,10 +63,10 @@ s! {
         pub st_uid: crate::uid_t,
         pub st_gid: crate::gid_t,
         pub st_rdev: crate::dev_t,
-        __pad1: crate::dev_t,
+        __pad1: Padding<crate::dev_t>,
         pub st_size: off_t,
         pub st_blksize: crate::blksize_t,
-        __pad2: c_int,
+        __pad2: Padding<c_int>,
         pub st_blocks: crate::blkcnt_t,
         pub st_atime: crate::time_t,
         pub st_atime_nsec: c_long,
@@ -72,7 +74,7 @@ s! {
         pub st_mtime_nsec: c_long,
         pub st_ctime: crate::time_t,
         pub st_ctime_nsec: c_long,
-        __unused: [c_int; 2],
+        __unused: Padding<[c_int; 2]>,
     }
 
     pub struct stat64 {
@@ -83,10 +85,10 @@ s! {
         pub st_uid: crate::uid_t,
         pub st_gid: crate::gid_t,
         pub st_rdev: crate::dev_t,
-        __pad1: crate::dev_t,
+        __pad1: Padding<crate::dev_t>,
         pub st_size: off64_t,
         pub st_blksize: crate::blksize_t,
-        __pad2: c_int,
+        __pad2: Padding<c_int>,
         pub st_blocks: crate::blkcnt64_t,
         pub st_atime: crate::time_t,
         pub st_atime_nsec: c_long,
@@ -94,7 +96,7 @@ s! {
         pub st_mtime_nsec: c_long,
         pub st_ctime: crate::time_t,
         pub st_ctime_nsec: c_long,
-        __unused: [c_int; 2],
+        __unused: Padding<[c_int; 2]>,
     }
 
     pub struct statfs64 {
@@ -161,9 +163,9 @@ s! {
         pub cgid: crate::gid_t,
         pub mode: c_uint,
         pub __seq: c_ushort,
-        __pad1: c_ushort,
-        __unused1: c_ulong,
-        __unused2: c_ulong,
+        __pad1: Padding<c_ushort>,
+        __unused1: Padding<c_ulong>,
+        __unused2: Padding<c_ulong>,
     }
 
     pub struct shmid_ds {
@@ -175,8 +177,8 @@ s! {
         pub shm_cpid: crate::pid_t,
         pub shm_lpid: crate::pid_t,
         pub shm_nattch: crate::shmatt_t,
-        __unused4: c_ulong,
-        __unused5: c_ulong,
+        __unused4: Padding<c_ulong>,
+        __unused5: Padding<c_ulong>,
     }
 
     pub struct siginfo_t {
@@ -215,11 +217,11 @@ s! {
         pub sp: c_ulonglong,
         pub pc: c_ulonglong,
         pub pstate: c_ulonglong,
-        __reserved: [u64; 512],
+        __reserved: Padding<[u64; 512]>,
     }
 
     pub struct user_fpsimd_struct {
-        pub vregs: [crate::__uint128_t; 32],
+        pub vregs: [u128; 32],
         pub fpsr: c_uint,
         pub fpcr: c_uint,
     }
@@ -241,7 +243,6 @@ s! {
 }
 
 s_no_extra_traits! {
-    #[allow(missing_debug_implementations)]
     #[repr(align(16))]
     pub struct max_align_t {
         priv_: [f32; 8],
@@ -439,7 +440,7 @@ pub const EPROTO: c_int = 71;
 pub const EDOTDOT: c_int = 73;
 
 pub const SA_NODEFER: c_int = 0x40000000;
-pub const SA_RESETHAND: c_int = 0x80000000;
+pub const SA_RESETHAND: c_int = u32_cast_int(0x80000000);
 pub const SA_RESTART: c_int = 0x10000000;
 pub const SA_NOCLDSTOP: c_int = 0x00000001;
 
@@ -602,7 +603,7 @@ pub const HWCAP_SSBS: c_ulong = 1 << 28;
 pub const HWCAP_SB: c_ulong = 1 << 29;
 pub const HWCAP_PACA: c_ulong = 1 << 30;
 pub const HWCAP_PACG: c_ulong = 1 << 31;
-// FIXME: enable these again once linux-api-headers are up to date enough on CI.
+// FIXME(linux): enable these again once linux-api-headers are up to date enough on CI.
 // See discussion in https://github.com/rust-lang/libc/pull/1638
 //pub const HWCAP2_DCPODP: c_ulong = 1 << 0;
 //pub const HWCAP2_SVE2: c_ulong = 1 << 1;
@@ -709,6 +710,7 @@ pub const SYS_pread64: c_long = 67;
 pub const SYS_pwrite64: c_long = 68;
 pub const SYS_preadv: c_long = 69;
 pub const SYS_pwritev: c_long = 70;
+pub const SYS_sendfile: c_long = 71;
 pub const SYS_pselect6: c_long = 72;
 pub const SYS_ppoll: c_long = 73;
 pub const SYS_signalfd4: c_long = 74;
@@ -860,6 +862,7 @@ pub const SYS_keyctl: c_long = 219;
 pub const SYS_clone: c_long = 220;
 pub const SYS_execve: c_long = 221;
 pub const SYS_mmap: c_long = 222;
+pub const SYS_fadvise64: c_long = 223;
 pub const SYS_swapon: c_long = 224;
 pub const SYS_swapoff: c_long = 225;
 pub const SYS_mprotect: c_long = 226;

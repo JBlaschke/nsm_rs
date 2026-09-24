@@ -96,6 +96,7 @@ where
         target_os = "watchos",
         target_os = "espidf",
         target_os = "vita",
+        target_os = "horizon",
     )))]
     let flags = flags | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC;
 
@@ -120,6 +121,7 @@ where
         target_os = "watchos",
         target_os = "espidf",
         target_os = "vita",
+        target_os = "horizon"
     ))]
     {
         syscall!(fcntl(fds[0], libc::F_SETFL, libc::O_NONBLOCK))?;
@@ -158,6 +160,9 @@ mod tests {
     #[test]
     #[cfg(any(target_os = "android", target_os = "linux"))]
     fn abstract_address() {
+        #[cfg(target_os = "android")]
+        use std::os::android::net::SocketAddrExt;
+        #[cfg(target_os = "linux")]
         use std::os::linux::net::SocketAddrExt;
 
         const PATH: &[u8] = &[0, 116, 111, 107, 105, 111];

@@ -17,11 +17,19 @@
 //! reduce the risks of algorithm agility and to provide consistency with ECDSA
 //! and `EdDSA`.
 //!
-//! Currently this module does not support digesting the message to be signed
-//! separately from the public key operation, as it is currently being
-//! optimized for Ed25519 and for the implementation of protocols that do not
-//! requiring signing large messages. An interface for efficiently supporting
-//! larger messages may be added later.
+//! For most use cases, prefer passing the full message to the signing and
+//! verification APIs, which hash it as part of the operation. Signing and
+//! verifying a separately-computed digest is also supported for ECDSA and RSA:
+//! [`EcdsaKeyPair::sign_digest`] and [`RsaKeyPair::sign_digest`] sign a
+//! caller-provided digest, and [`ParsedPublicKey::verify_digest_sig`] (or
+//! [`VerificationAlgorithm::verify_digest_sig`]) verifies one. This is useful
+//! when the digest is produced elsewhere. Construct the `Digest` from the
+//! externally-computed bytes with [`Digest::import_less_safe`], which shifts to
+//! the caller the responsibility of ensuring the digest really is the hash of
+//! the intended message.
+//!
+//! This module is optimized for signing messages that are available in full,
+//! rather than streaming or incrementally-hashed large messages.
 //!
 //!
 //! # Algorithm Details
@@ -97,6 +105,19 @@
 //! signature using the secure random number generator passed to `sign()`.
 //!
 //!
+//! ## `ML_DSA_*` Details: ML-DSA (FIPS 204) Signatures
+//!
+//! The signature is the raw ML-DSA signature encoding described in [FIPS 204].
+//! Signing and verification use the "pure" ML-DSA mode with an empty context
+//! string. The pre-hash (HashML-DSA) mode is not supported, and neither is the
+//! "external mu" variant, in which the message representative `mu` is computed
+//! separately and signed or verified in place of the message.
+//!
+//! The public key may be provided either as the raw public key bytes or as a
+//! DER-encoded X.509 `SubjectPublicKeyInfo` structure; both encodings are
+//! accepted by `UnparsedPublicKey` and `ParsedPublicKey`.
+//!
+//!
 //! [SEC 1: Elliptic Curve Cryptography, Version 2.0]:
 //!     http://www.secg.org/sec1-v2.pdf
 //! [NIST Special Publication 800-56A, revision 2]:
@@ -111,6 +132,8 @@
 //!     https://tools.ietf.org/html/rfc3447#section-8.1
 //! [RFC 3447 Appendix-A.1.1]:
 //!     https://tools.ietf.org/html/rfc3447#appendix-A.1.1
+//! [FIPS 204]:
+//!     https://csrc.nist.gov/pubs/fips/204/final
 //!
 //!
 //! # Examples
@@ -124,14 +147,8 @@
 //! };
 //!
 //! fn main() -> Result<(), aws_lc_rs::error::Unspecified> {
-//!     // Generate a key pair in PKCS#8 (v1) format.
-//!     let rng = rand::SystemRandom::new();
-//!     let pkcs8_bytes = signature::Ed25519KeyPair::generate_pkcs8v1(&rng)?;
-//!
-//!     // Normally the application would store the PKCS#8 file persistently. Later
-//!     // it would read the PKCS#8 file from persistent storage to use it.
-//!
-//!     let key_pair = signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(pkcs8_bytes.as_ref())?;
+//!     // Generate a new key pair for Ed25519.
+//!     let key_pair = signature::Ed25519KeyPair::generate()?;
 //!
 //!     // Sign the message "hello, world".
 //!     const MESSAGE: &[u8] = b"hello, world";
@@ -148,6 +165,31 @@
 //!     let peer_public_key =
 //!         signature::UnparsedPublicKey::new(&signature::ED25519, peer_public_key_bytes);
 //!     peer_public_key.verify(MESSAGE, sig.as_ref())?;
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Signing and verifying with ML-DSA-44
+//!
+//! ```
+//! use aws_lc_rs::encoding::AsDer;
+//! use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, UnparsedPublicKey, ML_DSA_44, ML_DSA_44_SIGNING};
+//!
+//! fn main() -> Result<(), aws_lc_rs::error::Unspecified> {
+//!     let signing_alg = &ML_DSA_44_SIGNING;
+//!     let key_pair = PqdsaKeyPair::generate(signing_alg)?;
+//!
+//!     // Sign the message "hello, world".
+//!     const MESSAGE: &[u8] = b"hello, world";
+//!     let mut signature = vec![0; signing_alg.signature_len()];
+//!     let signature_len = key_pair.sign(MESSAGE, &mut signature)?;
+//!     assert_eq!(signature_len, signature.len());
+//!
+//!     // Verify the signature.
+//!     let public_key_bytes = key_pair.public_key().as_der()?;
+//!     let public_key = UnparsedPublicKey::new(&ML_DSA_44, public_key_bytes.as_ref());
+//!     public_key.verify(MESSAGE, &signature)?;
 //!
 //!     Ok(())
 //! }
@@ -232,45 +274,55 @@
 //! }
 //!
 //! fn main() {
+//! #   if !cfg!(target_arch = "wasm32") {
 //!     let private_key_path =
 //!         std::path::Path::new("tests/data/signature_rsa_example_private_key.der");
 //!     let public_key_path =
 //!         std::path::Path::new("tests/data/signature_rsa_example_public_key.der");
 //!     sign_and_verify_rsa(&private_key_path, &public_key_path).unwrap()
+//! #   }
 //! }
 //! ```
+use crate::aws_lc::EVP_PKEY;
+pub use crate::rsa::signature::{RsaEncoding, RsaSignatureEncoding};
+pub use crate::rsa::{
+    KeyPair as RsaKeyPair, PublicKey as RsaSubjectPublicKey,
+    PublicKeyComponents as RsaPublicKeyComponents, RsaParameters,
+};
 use core::fmt::{Debug, Formatter};
-
+use std::any::{Any, TypeId};
 #[cfg(feature = "ring-sig-verify")]
 use untrusted::Input;
 
-pub use crate::rsa::{
-    signature::RsaEncoding, KeyPair as RsaKeyPair, PublicKey as RsaSubjectPublicKey,
-    PublicKeyComponents as RsaPublicKeyComponents, RsaParameters,
-};
-
-use crate::rsa::{
-    signature::{RsaSignatureEncoding, RsaSigningAlgorithmId},
-    RsaVerificationAlgorithmId,
-};
+use crate::rsa::signature::RsaSigningAlgorithmId;
+use crate::rsa::RsaVerificationAlgorithmId;
 
 pub use crate::ec::key_pair::{EcdsaKeyPair, PrivateKey as EcdsaPrivateKey};
-use crate::ec::EcdsaSignatureFormat;
-pub use crate::ec::{
+use crate::ec::signature::EcdsaSignatureFormat;
+pub use crate::ec::signature::{
     EcdsaSigningAlgorithm, EcdsaVerificationAlgorithm, PublicKey as EcdsaPublicKey,
 };
 pub use crate::ed25519::{
-    Ed25519KeyPair, EdDSAParameters, Seed as Ed25519Seed, ED25519_PUBLIC_KEY_LEN,
+    Ed25519KeyPair, EdDSAParameters, PublicKey as Ed25519PublicKey, Seed as Ed25519Seed,
+    ED25519_PUBLIC_KEY_LEN,
 };
-use crate::rsa;
-use crate::{digest, ec, error, hex, sealed};
+pub use crate::pqdsa::key_pair::{PqdsaKeyPair, PqdsaPrivateKey};
+pub use crate::pqdsa::signature::{
+    PqdsaSigningAlgorithm, PqdsaVerificationAlgorithm, PublicKey as PqdsaPublicKey,
+};
 
-/// The longest signature is an ASN.1 P-384 signature where *r* and *s* are of
-/// maximum length with the leading high bit set on each. Then each component
-/// will have a tag, a one-byte length, and a one-byte “I'm not negative”
-/// prefix, and the outer sequence will have a two-byte length.
-pub(crate) const MAX_LEN: usize = 1/*tag:SEQUENCE*/ + 2/*len*/ +
-    (2 * (1/*tag:INTEGER*/ + 1/*len*/ + 1/*zero*/ + ec::SCALAR_MAX_BYTES));
+use crate::digest::Digest;
+use crate::ec::encoding::parse_ec_public_key;
+use crate::ed25519::parse_ed25519_public_key;
+use crate::encoding::{AsDer, PublicKeyX509Der};
+use crate::error::{KeyRejected, Unspecified};
+use crate::pqdsa::{parse_pqdsa_public_key, AlgorithmID as PqdsaAlgorithmID};
+use crate::ptr::LcPtr;
+use crate::rsa::key::parse_rsa_public_key;
+use crate::{digest, ec, error, hex, rsa, sealed};
+
+/// The longest signature is for ML-DSA-87
+pub(crate) const MAX_LEN: usize = 4627;
 
 /// A public key signature returned from a signing operation.
 #[derive(Clone, Copy)]
@@ -310,8 +362,25 @@ pub trait KeyPair: Debug + Send + Sized + Sync {
     fn public_key(&self) -> &Self::PublicKey;
 }
 
+// Private trait
+pub(crate) trait ParsedVerificationAlgorithm: Debug + Sync {
+    fn parsed_verify_sig(
+        &self,
+        public_key: &ParsedPublicKey,
+        msg: &[u8],
+        signature: &[u8],
+    ) -> Result<(), error::Unspecified>;
+
+    fn parsed_verify_digest_sig(
+        &self,
+        public_key: &ParsedPublicKey,
+        digest: &Digest,
+        signature: &[u8],
+    ) -> Result<(), error::Unspecified>;
+}
+
 /// A signature verification algorithm.
-pub trait VerificationAlgorithm: Debug + Sync + sealed::Sealed {
+pub trait VerificationAlgorithm: Debug + Sync + Any + sealed::Sealed {
     /// Verify the signature `signature` of message `msg` with the public key
     /// `public_key`.
     ///
@@ -349,6 +418,20 @@ pub trait VerificationAlgorithm: Debug + Sync + sealed::Sealed {
         msg: &[u8],
         signature: &[u8],
     ) -> Result<(), error::Unspecified>;
+
+    /// Verify the signature `signature` of `digest` with the `public_key`.
+    ///
+    // # FIPS
+    // Not approved.
+    //
+    /// # Errors
+    /// `error::Unspecified` if inputs not verified.
+    fn verify_digest_sig(
+        &self,
+        public_key: &[u8],
+        digest: &Digest,
+        signature: &[u8],
+    ) -> Result<(), error::Unspecified>;
 }
 
 /// An unparsed, possibly malformed, public key for signature verification.
@@ -356,6 +439,185 @@ pub trait VerificationAlgorithm: Debug + Sync + sealed::Sealed {
 pub struct UnparsedPublicKey<B: AsRef<[u8]>> {
     algorithm: &'static dyn VerificationAlgorithm,
     bytes: B,
+}
+/// A parsed public key for signature verification.
+///
+/// A `ParsedPublicKey` can be created in two ways:
+/// - Directly from public key bytes using [`ParsedPublicKey::new`]
+/// - By parsing an `UnparsedPublicKey` using [`UnparsedPublicKey::parse`]
+///
+/// This pre-validates the public key format and stores the parsed key material,
+/// allowing for more efficient signature verification operations compared to
+/// parsing the key on each verification.
+///
+/// See the [`crate::signature`] module-level documentation for examples.
+#[derive(Clone)]
+pub struct ParsedPublicKey {
+    algorithm: &'static dyn VerificationAlgorithm,
+    parsed_algorithm: &'static dyn ParsedVerificationAlgorithm,
+    key: LcPtr<EVP_PKEY>,
+    bytes: Box<[u8]>,
+}
+
+// See EVP_PKEY documentation here:
+// https://github.com/aws/aws-lc/blob/125af14c57451565b875fbf1282a38a6ecf83782/include/openssl/evp.h#L83-L89
+// An |EVP_PKEY| object represents a public or private key. A given object may
+// be used concurrently on multiple threads by non-mutating functions, provided
+// no other thread is concurrently calling a mutating function. Unless otherwise
+// documented, functions which take a |const| pointer are non-mutating and
+// functions which take a non-|const| pointer are mutating.
+unsafe impl Send for ParsedPublicKey {}
+unsafe impl Sync for ParsedPublicKey {}
+
+impl ParsedPublicKey {
+    /// Creates a new `ParsedPublicKey` directly from public key bytes.
+    ///
+    /// This method validates the public key format and creates a `ParsedPublicKey`
+    /// that can be used for efficient signature verification operations.
+    ///
+    /// # Errors
+    /// `KeyRejected` if the public key bytes are malformed or incompatible
+    /// with the specified algorithm.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use aws_lc_rs::signature::{self, ParsedPublicKey};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let parsed_key = ParsedPublicKey::new(&signature::ED25519, include_bytes!("../tests/data/ed25519_test_public_key.bin"))?;
+    ///     let signature = [
+    ///         0xED, 0xDB, 0x67, 0xE9, 0xF7, 0x8C, 0x9A, 0x0, 0xFD, 0xEE, 0x2D, 0x22, 0x21, 0xA3, 0x9A,
+    ///         0x8A, 0x79, 0xF2, 0x53, 0x88, 0x78, 0xF0, 0xA0, 0x1, 0x80, 0xA, 0x49, 0xA4, 0x17, 0x88,
+    ///         0xAB, 0x44, 0x4B, 0xD2, 0x58, 0xB0, 0x3B, 0x51, 0x8A, 0x1B, 0x61, 0x24, 0x52, 0x78, 0x48,
+    ///         0x58, 0x40, 0x5, 0xB5, 0x45, 0x22, 0xB6, 0x40, 0xBD, 0x14, 0x47, 0xB1, 0xF0, 0xDC, 0x13,
+    ///         0xB3, 0xE9, 0xD0, 0x6,
+    ///     ];
+    ///     assert!(parsed_key.verify_sig(b"hello world!", &signature).is_ok());
+    ///     assert!(parsed_key.verify_sig(b"hello world.", &signature).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new<B: AsRef<[u8]>>(
+        algorithm: &'static dyn VerificationAlgorithm,
+        bytes: B,
+    ) -> Result<Self, KeyRejected> {
+        parse_public_key(bytes.as_ref(), algorithm)
+    }
+
+    /// Returns the algorithm used by this public key.
+    #[must_use]
+    pub fn algorithm(&self) -> &'static dyn VerificationAlgorithm {
+        self.algorithm
+    }
+
+    pub(crate) fn key(&self) -> &LcPtr<EVP_PKEY> {
+        &self.key
+    }
+
+    /// Constructs a `ParsedPublicKey` directly from an already-built RSA
+    /// `EVP_PKEY`, skipping the DER-encode / DER-decode round-trip that
+    /// [`parse_public_key`] would otherwise perform. The SubjectPublicKeyInfo
+    /// DER is still marshalled once so that [`AsRef<[u8]>`] on the resulting
+    /// `ParsedPublicKey` continues to return a canonical encoding.
+    ///
+    /// `params` is used as both the public [`VerificationAlgorithm`] and the
+    /// internal `ParsedVerificationAlgorithm`, matching what
+    /// [`parse_public_key`] would assign for RSA inputs.
+    pub(crate) fn from_rsa_evp_pkey(
+        params: &'static RsaParameters,
+        key: LcPtr<EVP_PKEY>,
+    ) -> Result<Self, Unspecified> {
+        let bytes = key
+            .as_const()
+            .marshal_rfc5280_public_key()?
+            .into_boxed_slice();
+        Ok(ParsedPublicKey {
+            algorithm: params,
+            parsed_algorithm: params,
+            key,
+            bytes,
+        })
+    }
+
+    /// Uses the public key to verify that `signature` is a valid signature of
+    /// `message`.
+    ///
+    /// This method is more efficient than [`UnparsedPublicKey::verify`] when
+    /// performing multiple signature verifications with the same public key,
+    /// as the key parsing overhead is avoided.
+    ///
+    /// See the [`crate::signature`] module-level documentation for examples.
+    ///
+    // # FIPS
+    // The following conditions must be met:
+    // * RSA Key Sizes: 1024, 2048, 3072, 4096
+    // * NIST Elliptic Curves: P256, P384, P521
+    // * Digest Algorithms: SHA1, SHA256, SHA384, SHA512
+    //
+    /// # Errors
+    /// `error::Unspecified` if the signature is invalid or verification fails.
+    #[inline]
+    pub fn verify_sig(&self, message: &[u8], signature: &[u8]) -> Result<(), error::Unspecified> {
+        self.parsed_algorithm
+            .parsed_verify_sig(self, message, signature)
+    }
+
+    /// Uses the public key to verify that `signature` is a valid signature of
+    /// `digest`.
+    ///
+    /// This method is more efficient than [`UnparsedPublicKey::verify_digest`] when
+    /// performing multiple signature verifications with the same public key,
+    /// as the key parsing overhead is avoided.
+    ///
+    /// See the [`crate::signature`] module-level documentation for examples.
+    ///
+    // # FIPS
+    // Not allowed
+    //
+    /// # Errors
+    /// `error::Unspecified` if the signature is invalid or verification fails.
+    #[inline]
+    pub fn verify_digest_sig(
+        &self,
+        digest: &Digest,
+        signature: &[u8],
+    ) -> Result<(), error::Unspecified> {
+        self.parsed_algorithm
+            .parsed_verify_digest_sig(self, digest, signature)
+    }
+}
+
+impl AsDer<PublicKeyX509Der<'static>> for ParsedPublicKey {
+    fn as_der(&self) -> Result<PublicKeyX509Der<'static>, Unspecified> {
+        Ok(PublicKeyX509Der::new(
+            self.key.as_const().marshal_rfc5280_public_key()?,
+        ))
+    }
+}
+
+/// Provides the original bytes from which this key was parsed
+impl AsRef<[u8]> for ParsedPublicKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl Debug for ParsedPublicKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&format!(
+            "ParsedPublicKey {{ algorithm: {:?}, bytes: \"{}\" }}",
+            self.algorithm,
+            hex::encode(self.bytes.as_ref())
+        ))
+    }
+}
+
+impl<B: AsRef<[u8]>> AsRef<[u8]> for UnparsedPublicKey<B> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.bytes.as_ref()
+    }
 }
 
 impl<B: Copy + AsRef<[u8]>> Copy for UnparsedPublicKey<B> {}
@@ -397,10 +659,92 @@ impl<B: AsRef<[u8]>> UnparsedPublicKey<B> {
         self.algorithm
             .verify_sig(self.bytes.as_ref(), message, signature)
     }
+
+    /// Parses the public key and verifies `signature` is a valid signature of
+    /// `digest` using it.
+    ///
+    /// See the [`crate::signature`] module-level documentation for examples.
+    ///
+    // # FIPS
+    // Not allowed
+    //
+    /// # Errors
+    /// `error::Unspecified` if inputs not verified.
+    #[inline]
+    pub fn verify_digest(
+        &self,
+        digest: &Digest,
+        signature: &[u8],
+    ) -> Result<(), error::Unspecified> {
+        self.algorithm
+            .verify_digest_sig(self.bytes.as_ref(), digest, signature)
+    }
+
+    /// Parses the public key bytes and returns a `ParsedPublicKey`.
+    ///
+    /// This method validates the public key format and creates a `ParsedPublicKey`
+    /// that can be used for more efficient signature verification operations.
+    /// The parsing overhead is incurred once, making subsequent verifications
+    /// faster compared to using `UnparsedPublicKey::verify` directly.
+    ///
+    /// This is equivalent to calling [`ParsedPublicKey::new`] with the same
+    /// algorithm and bytes.
+    ///
+    /// # Errors
+    /// `KeyRejected` if the public key bytes are malformed or incompatible
+    /// with the specified algorithm.
+    pub fn parse(&self) -> Result<ParsedPublicKey, KeyRejected> {
+        parse_public_key(self.bytes.as_ref(), self.algorithm)
+    }
+}
+
+pub(crate) fn parse_public_key(
+    bytes: &[u8],
+    algorithm: &'static dyn VerificationAlgorithm,
+) -> Result<ParsedPublicKey, KeyRejected> {
+    let parsed_algorithm: &'static dyn ParsedVerificationAlgorithm;
+
+    let key = if algorithm.type_id() == TypeId::of::<EcdsaVerificationAlgorithm>() {
+        #[allow(clippy::cast_ptr_alignment)]
+        let ec_alg = unsafe {
+            &*(algorithm as *const dyn VerificationAlgorithm).cast::<EcdsaVerificationAlgorithm>()
+        };
+        parsed_algorithm = ec_alg;
+        parse_ec_public_key(bytes, ec_alg.id.nid())?
+    } else if algorithm.type_id() == TypeId::of::<EdDSAParameters>() {
+        #[allow(clippy::cast_ptr_alignment)]
+        let ed_alg =
+            unsafe { &*(algorithm as *const dyn VerificationAlgorithm).cast::<EdDSAParameters>() };
+        parsed_algorithm = ed_alg;
+        parse_ed25519_public_key(bytes)?
+    } else if algorithm.type_id() == TypeId::of::<RsaParameters>() {
+        #[allow(clippy::cast_ptr_alignment)]
+        let rsa_alg =
+            unsafe { &*(algorithm as *const dyn VerificationAlgorithm).cast::<RsaParameters>() };
+        parsed_algorithm = rsa_alg;
+        parse_rsa_public_key(bytes)?
+    } else if algorithm.type_id() == TypeId::of::<PqdsaVerificationAlgorithm>() {
+        #[allow(clippy::cast_ptr_alignment)]
+        let pqdsa_alg = unsafe {
+            &*(algorithm as *const dyn VerificationAlgorithm).cast::<PqdsaVerificationAlgorithm>()
+        };
+        parsed_algorithm = pqdsa_alg;
+        parse_pqdsa_public_key(bytes, pqdsa_alg.id)?
+    } else {
+        unreachable!()
+    };
+
+    let bytes = bytes.to_vec().into_boxed_slice();
+    Ok(ParsedPublicKey {
+        algorithm,
+        parsed_algorithm,
+        key,
+        bytes,
+    })
 }
 
 /// Verification of signatures using RSA keys of 1024-8192 bits, PKCS#1.5 padding, and SHA-1.
-pub static RSA_PKCS1_1024_8192_SHA1_FOR_LEGACY_USE_ONLY: RsaParameters = RsaParameters::new(
+pub const RSA_PKCS1_1024_8192_SHA1_FOR_LEGACY_USE_ONLY: RsaParameters = RsaParameters::new(
     &digest::SHA1_FOR_LEGACY_USE_ONLY,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     1024..=8192,
@@ -408,7 +752,7 @@ pub static RSA_PKCS1_1024_8192_SHA1_FOR_LEGACY_USE_ONLY: RsaParameters = RsaPara
 );
 
 /// Verification of signatures using RSA keys of 1024-8192 bits, PKCS#1.5 padding, and SHA-256.
-pub static RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY: RsaParameters = RsaParameters::new(
+pub const RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY: RsaParameters = RsaParameters::new(
     &digest::SHA256,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     1024..=8192,
@@ -416,7 +760,7 @@ pub static RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY: RsaParameters = RsaPa
 );
 
 /// Verification of signatures using RSA keys of 1024-8192 bits, PKCS#1.5 padding, and SHA-512.
-pub static RSA_PKCS1_1024_8192_SHA512_FOR_LEGACY_USE_ONLY: RsaParameters = RsaParameters::new(
+pub const RSA_PKCS1_1024_8192_SHA512_FOR_LEGACY_USE_ONLY: RsaParameters = RsaParameters::new(
     &digest::SHA512,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     1024..=8192,
@@ -424,7 +768,7 @@ pub static RSA_PKCS1_1024_8192_SHA512_FOR_LEGACY_USE_ONLY: RsaParameters = RsaPa
 );
 
 /// Verification of signatures using RSA keys of 2048-8192 bits, PKCS#1.5 padding, and SHA-1.
-pub static RSA_PKCS1_2048_8192_SHA1_FOR_LEGACY_USE_ONLY: RsaParameters = RsaParameters::new(
+pub const RSA_PKCS1_2048_8192_SHA1_FOR_LEGACY_USE_ONLY: RsaParameters = RsaParameters::new(
     &digest::SHA1_FOR_LEGACY_USE_ONLY,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     2048..=8192,
@@ -432,7 +776,7 @@ pub static RSA_PKCS1_2048_8192_SHA1_FOR_LEGACY_USE_ONLY: RsaParameters = RsaPara
 );
 
 /// Verification of signatures using RSA keys of 2048-8192 bits, PKCS#1.5 padding, and SHA-256.
-pub static RSA_PKCS1_2048_8192_SHA256: RsaParameters = RsaParameters::new(
+pub const RSA_PKCS1_2048_8192_SHA256: RsaParameters = RsaParameters::new(
     &digest::SHA256,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     2048..=8192,
@@ -440,7 +784,7 @@ pub static RSA_PKCS1_2048_8192_SHA256: RsaParameters = RsaParameters::new(
 );
 
 /// Verification of signatures using RSA keys of 2048-8192 bits, PKCS#1.5 padding, and SHA-384.
-pub static RSA_PKCS1_2048_8192_SHA384: RsaParameters = RsaParameters::new(
+pub const RSA_PKCS1_2048_8192_SHA384: RsaParameters = RsaParameters::new(
     &digest::SHA384,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     2048..=8192,
@@ -448,7 +792,7 @@ pub static RSA_PKCS1_2048_8192_SHA384: RsaParameters = RsaParameters::new(
 );
 
 /// Verification of signatures using RSA keys of 2048-8192 bits, PKCS#1.5 padding, and SHA-512.
-pub static RSA_PKCS1_2048_8192_SHA512: RsaParameters = RsaParameters::new(
+pub const RSA_PKCS1_2048_8192_SHA512: RsaParameters = RsaParameters::new(
     &digest::SHA512,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     2048..=8192,
@@ -456,7 +800,7 @@ pub static RSA_PKCS1_2048_8192_SHA512: RsaParameters = RsaParameters::new(
 );
 
 /// Verification of signatures using RSA keys of 3072-8192 bits, PKCS#1.5 padding, and SHA-384.
-pub static RSA_PKCS1_3072_8192_SHA384: RsaParameters = RsaParameters::new(
+pub const RSA_PKCS1_3072_8192_SHA384: RsaParameters = RsaParameters::new(
     &digest::SHA384,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     3072..=8192,
@@ -464,7 +808,7 @@ pub static RSA_PKCS1_3072_8192_SHA384: RsaParameters = RsaParameters::new(
 );
 
 /// Verification of signatures using RSA keys of 2048-8192 bits, PSS padding, and SHA-256.
-pub static RSA_PSS_2048_8192_SHA256: RsaParameters = RsaParameters::new(
+pub const RSA_PSS_2048_8192_SHA256: RsaParameters = RsaParameters::new(
     &digest::SHA256,
     &rsa::signature::RsaPadding::RSA_PKCS1_PSS_PADDING,
     2048..=8192,
@@ -472,7 +816,7 @@ pub static RSA_PSS_2048_8192_SHA256: RsaParameters = RsaParameters::new(
 );
 
 /// Verification of signatures using RSA keys of 2048-8192 bits, PSS padding, and SHA-384.
-pub static RSA_PSS_2048_8192_SHA384: RsaParameters = RsaParameters::new(
+pub const RSA_PSS_2048_8192_SHA384: RsaParameters = RsaParameters::new(
     &digest::SHA384,
     &rsa::signature::RsaPadding::RSA_PKCS1_PSS_PADDING,
     2048..=8192,
@@ -480,7 +824,7 @@ pub static RSA_PSS_2048_8192_SHA384: RsaParameters = RsaParameters::new(
 );
 
 /// Verification of signatures using RSA keys of 2048-8192 bits, PSS padding, and SHA-512.
-pub static RSA_PSS_2048_8192_SHA512: RsaParameters = RsaParameters::new(
+pub const RSA_PSS_2048_8192_SHA512: RsaParameters = RsaParameters::new(
     &digest::SHA512,
     &rsa::signature::RsaPadding::RSA_PKCS1_PSS_PADDING,
     2048..=8192,
@@ -488,322 +832,370 @@ pub static RSA_PSS_2048_8192_SHA512: RsaParameters = RsaParameters::new(
 );
 
 /// RSA PSS padding using SHA-256 for RSA signatures.
-pub static RSA_PSS_SHA256: RsaSignatureEncoding = RsaSignatureEncoding::new(
+pub const RSA_PSS_SHA256: RsaSignatureEncoding = RsaSignatureEncoding::new(
     &digest::SHA256,
     &rsa::signature::RsaPadding::RSA_PKCS1_PSS_PADDING,
     &RsaSigningAlgorithmId::RSA_PSS_SHA256,
 );
 
 /// RSA PSS padding using SHA-384 for RSA signatures.
-pub static RSA_PSS_SHA384: RsaSignatureEncoding = RsaSignatureEncoding::new(
+pub const RSA_PSS_SHA384: RsaSignatureEncoding = RsaSignatureEncoding::new(
     &digest::SHA384,
     &rsa::signature::RsaPadding::RSA_PKCS1_PSS_PADDING,
     &RsaSigningAlgorithmId::RSA_PSS_SHA384,
 );
 
 /// RSA PSS padding using SHA-512 for RSA signatures.
-pub static RSA_PSS_SHA512: RsaSignatureEncoding = RsaSignatureEncoding::new(
+pub const RSA_PSS_SHA512: RsaSignatureEncoding = RsaSignatureEncoding::new(
     &digest::SHA512,
     &rsa::signature::RsaPadding::RSA_PKCS1_PSS_PADDING,
     &RsaSigningAlgorithmId::RSA_PSS_SHA512,
 );
 
 /// PKCS#1 1.5 padding using SHA-256 for RSA signatures.
-pub static RSA_PKCS1_SHA256: RsaSignatureEncoding = RsaSignatureEncoding::new(
+pub const RSA_PKCS1_SHA256: RsaSignatureEncoding = RsaSignatureEncoding::new(
     &digest::SHA256,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     &RsaSigningAlgorithmId::RSA_PKCS1_SHA256,
 );
 
 /// PKCS#1 1.5 padding using SHA-384 for RSA signatures.
-pub static RSA_PKCS1_SHA384: RsaSignatureEncoding = RsaSignatureEncoding::new(
+pub const RSA_PKCS1_SHA384: RsaSignatureEncoding = RsaSignatureEncoding::new(
     &digest::SHA384,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     &RsaSigningAlgorithmId::RSA_PKCS1_SHA384,
 );
 
 /// PKCS#1 1.5 padding using SHA-512 for RSA signatures.
-pub static RSA_PKCS1_SHA512: RsaSignatureEncoding = RsaSignatureEncoding::new(
+pub const RSA_PKCS1_SHA512: RsaSignatureEncoding = RsaSignatureEncoding::new(
     &digest::SHA512,
     &rsa::signature::RsaPadding::RSA_PKCS1_PADDING,
     &RsaSigningAlgorithmId::RSA_PKCS1_SHA512,
 );
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-256 curve and SHA-256.
-pub static ECDSA_P256_SHA256_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P256,
+pub const ECDSA_P256_SHA256_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256,
     digest: &digest::SHA256,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-384 curve and SHA-384.
-pub static ECDSA_P384_SHA384_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P384,
+pub const ECDSA_P384_SHA384_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P384,
     digest: &digest::SHA384,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-384 curve and SHA3-384.
-pub static ECDSA_P384_SHA3_384_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P384,
+pub const ECDSA_P384_SHA3_384_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P384,
     digest: &digest::SHA3_384,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-1.
-pub static ECDSA_P521_SHA1_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA1_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA1_FOR_LEGACY_USE_ONLY,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-224.
-pub static ECDSA_P521_SHA224_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA224_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA224,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-256.
-pub static ECDSA_P521_SHA256_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA256_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA256,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-384.
-pub static ECDSA_P521_SHA384_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA384_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA384,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-512.
-pub static ECDSA_P521_SHA512_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA512_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA512,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA3-512.
-pub static ECDSA_P521_SHA3_512_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA3_512_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA3_512,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-256K1 curve and SHA-256.
-pub static ECDSA_P256K1_SHA256_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P256K1,
+pub const ECDSA_P256K1_SHA256_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256K1,
     digest: &digest::SHA256,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
 /// Verification of fixed-length (PKCS#11 style) ECDSA signatures using the P-256K1 curve and SHA3-256.
-pub static ECDSA_P256K1_SHA3_256_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P256K1,
+pub const ECDSA_P256K1_SHA3_256_FIXED: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256K1,
     digest: &digest::SHA3_256,
     sig_format: EcdsaSignatureFormat::Fixed,
 };
 
+/// Verification of ASN.1 DER-encoded ECDSA signatures using the P-256 curve and SHA-1.
+pub const ECDSA_P256_SHA1_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256,
+    digest: &digest::SHA1_FOR_LEGACY_USE_ONLY,
+    sig_format: EcdsaSignatureFormat::ASN1,
+};
+
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-256 curve and SHA-256.
-pub static ECDSA_P256_SHA256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P256,
+pub const ECDSA_P256_SHA256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256,
     digest: &digest::SHA256,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// *Not recommended.* Verification of ASN.1 DER-encoded ECDSA signatures using the P-256 curve and SHA-384.
-pub static ECDSA_P256_SHA384_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P256,
+pub const ECDSA_P256_SHA384_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256,
     digest: &digest::SHA384,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
+/// *Not recommended.* Verification of ASN.1 DER-encoded ECDSA signatures using the P-256 curve and SHA-512.
+pub const ECDSA_P256_SHA512_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256,
+    digest: &digest::SHA512,
+    sig_format: EcdsaSignatureFormat::ASN1,
+};
+
 /// *Not recommended.* Verification of ASN.1 DER-encoded ECDSA signatures using the P-384 curve and SHA-256.
-pub static ECDSA_P384_SHA256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P384,
+pub const ECDSA_P384_SHA256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P384,
     digest: &digest::SHA256,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-384 curve and SHA-384.
-pub static ECDSA_P384_SHA384_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P384,
+pub const ECDSA_P384_SHA384_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P384,
     digest: &digest::SHA384,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
+/// *Not recommended.* Verification of ASN.1 DER-encoded ECDSA signatures using the P-384 curve and SHA-512.
+pub const ECDSA_P384_SHA512_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P384,
+    digest: &digest::SHA512,
+    sig_format: EcdsaSignatureFormat::ASN1,
+};
+
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-384 curve and SHA3-384.
-pub static ECDSA_P384_SHA3_384_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P384,
+pub const ECDSA_P384_SHA3_384_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P384,
     digest: &digest::SHA3_384,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-1.
-pub static ECDSA_P521_SHA1_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA1_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA1_FOR_LEGACY_USE_ONLY,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-224.
-pub static ECDSA_P521_SHA224_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA224_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA224,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-256.
-pub static ECDSA_P521_SHA256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA256,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-384.
-pub static ECDSA_P521_SHA384_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA384_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA384,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-512.
-pub static ECDSA_P521_SHA512_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA512_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA512,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA3-512.
-pub static ECDSA_P521_SHA3_512_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P521,
+pub const ECDSA_P521_SHA3_512_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P521,
     digest: &digest::SHA3_512,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-256K1 curve and SHA-256.
-pub static ECDSA_P256K1_SHA256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P256K1,
+pub const ECDSA_P256K1_SHA256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256K1,
     digest: &digest::SHA256,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Verification of ASN.1 DER-encoded ECDSA signatures using the P-256K1 curve and SHA3-256.
-pub static ECDSA_P256K1_SHA3_256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
-    id: &ec::AlgorithmID::ECDSA_P256K1,
+pub const ECDSA_P256K1_SHA3_256_ASN1: EcdsaVerificationAlgorithm = EcdsaVerificationAlgorithm {
+    id: &ec::signature::AlgorithmID::ECDSA_P256K1,
     digest: &digest::SHA3_256,
     sig_format: EcdsaSignatureFormat::ASN1,
 };
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-256 curve and SHA-256.
-pub static ECDSA_P256_SHA256_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P256_SHA256_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P256_SHA256_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-384 curve and SHA-384.
-pub static ECDSA_P384_SHA384_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P384_SHA384_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P384_SHA384_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-384 curve and SHA3-384.
-pub static ECDSA_P384_SHA3_384_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P384_SHA3_384_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P384_SHA3_384_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-224.
 /// # ⚠️ Warning
 /// The security design strength of SHA-224 digests is less then security strength of P-521.
 /// This scheme should only be used for backwards compatibility purposes.
-pub static ECDSA_P521_SHA224_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA224_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA224_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-256.
 /// # ⚠️ Warning
 /// The security design strength of SHA-256 digests is less then security strength of P-521.
 /// This scheme should only be used for backwards compatibility purposes.
-pub static ECDSA_P521_SHA256_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA256_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA256_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-384.
 /// # ⚠️ Warning
 /// The security design strength of SHA-384 digests is less then security strength of P-521.
 /// This scheme should only be used for backwards compatibility purposes.
-pub static ECDSA_P521_SHA384_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA384_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA384_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA-512.
-pub static ECDSA_P521_SHA512_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA512_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA512_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-521 curve and SHA3-512.
-pub static ECDSA_P521_SHA3_512_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA3_512_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA3_512_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-256K1 curve and SHA-256.
-pub static ECDSA_P256K1_SHA256_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P256K1_SHA256_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P256K1_SHA256_FIXED);
 
 /// Signing of fixed-length (PKCS#11 style) ECDSA signatures using the P-256K1 curve and SHA3-256.
-pub static ECDSA_P256K1_SHA3_256_FIXED_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P256K1_SHA3_256_FIXED_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P256K1_SHA3_256_FIXED);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-256 curve and SHA-256.
-pub static ECDSA_P256_SHA256_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P256_SHA256_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P256_SHA256_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-384 curve and SHA-384.
-pub static ECDSA_P384_SHA384_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P384_SHA384_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P384_SHA384_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-384 curve and SHA3-384.
-pub static ECDSA_P384_SHA3_384_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P384_SHA3_384_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P384_SHA3_384_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-224.
 /// # ⚠️ Warning
 /// The security design strength of SHA-224 digests is less then security strength of P-521.
 /// This scheme should only be used for backwards compatibility purposes.
-pub static ECDSA_P521_SHA224_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA224_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA224_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-256.
 /// # ⚠️ Warning
 /// The security design strength of SHA-256 digests is less then security strength of P-521.
 /// This scheme should only be used for backwards compatibility purposes.
-pub static ECDSA_P521_SHA256_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA256_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA256_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-384.
 /// # ⚠️ Warning
 /// The security design strength of SHA-384 digests is less then security strength of P-521.
 /// This scheme should only be used for backwards compatibility purposes.
-pub static ECDSA_P521_SHA384_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA384_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA384_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA-512.
-pub static ECDSA_P521_SHA512_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA512_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA512_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-521 curve and SHA3-512.
-pub static ECDSA_P521_SHA3_512_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P521_SHA3_512_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P521_SHA3_512_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-256K1 curve and SHA-256.
-pub static ECDSA_P256K1_SHA256_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P256K1_SHA256_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P256K1_SHA256_ASN1);
 
 /// Signing of ASN.1 DER-encoded ECDSA signatures using the P-256K1 curve and SHA3-256.
-pub static ECDSA_P256K1_SHA3_256_ASN1_SIGNING: EcdsaSigningAlgorithm =
+pub const ECDSA_P256K1_SHA3_256_ASN1_SIGNING: EcdsaSigningAlgorithm =
     EcdsaSigningAlgorithm(&ECDSA_P256K1_SHA3_256_ASN1);
 
 /// Verification of Ed25519 signatures.
-pub static ED25519: EdDSAParameters = EdDSAParameters {};
+pub const ED25519: EdDSAParameters = EdDSAParameters {};
+
+/// Verification of ML-DSA-44 signatures.
+pub const ML_DSA_44: PqdsaVerificationAlgorithm = PqdsaVerificationAlgorithm {
+    id: &PqdsaAlgorithmID::ML_DSA_44,
+};
+
+/// Verification of ML-DSA-65 signatures.
+pub const ML_DSA_65: PqdsaVerificationAlgorithm = PqdsaVerificationAlgorithm {
+    id: &PqdsaAlgorithmID::ML_DSA_65,
+};
+
+/// Verification of ML-DSA-87 signatures.
+pub const ML_DSA_87: PqdsaVerificationAlgorithm = PqdsaVerificationAlgorithm {
+    id: &PqdsaAlgorithmID::ML_DSA_87,
+};
+
+/// Signing using ML-DSA-44.
+pub const ML_DSA_44_SIGNING: PqdsaSigningAlgorithm = PqdsaSigningAlgorithm(&ML_DSA_44);
+
+/// Signing using ML-DSA-65.
+pub const ML_DSA_65_SIGNING: PqdsaSigningAlgorithm = PqdsaSigningAlgorithm(&ML_DSA_65);
+
+/// Signing using ML-DSA-87.
+pub const ML_DSA_87_SIGNING: PqdsaSigningAlgorithm = PqdsaSigningAlgorithm(&ML_DSA_87);
+
+#[cfg(test)]
+mod parsed_public_key_tests;
 
 #[cfg(test)]
 mod tests {
-    use regex::Regex;
-
     use crate::rand::{generate, SystemRandom};
-    use crate::signature::{UnparsedPublicKey, ED25519};
+    use crate::signature::{ParsedPublicKey, UnparsedPublicKey, ED25519};
+    use crate::test;
+    use regex::Regex;
 
     #[cfg(feature = "fips")]
     mod fips;
@@ -812,7 +1204,7 @@ mod tests {
     fn test_unparsed_public_key() {
         let random_pubkey: [u8; 32] = generate(&SystemRandom::new()).unwrap().expose();
         let unparsed_pubkey = UnparsedPublicKey::new(&ED25519, random_pubkey);
-        let unparsed_pubkey_debug = format!("{:?}", &unparsed_pubkey);
+        let unparsed_pubkey_debug = format!("{unparsed_pubkey:?}");
 
         #[allow(clippy::clone_on_copy)]
         let unparsed_pubkey_clone = unparsed_pubkey.clone();
@@ -823,5 +1215,17 @@ mod tests {
         .unwrap();
 
         assert!(pubkey_re.is_match(&unparsed_pubkey_debug));
+    }
+    #[test]
+    fn test_types() {
+        test::compile_time_assert_send::<UnparsedPublicKey<&[u8]>>();
+        test::compile_time_assert_sync::<UnparsedPublicKey<&[u8]>>();
+        test::compile_time_assert_send::<UnparsedPublicKey<Vec<u8>>>();
+        test::compile_time_assert_sync::<UnparsedPublicKey<Vec<u8>>>();
+        test::compile_time_assert_clone::<UnparsedPublicKey<&[u8]>>();
+        test::compile_time_assert_clone::<UnparsedPublicKey<Vec<u8>>>();
+        test::compile_time_assert_send::<ParsedPublicKey>();
+        test::compile_time_assert_sync::<ParsedPublicKey>();
+        test::compile_time_assert_clone::<ParsedPublicKey>();
     }
 }

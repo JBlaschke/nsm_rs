@@ -1,14 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR ISC
 
-use core::ops::Deref;
-
-use aws_lc::{
-    BN_free, ECDSA_SIG_free, EC_GROUP_free, EC_KEY_free, EC_POINT_free, EVP_AEAD_CTX_free,
-    EVP_CIPHER_CTX_free, EVP_PKEY_CTX_free, EVP_PKEY_free, OPENSSL_free, RSA_free, BIGNUM,
-    ECDSA_SIG, EC_GROUP, EC_KEY, EC_POINT, EVP_AEAD_CTX, EVP_CIPHER_CTX, EVP_PKEY, EVP_PKEY_CTX,
-    RSA,
+use crate::aws_lc::{
+    BN_free, CMAC_CTX_free, ECDSA_SIG_free, EC_GROUP_free, EC_KEY_free, EC_POINT_free,
+    EVP_AEAD_CTX_free, EVP_CIPHER_CTX_free, EVP_PKEY_CTX_free, EVP_PKEY_free, OPENSSL_free,
+    RSA_free, BIGNUM, CMAC_CTX, ECDSA_SIG, EC_GROUP, EC_KEY, EC_POINT, EVP_AEAD_CTX,
+    EVP_CIPHER_CTX, EVP_PKEY, EVP_PKEY_CTX, RSA,
 };
+use std::marker::PhantomData;
 
 pub(crate) type LcPtr<T> = ManagedPointer<*mut T>;
 pub(crate) type DetachableLcPtr<T> = DetachablePointer<*mut T>;
@@ -31,11 +30,6 @@ impl<P: Pointer> ManagedPointer<P> {
     pub unsafe fn as_slice(&self, len: usize) -> &[P::T] {
         core::slice::from_raw_parts(self.pointer.as_const_ptr(), len)
     }
-
-    #[allow(clippy::mut_from_ref)]
-    pub unsafe fn as_slice_mut(&mut self, len: usize) -> &mut [P::T] {
-        core::slice::from_raw_parts_mut(self.pointer.as_mut_ptr(), len)
-    }
 }
 
 impl<P: Pointer> Drop for ManagedPointer<P> {
@@ -45,42 +39,50 @@ impl<P: Pointer> Drop for ManagedPointer<P> {
     }
 }
 
+impl<'a, P: Pointer> From<&'a ManagedPointer<P>> for ConstPointer<'a, P::T> {
+    fn from(ptr: &'a ManagedPointer<P>) -> ConstPointer<'a, P::T> {
+        ConstPointer {
+            ptr: ptr.pointer.as_const_ptr(),
+            _lifetime: PhantomData,
+        }
+    }
+}
+
 impl<P: Pointer> ManagedPointer<P> {
     #[inline]
-    pub fn as_const(&self) -> ConstPointer<P::T> {
-        ConstPointer {
-            ptr: self.pointer.as_const_ptr(),
-        }
+    pub fn as_const(&self) -> ConstPointer<'_, P::T> {
+        self.into()
     }
 
     #[inline]
-    pub unsafe fn as_mut_unsafe(&self) -> MutPointer<P::T> {
-        MutPointer {
-            ptr: self.pointer.as_const_ptr() as *mut P::T,
+    pub fn as_const_ptr(&self) -> *const P::T {
+        self.pointer.as_const_ptr()
+    }
+
+    pub fn project_const_lifetime<'a, C>(
+        &'a self,
+        f: unsafe fn(&'a Self) -> *const C,
+    ) -> Result<ConstPointer<'a, C>, ()> {
+        let ptr = unsafe { f(self) };
+        if ptr.is_null() {
+            return Err(());
         }
+        Ok(ConstPointer {
+            ptr,
+            _lifetime: PhantomData,
+        })
     }
 
     #[inline]
-    pub fn as_mut(&mut self) -> MutPointer<P::T> {
-        MutPointer {
-            ptr: self.pointer.as_mut_ptr(),
-        }
+    pub fn as_mut_ptr(&mut self) -> *mut P::T {
+        self.pointer.as_mut_ptr()
     }
 }
 
 impl<P: Pointer> DetachablePointer<P> {
     #[inline]
-    pub fn as_const(&self) -> ConstPointer<P::T> {
-        ConstPointer {
-            ptr: self.pointer.as_ref().unwrap().as_const_ptr(),
-        }
-    }
-
-    #[inline]
-    pub fn as_mut(&mut self) -> MutPointer<P::T> {
-        MutPointer {
-            ptr: self.pointer.as_mut().unwrap().as_mut_ptr(),
-        }
+    pub fn as_mut_ptr(&mut self) -> *mut P::T {
+        self.pointer.as_mut().unwrap().as_mut_ptr()
     }
 }
 
@@ -88,20 +90,6 @@ impl<P: Pointer> DetachablePointer<P> {
 #[allow(clippy::module_name_repetitions)]
 pub(crate) struct DetachablePointer<P: Pointer> {
     pointer: Option<P>,
-}
-
-impl<P: Pointer> Deref for DetachablePointer<P> {
-    type Target = P;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        match &self.pointer {
-            Some(pointer) => pointer,
-            None => {
-                // Safety: pointer is only None when DetachableLcPtr is detached or dropped
-                unreachable!()
-            }
-        }
-    }
 }
 
 impl<P: Pointer> DetachablePointer<P> {
@@ -145,37 +133,40 @@ impl<P: Pointer> Drop for DetachablePointer<P> {
 }
 
 #[derive(Debug)]
-pub(crate) struct ConstPointer<T> {
+pub(crate) struct ConstPointer<'a, T> {
     ptr: *const T,
+    _lifetime: PhantomData<&'a T>,
 }
 
-impl<T> ConstPointer<T> {
-    pub fn new(ptr: *const T) -> Result<ConstPointer<T>, ()> {
+impl<T> ConstPointer<'static, T> {
+    pub unsafe fn new_static(ptr: *const T) -> Result<Self, ()> {
         if ptr.is_null() {
             return Err(());
         }
-        Ok(ConstPointer { ptr })
+        Ok(ConstPointer {
+            ptr,
+            _lifetime: PhantomData,
+        })
     }
 }
 
-impl<T> Deref for ConstPointer<T> {
-    type Target = *const T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ptr
+impl<T> ConstPointer<'_, T> {
+    pub fn project_const_lifetime<'a, C>(
+        &'a self,
+        f: unsafe fn(&'a Self) -> *const C,
+    ) -> Result<ConstPointer<'a, C>, ()> {
+        let ptr = unsafe { f(self) };
+        if ptr.is_null() {
+            return Err(());
+        }
+        Ok(ConstPointer {
+            ptr,
+            _lifetime: PhantomData,
+        })
     }
-}
 
-#[derive(Debug)]
-pub(crate) struct MutPointer<T> {
-    ptr: *mut T,
-}
-
-impl<T> Deref for MutPointer<T> {
-    type Target = *mut T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ptr
+    pub fn as_const_ptr(&self) -> *const T {
+        self.ptr
     }
 }
 
@@ -242,11 +233,12 @@ create_pointer!(EVP_PKEY_CTX, EVP_PKEY_CTX_free);
 create_pointer!(RSA, RSA_free);
 create_pointer!(EVP_AEAD_CTX, EVP_AEAD_CTX_free);
 create_pointer!(EVP_CIPHER_CTX, EVP_CIPHER_CTX_free);
+create_pointer!(CMAC_CTX, CMAC_CTX_free);
 
 #[cfg(test)]
 mod tests {
+    use crate::aws_lc::BIGNUM;
     use crate::ptr::{DetachablePointer, ManagedPointer};
-    use aws_lc::BIGNUM;
 
     #[test]
     fn test_debug() {

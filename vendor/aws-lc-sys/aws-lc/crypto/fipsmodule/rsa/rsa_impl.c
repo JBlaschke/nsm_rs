@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/rsa.h>
 
@@ -70,7 +17,7 @@
 #include "../bn/internal.h"
 #include "../../internal.h"
 #include "../delocate.h"
-#include "../rand/fork_detect.h"
+#include "../../ube/fork_ube_detect.h"
 
 static int ensure_fixed_copy(BIGNUM **out, const BIGNUM *in, int width) {
   if (*out != NULL) {
@@ -252,7 +199,7 @@ static BN_BLINDING *rsa_blinding_get(RSA *rsa, size_t *index_used,
   assert(rsa->mont_n != NULL);
 
   BN_BLINDING *ret = NULL;
-  const uint64_t fork_generation = CRYPTO_get_fork_generation();
+  const uint64_t fork_generation = CRYPTO_get_fork_ube_generation();
   CRYPTO_MUTEX_lock_write(&rsa->lock);
 
   // Wipe the blinding cache on |fork|.
@@ -412,7 +359,13 @@ static int mod_exp(BIGNUM *r0, const BIGNUM *I, RSA *rsa, BN_CTX *ctx);
 int rsa_verify_raw_no_self_test(RSA *rsa, size_t *out_len, uint8_t *out,
                                 size_t max_out, const uint8_t *in,
                                 size_t in_len, int padding) {
+  *out_len = 0;
+
   if(rsa->meth && rsa->meth->verify_raw) {
+    if (in_len > INT_MAX) {
+      OPENSSL_PUT_ERROR(RSA, ERR_R_OVERFLOW);
+      return 0;
+    }
     // In OpenSSL, the RSA_METHOD |verify_raw| or |pub_dec| operation does
     // not directly take and initialize an |out_len| parameter. Instead, it
     // returns the size of the recovered plaintext or negative number for error.
@@ -420,9 +373,8 @@ int rsa_verify_raw_no_self_test(RSA *rsa, size_t *out_len, uint8_t *out,
     // and expect an |out_len| parameter. To remain compatible with this new
     // paradigm and OpenSSL, we initialize |out_len| based on the return value
     // here.
-    int ret = rsa->meth->verify_raw((int)max_out, in, out, rsa, padding);
+    int ret = rsa->meth->verify_raw((int)in_len, in, out, rsa, padding);
     if(ret < 0) {
-      *out_len = 0;
       return 0;
     }
     *out_len = ret;
@@ -564,7 +516,14 @@ int rsa_default_private_transform(RSA *rsa, uint8_t *out, const uint8_t *in,
 
   // The input to the RSA private transform may be secret, but padding is
   // expected to construct a value within range, so we can leak this comparison.
-  if (constant_time_declassify_int(BN_ucmp(f, rsa->n) >= 0)) {
+  BIGNUM *n_minus_one = BN_CTX_get(ctx);
+  if (n_minus_one == NULL || !BN_copy(n_minus_one, rsa->n) ||
+      !BN_sub_word(n_minus_one, 1)) {
+    goto err;
+  }
+  if (constant_time_declassify_int(BN_ucmp(f, n_minus_one) >= 0) ||
+      constant_time_declassify_int(BN_is_zero(f)) ||
+      constant_time_declassify_int(BN_is_one(f))) {
     // Usually the padding functions would catch this.
     OPENSSL_PUT_ERROR(RSA, RSA_R_DATA_TOO_LARGE_FOR_MODULUS);
     goto err;
@@ -738,7 +697,7 @@ static int mod_exp(BIGNUM *r0, const BIGNUM *I, RSA *rsa, BN_CTX *ctx) {
 
   // This is a pre-condition for |mod_montgomery|. It was already checked by the
   // caller.
-  assert(BN_ucmp(I, n) < 0);
+  declassify_assert(BN_ucmp(I, n) < 0);
 
   if (!mod_montgomery(r1, I, q, rsa->mont_q, p, ctx) ||
       !mod_montgomery(r2, I, p, rsa->mont_p, q, ctx) ||
@@ -773,7 +732,7 @@ static int mod_exp(BIGNUM *r0, const BIGNUM *I, RSA *rsa, BN_CTX *ctx) {
   // bound the width slightly higher, so fix it. This trips constant-time checks
   // because a naive data flow analysis does not realize the excess words are
   // publicly zero.
-  assert(BN_cmp(r0, n) < 0);
+  declassify_assert(BN_cmp(r0, n) < 0);
   bn_assert_fits_in_bytes(r0, BN_num_bytes(n));
   if (!bn_resize_words(r0, n->width)) {
     goto err;
@@ -945,20 +904,25 @@ static int generate_prime(BIGNUM *out, int bits, const BIGNUM *e,
     // retrying. That is, we reject a negligible fraction of primes that are
     // within the FIPS bound, but we will never accept a prime outside the
     // bound, ensuring the resulting RSA key is the right size.
-    if (BN_cmp(out, sqrt2) <= 0) {
+    //
+    // Values over the threshold are discarded, so it is safe to leak this
+    // comparison.
+    if (constant_time_declassify_int(BN_cmp(out, sqrt2) <= 0)) {
       continue;
     }
 
     // RSA key generation's bottleneck is discarding composites. If it fails
     // trial division, do not bother computing a GCD or performing Miller-Rabin.
     if (!bn_odd_number_is_obviously_composite(out)) {
-      // Check gcd(out-1, e) is one (steps 4.5 and 5.6).
+      // Check gcd(out-1, e) is one (steps 4.5 and 5.6). Leaking the final
+      // result of this comparison is safe because, if not relatively prime, the
+      // value will be discarded.
       int relatively_prime;
-      if (!BN_sub(tmp, out, BN_value_one()) ||
+      if (!bn_usub_consttime(tmp, out, BN_value_one()) ||
           !bn_is_relatively_prime(&relatively_prime, tmp, e, ctx)) {
         goto err;
       }
-      if (relatively_prime) {
+      if (constant_time_declassify_int(relatively_prime)) {
         // Test |out| for primality (steps 4.5.1 and 5.6.1).
         int is_probable_prime;
         if (!BN_primality_test(&is_probable_prime, out,
@@ -1116,8 +1080,9 @@ static int rsa_generate_key_impl(RSA *rsa, int bits, const BIGNUM *e_value,
     }
 
     // Retry if |rsa->d| <= 2^|prime_bits|. See appendix B.3.1's guidance on
-    // values for d.
-  } while (BN_cmp(rsa->d, pow2_prime_bits) <= 0);
+    // values for d. When we retry, p and q are discarded, so it is safe to leak
+    // this comparison.
+  } while (constant_time_declassify_int(BN_cmp(rsa->d, pow2_prime_bits) <= 0));
 
   assert(BN_num_bits(pm1) == (unsigned)prime_bits);
   assert(BN_num_bits(qm1) == (unsigned)prime_bits);
@@ -1130,6 +1095,9 @@ static int rsa_generate_key_impl(RSA *rsa, int bits, const BIGNUM *e_value,
     goto bn_err;
   }
   bn_set_minimal_width(rsa->n);
+
+  // |rsa->n| is computed from the private key, but is public.
+  bn_declassify(rsa->n);
 
   // Sanity-check that |rsa->n| has the specified size. This is implied by
   // |generate_prime|'s bounds.
@@ -1222,7 +1190,7 @@ static int RSA_generate_key_ex_maybe_fips(RSA *rsa, int bits,
   if(check_fips && !RSA_check_fips(tmp)) {
     RSA_free(tmp);
 #if defined(AWSLC_FIPS)
-    BORINGSSL_FIPS_abort();
+    AWS_LC_FIPS_failure("RSA keygen checks failed");
 #endif
     return ret;
   }
@@ -1269,9 +1237,11 @@ int RSA_generate_key_fips(RSA *rsa, int bits, BN_GENCB *cb) {
   }
 
   BIGNUM *e = BN_new();
+  FIPS_service_indicator_lock_state();
   int ret = e != NULL &&
             BN_set_word(e, RSA_F4) &&
             RSA_generate_key_ex_maybe_fips(rsa, bits, e, cb, /*check_fips=*/1);
+  FIPS_service_indicator_unlock_state();
   BN_free(e);
   if(ret) {
     // Approved key size check step is already done at start of function.

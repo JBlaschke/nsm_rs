@@ -23,6 +23,7 @@ macro_rules! limited_write_buf {
 pub struct FramedWrite<T, B> {
     /// Upstream `AsyncWrite`
     inner: T,
+    final_flush_done: bool,
 
     encoder: Encoder<B>,
 }
@@ -89,6 +90,7 @@ where
         };
         FramedWrite {
             inner,
+            final_flush_done: false,
             encoder: Encoder {
                 hpack: hpack::Encoder::default(),
                 buf: Cursor::new(BytesMut::with_capacity(DEFAULT_BUFFER_CAPACITY)),
@@ -118,6 +120,12 @@ where
         Poll::Ready(Ok(()))
     }
 
+    /// Returns whether a frame can be buffered without first flushing the
+    /// underlying I/O object.
+    pub(crate) fn has_capacity(&self) -> bool {
+        self.encoder.has_capacity()
+    }
+
     /// Buffer a frame.
     ///
     /// `poll_ready` must be called first to ensure that a frame may be
@@ -133,7 +141,7 @@ where
 
         loop {
             while !self.encoder.is_empty() {
-                match self.encoder.next {
+                let n = match self.encoder.next {
                     Some(Next::Data(ref mut frame)) => {
                         tracing::trace!(queued_data_frame = true);
                         let mut buf = (&mut self.encoder.buf).chain(frame.payload_mut());
@@ -148,6 +156,11 @@ where
                         ))?
                     }
                 };
+                if n == 0 {
+                    // No progress is possible; retrying would busy-loop.
+                    tracing::trace!("write returned zero, but non-zero bytes remaining");
+                    return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+                }
             }
 
             match self.encoder.unset_frame() {
@@ -165,7 +178,10 @@ where
 
     /// Close the codec
     pub fn shutdown(&mut self, cx: &mut Context) -> Poll<io::Result<()>> {
-        ready!(self.flush(cx))?;
+        if !self.final_flush_done {
+            ready!(self.flush(cx))?;
+            self.final_flush_done = true;
+        }
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }

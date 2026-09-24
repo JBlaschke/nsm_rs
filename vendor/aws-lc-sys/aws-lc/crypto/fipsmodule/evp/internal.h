@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENSSL_HEADER_EVP_INTERNAL_H
 #define OPENSSL_HEADER_EVP_INTERNAL_H
@@ -95,7 +42,7 @@ struct evp_pkey_asn1_method_st {
   // leading padding byte checked and removed. Although X.509 uses BIT STRINGs
   // to represent SubjectPublicKeyInfo, every key type defined encodes the key
   // as a byte string with the same conversion to BIT STRING.
-  int (*pub_decode)(EVP_PKEY *out, CBS *params, CBS *key);
+  int (*pub_decode)(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key);
 
   // pub_encode encodes |key| as a SubjectPublicKeyInfo and appends the result
   // to |out|. It returns one on success and zero on error.
@@ -107,7 +54,7 @@ struct evp_pkey_asn1_method_st {
   // result into |out|. It returns one on success and zero on error. |params| is
   // the AlgorithmIdentifier after the OBJECT IDENTIFIER type field, and |key|
   // is the contents of the OCTET STRING privateKey field.
-  int (*priv_decode)(EVP_PKEY *out, CBS *params, CBS *key, CBS *pubkey);
+  int (*priv_decode)(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key, CBS *pubkey);
 
   // priv_encode encodes |key| as a PrivateKeyInfo and appends the result to
   // |out|. It returns one on success and zero on error.
@@ -121,6 +68,7 @@ struct evp_pkey_asn1_method_st {
   int (*set_pub_raw)(EVP_PKEY *pkey, const uint8_t *in, size_t len);
   int (*get_priv_raw)(const EVP_PKEY *pkey, uint8_t *out, size_t *out_len);
   int (*get_pub_raw)(const EVP_PKEY *pkey, uint8_t *out, size_t *out_len);
+  int (*get_priv_seed)(const EVP_PKEY *pkey, uint8_t *out, size_t *out_len);
 
   // pkey_opaque returns 1 if the |pk| is opaque. Opaque keys are backed by
   // custom implementations which do not expose key material and parameters.
@@ -150,7 +98,7 @@ struct evp_pkey_st {
     DH *dh;
     EC_KEY *ec;
     KEM_KEY *kem_key;
-    PQDSA_KEY * pqdsa_key;
+    PQDSA_KEY *pqdsa_key;
   } pkey;
 
   // ameth contains a pointer to a method table that contains many ASN.1
@@ -207,6 +155,8 @@ int EVP_RSA_PKEY_CTX_ctrl(EVP_PKEY_CTX *ctx, int optype, int cmd, int p1, void *
 
 #define EVP_PKEY_CTRL_MD 1
 #define EVP_PKEY_CTRL_GET_MD 2
+#define EVP_PKEY_CTRL_SIGNING_CONTEXT 3
+#define EVP_PKEY_CTRL_GET_SIGNING_CONTEXT 4
 
 // EVP_PKEY_CTRL_PEER_KEY is called with different values of |p1|:
 //   0: Is called from |EVP_PKEY_derive_set_peer| and |p2| contains a peer key.
@@ -381,16 +331,9 @@ typedef struct {
 void evp_pkey_set_cb_translate(BN_GENCB *cb, EVP_PKEY_CTX *ctx);
 
 #define ED25519_PUBLIC_KEY_OFFSET 32
-
-#ifdef ENABLE_DILITHIUM
-#define FIPS_EVP_PKEY_METHODS 8
+#define FIPS_EVP_PKEY_METHODS 9
 #define NON_FIPS_EVP_PKEY_METHODS 3
-#define ASN1_EVP_PKEY_METHODS 10
-#else
-#define FIPS_EVP_PKEY_METHODS 7
-#define NON_FIPS_EVP_PKEY_METHODS 3
-#define ASN1_EVP_PKEY_METHODS 9
-#endif
+#define ASN1_EVP_PKEY_METHODS 11
 
 struct fips_evp_pkey_methods {
   const EVP_PKEY_METHOD * methods[FIPS_EVP_PKEY_METHODS];
@@ -403,9 +346,13 @@ const EVP_PKEY_METHOD *EVP_PKEY_hkdf_pkey_meth(void);
 const EVP_PKEY_METHOD *EVP_PKEY_hmac_pkey_meth(void);
 const EVP_PKEY_METHOD *EVP_PKEY_ed25519_pkey_meth(void);
 const EVP_PKEY_METHOD *EVP_PKEY_kem_pkey_meth(void);
-#ifdef ENABLE_DILITHIUM
 const EVP_PKEY_METHOD *EVP_PKEY_pqdsa_pkey_meth(void);
-#endif
+const EVP_PKEY_METHOD *EVP_PKEY_ed25519ph_pkey_meth(void);
+
+struct evp_pkey_ctx_signature_context_params_st {
+  const uint8_t *context;
+  size_t context_len;
+}; // EVP_PKEY_CTX_SIGNATURE_CONTEXT_PARAMS
 
 #if defined(__cplusplus)
 }  // extern C

@@ -1,6 +1,21 @@
 //! Android-specific definitions for linux-like values
 
 use crate::prelude::*;
+use crate::{
+    cmsghdr,
+    msghdr,
+    _IOW,
+    _IOWR,
+};
+
+cfg_if! {
+    if #[cfg(doc)] {
+        pub(crate) type Ioctl = c_int;
+    } else {
+        #[doc(hidden)]
+        pub type Ioctl = c_int;
+    }
+}
 
 pub type clock_t = c_long;
 pub type time_t = c_long;
@@ -9,7 +24,6 @@ pub type off_t = c_long;
 pub type blkcnt_t = c_ulong;
 pub type blksize_t = c_ulong;
 pub type nlink_t = u32;
-pub type useconds_t = u32;
 pub type pthread_t = c_long;
 pub type pthread_mutexattr_t = c_long;
 pub type pthread_rwlockattr_t = c_long;
@@ -28,12 +42,6 @@ pub type idtype_t = c_int;
 pub type loff_t = c_longlong;
 pub type __kernel_loff_t = c_longlong;
 pub type __kernel_pid_t = c_int;
-
-pub type __u8 = c_uchar;
-pub type __u16 = c_ushort;
-pub type __s16 = c_short;
-pub type __u32 = c_uint;
-pub type __s32 = c_int;
 
 // linux/elf.h
 
@@ -63,22 +71,6 @@ s! {
 
     pub struct __fsid_t {
         __val: [c_int; 2],
-    }
-
-    pub struct msghdr {
-        pub msg_name: *mut c_void,
-        pub msg_namelen: crate::socklen_t,
-        pub msg_iov: *mut crate::iovec,
-        pub msg_iovlen: size_t,
-        pub msg_control: *mut c_void,
-        pub msg_controllen: size_t,
-        pub msg_flags: c_int,
-    }
-
-    pub struct cmsghdr {
-        pub cmsg_len: size_t,
-        pub cmsg_level: c_int,
-        pub cmsg_type: c_int,
     }
 
     pub struct termios {
@@ -140,7 +132,7 @@ s! {
     pub struct sem_t {
         count: c_uint,
         #[cfg(target_pointer_width = "64")]
-        __reserved: [c_int; 3],
+        __reserved: Padding<[c_int; 3]>,
     }
 
     pub struct exit_status {
@@ -161,7 +153,7 @@ s! {
         pub f_flag: c_ulong,
         pub f_namemax: c_ulong,
         #[cfg(target_pointer_width = "64")]
-        __f_reserved: [u32; 6],
+        __f_reserved: Padding<[u32; 6]>,
     }
 
     pub struct signalfd_siginfo {
@@ -182,22 +174,16 @@ s! {
         pub ssi_stime: c_ulonglong,
         pub ssi_addr: c_ulonglong,
         pub ssi_addr_lsb: u16,
-        _pad2: u16,
+        _pad2: Padding<u16>,
         pub ssi_syscall: i32,
         pub ssi_call_addr: u64,
         pub ssi_arch: u32,
-        _pad: [u8; 28],
+        _pad: Padding<[u8; 28]>,
     }
 
     pub struct itimerspec {
         pub it_interval: crate::timespec,
         pub it_value: crate::timespec,
-    }
-
-    pub struct ucred {
-        pub pid: crate::pid_t,
-        pub uid: crate::uid_t,
-        pub gid: crate::gid_t,
     }
 
     pub struct genlmsghdr {
@@ -337,19 +323,6 @@ s! {
         pub dlpi_tls_data: *mut c_void,
     }
 
-    // linux/filter.h
-    pub struct sock_filter {
-        pub code: crate::__u16,
-        pub jt: crate::__u8,
-        pub jf: crate::__u8,
-        pub k: crate::__u32,
-    }
-
-    pub struct sock_fprog {
-        pub len: c_ushort,
-        pub filter: *mut sock_filter,
-    }
-
     // linux/seccomp.h
     pub struct seccomp_data {
         pub nr: c_int,
@@ -361,6 +334,34 @@ s! {
     pub struct seccomp_metadata {
         pub filter_off: crate::__u64,
         pub flags: crate::__u64,
+    }
+
+    pub struct seccomp_notif_sizes {
+        pub seccomp_notif: crate::__u16,
+        pub seccomp_notif_resp: crate::__u16,
+        pub seccomp_data: crate::__u16,
+    }
+
+    pub struct seccomp_notif {
+        pub id: crate::__u64,
+        pub pid: crate::__u32,
+        pub flags: crate::__u32,
+        pub data: seccomp_data,
+    }
+
+    pub struct seccomp_notif_resp {
+        pub id: crate::__u64,
+        pub val: crate::__s64,
+        pub error: crate::__s32,
+        pub flags: crate::__u32,
+    }
+
+    pub struct seccomp_notif_addfd {
+        pub id: crate::__u64,
+        pub flags: crate::__u32,
+        pub srcfd: crate::__u32,
+        pub newfd: crate::__u32,
+        pub newfd_flags: crate::__u32,
     }
 
     pub struct ptrace_peeksiginfo_args {
@@ -517,12 +518,10 @@ s! {
         pub ifr6_prefixlen: u32,
         pub ifr6_ifindex: c_int,
     }
-}
 
-s_no_extra_traits! {
     pub struct sockaddr_nl {
         pub nl_family: crate::sa_family_t,
-        nl_pad: c_ushort,
+        nl_pad: Padding<c_ushort>,
         pub nl_pid: u32,
         pub nl_groups: u32,
     }
@@ -568,7 +567,7 @@ s_no_extra_traits! {
         pub ut_session: c_long,
         pub ut_tv: crate::timeval,
         pub ut_addr_v6: [i32; 4],
-        unused: [c_char; 20],
+        unused: Padding<[c_char; 20]>,
     }
 
     pub struct sockaddr_alg {
@@ -595,6 +594,22 @@ s_no_extra_traits! {
         pub absflat: [crate::__s32; ABS_CNT],
     }
 
+    pub struct prop_info {
+        __name: [c_char; 32],
+        __serial: c_uint,
+        __value: [c_char; 92],
+    }
+
+    // linux/futex.h
+    pub struct futex_waitv {
+        pub val: crate::__u64,
+        pub uaddr: crate::__u64,
+        pub flags: crate::__u32,
+        __reserved: Padding<crate::__u32>,
+    }
+}
+
+s_no_extra_traits! {
     /// WARNING: The `PartialEq`, `Eq` and `Hash` implementations of this
     /// type are unsound and will be removed in the future.
     #[deprecated(
@@ -605,12 +620,6 @@ s_no_extra_traits! {
     pub struct af_alg_iv {
         pub ivlen: u32,
         pub iv: [c_uchar; 0],
-    }
-
-    pub struct prop_info {
-        __name: [c_char; 32],
-        __serial: c_uint,
-        __value: [c_char; 92],
     }
 
     pub union __c_anonymous_ifr_ifru {
@@ -647,371 +656,42 @@ s_no_extra_traits! {
         pub ifc_len: c_int, /* Size of buffer.  */
         pub ifc_ifcu: __c_anonymous_ifc_ifcu,
     }
+
+    // linux/if_ether.h
+
+    #[repr(C, packed)]
+    pub struct ethhdr {
+        pub h_dest: [c_uchar; crate::ETH_ALEN as usize],
+        pub h_source: [c_uchar; crate::ETH_ALEN as usize],
+        pub h_proto: crate::__be16,
+    }
+
+    // Internal, for casts to access union fields
+    struct sifields_sigchld {
+        si_pid: crate::pid_t,
+        si_uid: crate::uid_t,
+        si_status: c_int,
+        si_utime: c_long,
+        si_stime: c_long,
+    }
+
+    // Internal, for casts to access union fields
+    union sifields {
+        _align_pointer: *mut c_void,
+        sigchld: sifields_sigchld,
+    }
+
+    // Internal, for casts to access union fields. Note that some variants
+    // of sifields start with a pointer, which makes the alignment of
+    // sifields vary on 32-bit and 64-bit architectures.
+    struct siginfo_f {
+        _siginfo_base: [c_int; 3],
+        sifields: sifields,
+    }
 }
 
 cfg_if! {
     if #[cfg(feature = "extra_traits")] {
-        impl PartialEq for sockaddr_nl {
-            fn eq(&self, other: &sockaddr_nl) -> bool {
-                self.nl_family == other.nl_family
-                    && self.nl_pid == other.nl_pid
-                    && self.nl_groups == other.nl_groups
-            }
-        }
-        impl Eq for sockaddr_nl {}
-        impl fmt::Debug for sockaddr_nl {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sockaddr_nl")
-                    .field("nl_family", &self.nl_family)
-                    .field("nl_pid", &self.nl_pid)
-                    .field("nl_groups", &self.nl_groups)
-                    .finish()
-            }
-        }
-        impl hash::Hash for sockaddr_nl {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.nl_family.hash(state);
-                self.nl_pid.hash(state);
-                self.nl_groups.hash(state);
-            }
-        }
-
-        impl PartialEq for dirent {
-            fn eq(&self, other: &dirent) -> bool {
-                self.d_ino == other.d_ino
-                    && self.d_off == other.d_off
-                    && self.d_reclen == other.d_reclen
-                    && self.d_type == other.d_type
-                    && self
-                        .d_name
-                        .iter()
-                        .zip(other.d_name.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-
-        impl Eq for dirent {}
-
-        impl fmt::Debug for dirent {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("dirent")
-                    .field("d_ino", &self.d_ino)
-                    .field("d_off", &self.d_off)
-                    .field("d_reclen", &self.d_reclen)
-                    .field("d_type", &self.d_type)
-                    // FIXME: .field("d_name", &self.d_name)
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for dirent {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.d_ino.hash(state);
-                self.d_off.hash(state);
-                self.d_reclen.hash(state);
-                self.d_type.hash(state);
-                self.d_name.hash(state);
-            }
-        }
-
-        impl PartialEq for dirent64 {
-            fn eq(&self, other: &dirent64) -> bool {
-                self.d_ino == other.d_ino
-                    && self.d_off == other.d_off
-                    && self.d_reclen == other.d_reclen
-                    && self.d_type == other.d_type
-                    && self
-                        .d_name
-                        .iter()
-                        .zip(other.d_name.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-
-        impl Eq for dirent64 {}
-
-        impl fmt::Debug for dirent64 {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("dirent64")
-                    .field("d_ino", &self.d_ino)
-                    .field("d_off", &self.d_off)
-                    .field("d_reclen", &self.d_reclen)
-                    .field("d_type", &self.d_type)
-                    // FIXME: .field("d_name", &self.d_name)
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for dirent64 {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.d_ino.hash(state);
-                self.d_off.hash(state);
-                self.d_reclen.hash(state);
-                self.d_type.hash(state);
-                self.d_name.hash(state);
-            }
-        }
-
-        impl PartialEq for siginfo_t {
-            fn eq(&self, other: &siginfo_t) -> bool {
-                self.si_signo == other.si_signo
-                    && self.si_errno == other.si_errno
-                    && self.si_code == other.si_code
-                // Ignore _pad
-                // Ignore _align
-            }
-        }
-
-        impl Eq for siginfo_t {}
-
-        impl fmt::Debug for siginfo_t {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("siginfo_t")
-                    .field("si_signo", &self.si_signo)
-                    .field("si_errno", &self.si_errno)
-                    .field("si_code", &self.si_code)
-                    // Ignore _pad
-                    // Ignore _align
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for siginfo_t {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.si_signo.hash(state);
-                self.si_errno.hash(state);
-                self.si_code.hash(state);
-                // Ignore _pad
-                // Ignore _align
-            }
-        }
-
-        impl PartialEq for lastlog {
-            fn eq(&self, other: &lastlog) -> bool {
-                self.ll_time == other.ll_time
-                    && self
-                        .ll_line
-                        .iter()
-                        .zip(other.ll_line.iter())
-                        .all(|(a, b)| a == b)
-                    && self
-                        .ll_host
-                        .iter()
-                        .zip(other.ll_host.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-
-        impl Eq for lastlog {}
-
-        impl fmt::Debug for lastlog {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("lastlog")
-                    .field("ll_time", &self.ll_time)
-                    .field("ll_line", &self.ll_line)
-                    // FIXME: .field("ll_host", &self.ll_host)
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for lastlog {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.ll_time.hash(state);
-                self.ll_line.hash(state);
-                self.ll_host.hash(state);
-            }
-        }
-
-        impl PartialEq for utmp {
-            fn eq(&self, other: &utmp) -> bool {
-                self.ut_type == other.ut_type
-                    && self.ut_pid == other.ut_pid
-                    && self
-                        .ut_line
-                        .iter()
-                        .zip(other.ut_line.iter())
-                        .all(|(a, b)| a == b)
-                    && self.ut_id == other.ut_id
-                    && self
-                        .ut_user
-                        .iter()
-                        .zip(other.ut_user.iter())
-                        .all(|(a, b)| a == b)
-                    && self
-                        .ut_host
-                        .iter()
-                        .zip(other.ut_host.iter())
-                        .all(|(a, b)| a == b)
-                    && self.ut_exit == other.ut_exit
-                    && self.ut_session == other.ut_session
-                    && self.ut_tv == other.ut_tv
-                    && self.ut_addr_v6 == other.ut_addr_v6
-                    && self.unused == other.unused
-            }
-        }
-
-        impl Eq for utmp {}
-
-        impl fmt::Debug for utmp {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("utmp")
-                    .field("ut_type", &self.ut_type)
-                    .field("ut_pid", &self.ut_pid)
-                    .field("ut_line", &self.ut_line)
-                    .field("ut_id", &self.ut_id)
-                    .field("ut_user", &self.ut_user)
-                    // FIXME: .field("ut_host", &self.ut_host)
-                    .field("ut_exit", &self.ut_exit)
-                    .field("ut_session", &self.ut_session)
-                    .field("ut_tv", &self.ut_tv)
-                    .field("ut_addr_v6", &self.ut_addr_v6)
-                    .field("unused", &self.unused)
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for utmp {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.ut_type.hash(state);
-                self.ut_pid.hash(state);
-                self.ut_line.hash(state);
-                self.ut_id.hash(state);
-                self.ut_user.hash(state);
-                self.ut_host.hash(state);
-                self.ut_exit.hash(state);
-                self.ut_session.hash(state);
-                self.ut_tv.hash(state);
-                self.ut_addr_v6.hash(state);
-                self.unused.hash(state);
-            }
-        }
-
-        impl PartialEq for sockaddr_alg {
-            fn eq(&self, other: &sockaddr_alg) -> bool {
-                self.salg_family == other.salg_family
-                    && self
-                        .salg_type
-                        .iter()
-                        .zip(other.salg_type.iter())
-                        .all(|(a, b)| a == b)
-                    && self.salg_feat == other.salg_feat
-                    && self.salg_mask == other.salg_mask
-                    && self
-                        .salg_name
-                        .iter()
-                        .zip(other.salg_name.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-
-        impl Eq for sockaddr_alg {}
-
-        impl fmt::Debug for sockaddr_alg {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sockaddr_alg")
-                    .field("salg_family", &self.salg_family)
-                    .field("salg_type", &self.salg_type)
-                    .field("salg_feat", &self.salg_feat)
-                    .field("salg_mask", &self.salg_mask)
-                    .field("salg_name", &&self.salg_name[..])
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for sockaddr_alg {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.salg_family.hash(state);
-                self.salg_type.hash(state);
-                self.salg_feat.hash(state);
-                self.salg_mask.hash(state);
-                self.salg_name.hash(state);
-            }
-        }
-
-        impl PartialEq for uinput_setup {
-            fn eq(&self, other: &uinput_setup) -> bool {
-                self.id == other.id
-                    && self.name[..] == other.name[..]
-                    && self.ff_effects_max == other.ff_effects_max
-            }
-        }
-        impl Eq for uinput_setup {}
-
-        impl fmt::Debug for uinput_setup {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("uinput_setup")
-                    .field("id", &self.id)
-                    .field("name", &&self.name[..])
-                    .field("ff_effects_max", &self.ff_effects_max)
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for uinput_setup {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.id.hash(state);
-                self.name.hash(state);
-                self.ff_effects_max.hash(state);
-            }
-        }
-
-        impl PartialEq for uinput_user_dev {
-            fn eq(&self, other: &uinput_user_dev) -> bool {
-                self.name[..] == other.name[..]
-                    && self.id == other.id
-                    && self.ff_effects_max == other.ff_effects_max
-                    && self.absmax[..] == other.absmax[..]
-                    && self.absmin[..] == other.absmin[..]
-                    && self.absfuzz[..] == other.absfuzz[..]
-                    && self.absflat[..] == other.absflat[..]
-            }
-        }
-        impl Eq for uinput_user_dev {}
-
-        impl fmt::Debug for uinput_user_dev {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("uinput_setup")
-                    .field("name", &&self.name[..])
-                    .field("id", &self.id)
-                    .field("ff_effects_max", &self.ff_effects_max)
-                    .field("absmax", &&self.absmax[..])
-                    .field("absmin", &&self.absmin[..])
-                    .field("absfuzz", &&self.absfuzz[..])
-                    .field("absflat", &&self.absflat[..])
-                    .finish()
-            }
-        }
-
-        impl hash::Hash for uinput_user_dev {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.name.hash(state);
-                self.id.hash(state);
-                self.ff_effects_max.hash(state);
-                self.absmax.hash(state);
-                self.absmin.hash(state);
-                self.absfuzz.hash(state);
-                self.absflat.hash(state);
-            }
-        }
-
-        impl fmt::Debug for ifreq {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("ifreq")
-                    .field("ifr_name", &self.ifr_name)
-                    .field("ifr_ifru", &self.ifr_ifru)
-                    .finish()
-            }
-        }
-
-        impl fmt::Debug for ifconf {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("ifconf")
-                    .field("ifc_len", &self.ifc_len)
-                    .field("ifc_ifcu", &self.ifc_ifcu)
-                    .finish()
-            }
-        }
-
         #[allow(deprecated)]
         impl af_alg_iv {
             fn as_slice(&self) -> &[u8] {
@@ -1030,42 +710,16 @@ cfg_if! {
         impl Eq for af_alg_iv {}
 
         #[allow(deprecated)]
-        impl fmt::Debug for af_alg_iv {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("af_alg_iv")
-                    .field("ivlen", &self.ivlen)
-                    .finish()
-            }
-        }
-
-        #[allow(deprecated)]
         impl hash::Hash for af_alg_iv {
             fn hash<H: hash::Hasher>(&self, state: &mut H) {
                 self.as_slice().hash(state);
-            }
-        }
-
-        impl PartialEq for prop_info {
-            fn eq(&self, other: &prop_info) -> bool {
-                self.__name == other.__name
-                    && self.__serial == other.__serial
-                    && self.__value == other.__value
-            }
-        }
-        impl Eq for prop_info {}
-        impl fmt::Debug for prop_info {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("prop_info")
-                    .field("__name", &self.__name)
-                    .field("__serial", &self.__serial)
-                    .field("__value", &self.__value)
-                    .finish()
             }
         }
     }
 }
 
 pub const MADV_SOFT_OFFLINE: c_int = 101;
+#[allow(overflowing_literals)] // fixed in a future kernel version
 pub const MS_NOUSER: c_ulong = 0xffffffff80000000;
 pub const MS_RMT_MASK: c_ulong = 0x02800051;
 
@@ -1120,6 +774,15 @@ pub const FILENAME_MAX: c_uint = 4096;
 pub const FOPEN_MAX: c_uint = 20;
 pub const POSIX_FADV_DONTNEED: c_int = 4;
 pub const POSIX_FADV_NOREUSE: c_int = 5;
+pub const POSIX_SPAWN_RESETIDS: c_short = 1;
+pub const POSIX_SPAWN_SETPGROUP: c_short = 2;
+pub const POSIX_SPAWN_SETSIGDEF: c_short = 4;
+pub const POSIX_SPAWN_SETSIGMASK: c_short = 8;
+pub const POSIX_SPAWN_SETSCHEDPARAM: c_short = 16;
+pub const POSIX_SPAWN_SETSCHEDULER: c_short = 32;
+pub const POSIX_SPAWN_USEVFORK: c_short = 64;
+pub const POSIX_SPAWN_SETSID: c_short = 128;
+pub const POSIX_SPAWN_CLOEXEC_DEFAULT: c_short = 256;
 pub const L_tmpnam: c_uint = 4096;
 pub const TMP_MAX: c_uint = 308915776;
 pub const _PC_LINK_MAX: c_int = 1;
@@ -1300,6 +963,7 @@ pub const F_TLOCK: c_int = 2;
 pub const F_ULOCK: c_int = 0;
 
 pub const F_SEAL_FUTURE_WRITE: c_int = 0x0010;
+pub const F_SEAL_EXEC: c_int = 0x0020;
 
 pub const IFF_LOWER_UP: c_int = 0x10000;
 pub const IFF_DORMANT: c_int = 0x20000;
@@ -1474,6 +1138,7 @@ pub const SOCK_STREAM: c_int = 1;
 pub const SOCK_DGRAM: c_int = 2;
 pub const SOCK_SEQPACKET: c_int = 5;
 pub const SOCK_DCCP: c_int = 6;
+#[deprecated(since = "0.2.70", note = "AF_PACKET must be used instead")]
 pub const SOCK_PACKET: c_int = 10;
 
 pub const IPPROTO_MAX: c_int = 256;
@@ -1485,6 +1150,15 @@ pub const SOL_AX25: c_int = 257;
 pub const SOL_ATALK: c_int = 258;
 pub const SOL_NETROM: c_int = 259;
 pub const SOL_ROSE: c_int = 260;
+
+/* UDP socket options */
+// include/uapi/linux/udp.h
+pub const UDP_CORK: c_int = 1;
+pub const UDP_ENCAP: c_int = 100;
+pub const UDP_NO_CHECK6_TX: c_int = 101;
+pub const UDP_NO_CHECK6_RX: c_int = 102;
+pub const UDP_SEGMENT: c_int = 103;
+pub const UDP_GRO: c_int = 104;
 
 /* DCCP socket options */
 pub const DCCP_SOCKOPT_PACKET_SIZE: c_int = 1;
@@ -1548,6 +1222,7 @@ pub const SO_PEEK_OFF: c_int = 42;
 pub const SO_BUSY_POLL: c_int = 46;
 pub const SCM_TIMESTAMPING_OPT_STATS: c_int = 54;
 pub const SCM_TIMESTAMPING_PKTINFO: c_int = 58;
+pub const SO_BINDTOIFINDEX: c_int = 62;
 pub const SO_TIMESTAMP_NEW: c_int = 63;
 pub const SO_TIMESTAMPNS_NEW: c_int = 64;
 pub const SO_TIMESTAMPING_NEW: c_int = 65;
@@ -1657,7 +1332,7 @@ pub const TCGETS: c_int = 0x5401;
 pub const TCSETS: c_int = 0x5402;
 pub const TCSETSW: c_int = 0x5403;
 pub const TCSETSF: c_int = 0x5404;
-pub const TCGETS2: c_int = 0x802c542a;
+pub const TCGETS2: c_int = u32_cast_int(0x802c542a);
 pub const TCSETS2: c_int = 0x402c542b;
 pub const TCSETSW2: c_int = 0x402c542c;
 pub const TCSETSF2: c_int = 0x402c542d;
@@ -1690,27 +1365,6 @@ pub const FIONREAD: c_int = 0x541B;
 pub const TIOCCONS: c_int = 0x541D;
 pub const TIOCSBRK: c_int = 0x5427;
 pub const TIOCCBRK: c_int = 0x5428;
-cfg_if! {
-    if #[cfg(any(
-        target_arch = "x86",
-        target_arch = "x86_64",
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "riscv64",
-        target_arch = "s390x"
-    ))] {
-        pub const FICLONE: c_int = 0x40049409;
-        pub const FICLONERANGE: c_int = 0x4020940D;
-    } else if #[cfg(any(
-        target_arch = "mips",
-        target_arch = "mips64",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))] {
-        pub const FICLONE: c_int = 0x80049409;
-        pub const FICLONERANGE: c_int = 0x8020940D;
-    }
-}
 
 pub const ST_RDONLY: c_ulong = 1;
 pub const ST_NOSUID: c_ulong = 2;
@@ -1725,7 +1379,7 @@ pub const ST_RELATIME: c_ulong = 4096;
 pub const RTLD_NOLOAD: c_int = 0x4;
 pub const RTLD_NODELETE: c_int = 0x1000;
 
-pub const SEM_FAILED: *mut sem_t = 0 as *mut sem_t;
+pub const SEM_FAILED: *mut sem_t = ptr::null_mut();
 
 pub const AI_PASSIVE: c_int = 0x00000001;
 pub const AI_CANONNAME: c_int = 0x00000002;
@@ -1742,24 +1396,24 @@ pub const AI_DEFAULT: c_int = AI_V4MAPPED_CFG | AI_ADDRCONFIG;
 // linux/kexec.h
 pub const KEXEC_ON_CRASH: c_int = 0x00000001;
 pub const KEXEC_PRESERVE_CONTEXT: c_int = 0x00000002;
-pub const KEXEC_ARCH_MASK: c_int = 0xffff0000;
+pub const KEXEC_ARCH_MASK: c_int = u32_cast_int(0xffff0000);
 pub const KEXEC_FILE_UNLOAD: c_int = 0x00000001;
 pub const KEXEC_FILE_ON_CRASH: c_int = 0x00000002;
 pub const KEXEC_FILE_NO_INITRAMFS: c_int = 0x00000004;
 
-pub const LINUX_REBOOT_MAGIC1: c_int = 0xfee1dead;
+pub const LINUX_REBOOT_MAGIC1: c_int = u32_cast_int(0xfee1dead);
 pub const LINUX_REBOOT_MAGIC2: c_int = 672274793;
 pub const LINUX_REBOOT_MAGIC2A: c_int = 85072278;
 pub const LINUX_REBOOT_MAGIC2B: c_int = 369367448;
 pub const LINUX_REBOOT_MAGIC2C: c_int = 537993216;
 
 pub const LINUX_REBOOT_CMD_RESTART: c_int = 0x01234567;
-pub const LINUX_REBOOT_CMD_HALT: c_int = 0xCDEF0123;
-pub const LINUX_REBOOT_CMD_CAD_ON: c_int = 0x89ABCDEF;
+pub const LINUX_REBOOT_CMD_HALT: c_int = u32_cast_int(0xCDEF0123);
+pub const LINUX_REBOOT_CMD_CAD_ON: c_int = u32_cast_int(0x89ABCDEF);
 pub const LINUX_REBOOT_CMD_CAD_OFF: c_int = 0x00000000;
 pub const LINUX_REBOOT_CMD_POWER_OFF: c_int = 0x4321FEDC;
-pub const LINUX_REBOOT_CMD_RESTART2: c_int = 0xA1B2C3D4;
-pub const LINUX_REBOOT_CMD_SW_SUSPEND: c_int = 0xD000FCE2;
+pub const LINUX_REBOOT_CMD_RESTART2: c_int = u32_cast_int(0xA1B2C3D4);
+pub const LINUX_REBOOT_CMD_SW_SUSPEND: c_int = u32_cast_int(0xD000FCE2);
 pub const LINUX_REBOOT_CMD_KEXEC: c_int = 0x45584543;
 
 pub const REG_BASIC: c_int = 0;
@@ -1818,6 +1472,7 @@ pub const VSTART: usize = 8;
 pub const VSTOP: usize = 9;
 pub const VDISCARD: usize = 13;
 pub const VTIME: usize = 5;
+pub const IUCLC: crate::tcflag_t = 0x00000200;
 pub const IXON: crate::tcflag_t = 0x00000400;
 pub const IXOFF: crate::tcflag_t = 0x00001000;
 pub const ONLCR: crate::tcflag_t = 0x4;
@@ -1849,6 +1504,7 @@ pub const TABDLY: crate::tcflag_t = 0o014000;
 pub const BSDLY: crate::tcflag_t = 0o020000;
 pub const FFDLY: crate::tcflag_t = 0o100000;
 pub const VTDLY: crate::tcflag_t = 0o040000;
+pub const XCASE: crate::tcflag_t = 0o000004;
 pub const XTABS: crate::tcflag_t = 0o014000;
 
 pub const B0: crate::speed_t = 0o000000;
@@ -1891,38 +1547,6 @@ pub const BLKIOMIN: c_int = 0x1278;
 pub const BLKIOOPT: c_int = 0x1279;
 pub const BLKSSZGET: c_int = 0x1268;
 pub const BLKPBSZGET: c_int = 0x127B;
-
-cfg_if! {
-    // Those type are constructed using the _IOC macro
-    // DD-SS_SSSS_SSSS_SSSS-TTTT_TTTT-NNNN_NNNN
-    // where D stands for direction (either None (00), Read (01) or Write (11))
-    // where S stands for size (int, long, struct...)
-    // where T stands for type ('f','v','X'...)
-    // where N stands for NR (NumbeR)
-    if #[cfg(any(target_arch = "x86", target_arch = "arm"))] {
-        pub const FS_IOC_GETFLAGS: c_int = 0x80046601;
-        pub const FS_IOC_SETFLAGS: c_int = 0x40046602;
-        pub const FS_IOC_GETVERSION: c_int = 0x80047601;
-        pub const FS_IOC_SETVERSION: c_int = 0x40047602;
-        pub const FS_IOC32_GETFLAGS: c_int = 0x80046601;
-        pub const FS_IOC32_SETFLAGS: c_int = 0x40046602;
-        pub const FS_IOC32_GETVERSION: c_int = 0x80047601;
-        pub const FS_IOC32_SETVERSION: c_int = 0x40047602;
-    } else if #[cfg(any(
-        target_arch = "x86_64",
-        target_arch = "riscv64",
-        target_arch = "aarch64"
-    ))] {
-        pub const FS_IOC_GETFLAGS: c_int = 0x80086601;
-        pub const FS_IOC_SETFLAGS: c_int = 0x40086602;
-        pub const FS_IOC_GETVERSION: c_int = 0x80087601;
-        pub const FS_IOC_SETVERSION: c_int = 0x40087602;
-        pub const FS_IOC32_GETFLAGS: c_int = 0x80046601;
-        pub const FS_IOC32_SETFLAGS: c_int = 0x40046602;
-        pub const FS_IOC32_GETVERSION: c_int = 0x80047601;
-        pub const FS_IOC32_SETVERSION: c_int = 0x40047602;
-    }
-}
 
 pub const EAI_AGAIN: c_int = 2;
 pub const EAI_BADFLAGS: c_int = 3;
@@ -1978,6 +1602,12 @@ pub const NLM_F_EXCL: c_int = 0x200;
 pub const NLM_F_CREATE: c_int = 0x400;
 pub const NLM_F_APPEND: c_int = 0x800;
 
+pub const NLM_F_NONREC: c_int = 0x100;
+pub const NLM_F_BULK: c_int = 0x200;
+
+pub const NLM_F_CAPPED: c_int = 0x100;
+pub const NLM_F_ACK_TLVS: c_int = 0x200;
+
 pub const NLMSG_NOOP: c_int = 0x1;
 pub const NLMSG_ERROR: c_int = 0x2;
 pub const NLMSG_DONE: c_int = 0x3;
@@ -2009,6 +1639,9 @@ pub const NFNL_SUBSYS_CTNETLINK_TIMEOUT: c_int = 8;
 pub const NFNL_SUBSYS_CTHELPER: c_int = 9;
 pub const NFNL_SUBSYS_NFTABLES: c_int = 10;
 pub const NFNL_SUBSYS_NFT_COMPAT: c_int = 11;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const NFNL_SUBSYS_COUNT: c_int = 12;
 
 pub const NFNL_MSG_BATCH_BEGIN: c_int = NLMSG_MIN_TYPE;
@@ -2121,6 +1754,9 @@ pub const NFQA_CFG_F_CONNTRACK: c_int = 0x0002;
 pub const NFQA_CFG_F_GSO: c_int = 0x0004;
 pub const NFQA_CFG_F_UID_GID: c_int = 0x0008;
 pub const NFQA_CFG_F_SECCTX: c_int = 0x0010;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const NFQA_CFG_F_MAX: c_int = 0x0020;
 
 pub const NFQA_SKB_CSUMNOTREADY: c_int = 0x0001;
@@ -2187,18 +1823,22 @@ pub const GRND_NONBLOCK: c_uint = 0x0001;
 pub const GRND_RANDOM: c_uint = 0x0002;
 pub const GRND_INSECURE: c_uint = 0x0004;
 
+// <linux/seccomp.h>
 pub const SECCOMP_MODE_DISABLED: c_uint = 0;
 pub const SECCOMP_MODE_STRICT: c_uint = 1;
 pub const SECCOMP_MODE_FILTER: c_uint = 2;
 
-pub const SECCOMP_FILTER_FLAG_TSYNC: c_ulong = 1;
-pub const SECCOMP_FILTER_FLAG_LOG: c_ulong = 2;
-pub const SECCOMP_FILTER_FLAG_SPEC_ALLOW: c_ulong = 4;
-pub const SECCOMP_FILTER_FLAG_NEW_LISTENER: c_ulong = 8;
+pub const SECCOMP_SET_MODE_STRICT: c_uint = 0;
+pub const SECCOMP_SET_MODE_FILTER: c_uint = 1;
+pub const SECCOMP_GET_ACTION_AVAIL: c_uint = 2;
+pub const SECCOMP_GET_NOTIF_SIZES: c_uint = 3;
 
-pub const SECCOMP_RET_ACTION_FULL: c_uint = 0xffff0000;
-pub const SECCOMP_RET_ACTION: c_uint = 0x7fff0000;
-pub const SECCOMP_RET_DATA: c_uint = 0x0000ffff;
+pub const SECCOMP_FILTER_FLAG_TSYNC: c_ulong = 1 << 0;
+pub const SECCOMP_FILTER_FLAG_LOG: c_ulong = 1 << 1;
+pub const SECCOMP_FILTER_FLAG_SPEC_ALLOW: c_ulong = 1 << 2;
+pub const SECCOMP_FILTER_FLAG_NEW_LISTENER: c_ulong = 1 << 3;
+pub const SECCOMP_FILTER_FLAG_TSYNC_ESRCH: c_ulong = 1 << 4;
+pub const SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV: c_ulong = 1 << 5;
 
 pub const SECCOMP_RET_KILL_PROCESS: c_uint = 0x80000000;
 pub const SECCOMP_RET_KILL_THREAD: c_uint = 0x00000000;
@@ -2209,6 +1849,23 @@ pub const SECCOMP_RET_USER_NOTIF: c_uint = 0x7fc00000;
 pub const SECCOMP_RET_TRACE: c_uint = 0x7ff00000;
 pub const SECCOMP_RET_LOG: c_uint = 0x7ffc0000;
 pub const SECCOMP_RET_ALLOW: c_uint = 0x7fff0000;
+
+pub const SECCOMP_RET_ACTION_FULL: c_uint = 0xffff0000;
+pub const SECCOMP_RET_ACTION: c_uint = 0x7fff0000;
+pub const SECCOMP_RET_DATA: c_uint = 0x0000ffff;
+
+pub const SECCOMP_USER_NOTIF_FLAG_CONTINUE: c_ulong = 1;
+
+pub const SECCOMP_ADDFD_FLAG_SETFD: c_ulong = 1;
+pub const SECCOMP_ADDFD_FLAG_SEND: c_ulong = 2;
+
+const SECCOMP_IOC_MAGIC: u32 = b'!' as u32;
+
+pub const SECCOMP_IOCTL_NOTIF_RECV: Ioctl = _IOWR::<seccomp_notif>(SECCOMP_IOC_MAGIC, 0);
+pub const SECCOMP_IOCTL_NOTIF_SEND: Ioctl = _IOWR::<seccomp_notif_resp>(SECCOMP_IOC_MAGIC, 1);
+pub const SECCOMP_IOCTL_NOTIF_ID_VALID: Ioctl = _IOW::<u64>(SECCOMP_IOC_MAGIC, 2);
+pub const SECCOMP_IOCTL_NOTIF_ADDFD: Ioctl = _IOW::<seccomp_notif_addfd>(SECCOMP_IOC_MAGIC, 3);
+pub const SECCOMP_IOCTL_NOTIF_SET_FLAGS: Ioctl = _IOW::<u64>(SECCOMP_IOC_MAGIC, 4);
 
 pub const NLA_F_NESTED: c_int = 1 << 15;
 pub const NLA_F_NET_BYTEORDER: c_int = 1 << 14;
@@ -2314,7 +1971,7 @@ pub const NF_MAX_VERDICT: c_int = NF_STOP;
 pub const NF_VERDICT_MASK: c_int = 0x000000ff;
 pub const NF_VERDICT_FLAG_QUEUE_BYPASS: c_int = 0x00008000;
 
-pub const NF_VERDICT_QMASK: c_int = 0xffff0000;
+pub const NF_VERDICT_QMASK: c_int = u32_cast_int(0xffff0000);
 pub const NF_VERDICT_QBITS: c_int = 16;
 
 pub const NF_VERDICT_BITS: c_int = 16;
@@ -2364,6 +2021,9 @@ pub const NF_BR_PRI_BRNF: c_int = 0;
 pub const NF_BR_PRI_NAT_DST_OTHER: c_int = 100;
 pub const NF_BR_PRI_FILTER_OTHER: c_int = 200;
 pub const NF_BR_PRI_NAT_SRC: c_int = 300;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const NF_BR_PRI_LAST: c_int = crate::INT_MAX;
 
 // linux/netfilter_ipv4.h
@@ -2388,6 +2048,9 @@ pub const NF_IP_PRI_NAT_SRC: c_int = 100;
 pub const NF_IP_PRI_SELINUX_LAST: c_int = 225;
 pub const NF_IP_PRI_CONNTRACK_HELPER: c_int = 300;
 pub const NF_IP_PRI_CONNTRACK_CONFIRM: c_int = crate::INT_MAX;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const NF_IP_PRI_LAST: c_int = crate::INT_MAX;
 
 // linux/netfilter_ipv6.h
@@ -2411,6 +2074,9 @@ pub const NF_IP6_PRI_SECURITY: c_int = 50;
 pub const NF_IP6_PRI_NAT_SRC: c_int = 100;
 pub const NF_IP6_PRI_SELINUX_LAST: c_int = 225;
 pub const NF_IP6_PRI_CONNTRACK_HELPER: c_int = 300;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const NF_IP6_PRI_LAST: c_int = crate::INT_MAX;
 
 // linux/netfilter_ipv6/ip6_tables.h
@@ -2428,7 +2094,11 @@ pub const NFT_REG_1: c_int = 1;
 pub const NFT_REG_2: c_int = 2;
 pub const NFT_REG_3: c_int = 3;
 pub const NFT_REG_4: c_int = 4;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const __NFT_REG_MAX: c_int = 5;
+
 pub const NFT_REG32_00: c_int = 8;
 pub const NFT_REG32_01: c_int = 9;
 pub const NFT_REG32_02: c_int = 10;
@@ -2477,6 +2147,9 @@ pub const NFT_MSG_NEWOBJ: c_int = 18;
 pub const NFT_MSG_GETOBJ: c_int = 19;
 pub const NFT_MSG_DELOBJ: c_int = 20;
 pub const NFT_MSG_GETOBJ_RESET: c_int = 21;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const NFT_MSG_MAX: c_int = 25;
 
 pub const NFT_SET_ANONYMOUS: c_int = 0x1;
@@ -2608,60 +2281,82 @@ pub const NFT_NG_INCREMENTAL: c_int = 0;
 pub const NFT_NG_RANDOM: c_int = 1;
 
 // linux/input.h
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const FF_MAX: crate::__u16 = 0x7f;
+
 pub const FF_CNT: usize = FF_MAX as usize + 1;
 
 // linux/input-event-codes.h
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const INPUT_PROP_MAX: crate::__u16 = 0x1f;
+
 pub const INPUT_PROP_CNT: usize = INPUT_PROP_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const EV_MAX: crate::__u16 = 0x1f;
+
 pub const EV_CNT: usize = EV_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const SYN_MAX: crate::__u16 = 0xf;
+
 pub const SYN_CNT: usize = SYN_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const KEY_MAX: crate::__u16 = 0x2ff;
+
 pub const KEY_CNT: usize = KEY_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const REL_MAX: crate::__u16 = 0x0f;
+
 pub const REL_CNT: usize = REL_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const ABS_MAX: crate::__u16 = 0x3f;
+
 pub const ABS_CNT: usize = ABS_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const SW_MAX: crate::__u16 = 0x0f;
+
 pub const SW_CNT: usize = SW_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const MSC_MAX: crate::__u16 = 0x07;
+
 pub const MSC_CNT: usize = MSC_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const LED_MAX: crate::__u16 = 0x0f;
+
 pub const LED_CNT: usize = LED_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const REP_MAX: crate::__u16 = 0x01;
+
 pub const REP_CNT: usize = REP_MAX as usize + 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const SND_MAX: crate::__u16 = 0x07;
+
 pub const SND_CNT: usize = SND_MAX as usize + 1;
 
 // linux/uinput.h
 pub const UINPUT_VERSION: c_uint = 5;
 pub const UINPUT_MAX_NAME_SIZE: usize = 80;
-
-// bionic/libc/kernel/uapi/linux/if_tun.h
-pub const IFF_TUN: c_int = 0x0001;
-pub const IFF_TAP: c_int = 0x0002;
-pub const IFF_NAPI: c_int = 0x0010;
-pub const IFF_NAPI_FRAGS: c_int = 0x0020;
-pub const IFF_NO_CARRIER: c_int = 0x0040;
-pub const IFF_NO_PI: c_int = 0x1000;
-pub const IFF_ONE_QUEUE: c_int = 0x2000;
-pub const IFF_VNET_HDR: c_int = 0x4000;
-pub const IFF_TUN_EXCL: c_int = 0x8000;
-pub const IFF_MULTI_QUEUE: c_int = 0x0100;
-pub const IFF_ATTACH_QUEUE: c_int = 0x0200;
-pub const IFF_DETACH_QUEUE: c_int = 0x0400;
-pub const IFF_PERSIST: c_int = 0x0800;
-pub const IFF_NOFILTER: c_int = 0x1000;
-// Features for GSO (TUNSETOFFLOAD)
-pub const TUN_F_CSUM: c_uint = 0x01;
-pub const TUN_F_TSO4: c_uint = 0x02;
-pub const TUN_F_TSO6: c_uint = 0x04;
-pub const TUN_F_TSO_ECN: c_uint = 0x08;
-pub const TUN_F_UFO: c_uint = 0x10;
-pub const TUN_F_USO4: c_uint = 0x20;
-pub const TUN_F_USO6: c_uint = 0x40;
 
 // start android/platform/bionic/libc/kernel/uapi/linux/if_ether.h
 // from https://android.googlesource.com/platform/bionic/+/HEAD/libc/kernel/uapi/linux/if_ether.h
@@ -2942,6 +2637,9 @@ pub const SOF_TIMESTAMPING_OPT_TSONLY: c_uint = 1 << 11;
 pub const SOF_TIMESTAMPING_OPT_STATS: c_uint = 1 << 12;
 pub const SOF_TIMESTAMPING_OPT_PKTINFO: c_uint = 1 << 13;
 pub const SOF_TIMESTAMPING_OPT_TX_SWHW: c_uint = 1 << 14;
+pub const SOF_TIMESTAMPING_BIND_PHC: c_uint = 1 << 15;
+pub const SOF_TIMESTAMPING_OPT_ID_TCP: c_uint = 1 << 16;
+pub const SOF_TIMESTAMPING_OPT_RX_FILTER: c_uint = 1 << 17;
 
 #[deprecated(
     since = "0.2.55",
@@ -3032,6 +2730,16 @@ pub const FUTEX_PRIVATE_FLAG: c_int = 128;
 pub const FUTEX_CLOCK_REALTIME: c_int = 256;
 pub const FUTEX_CMD_MASK: c_int = !(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
 
+pub const FUTEX2_SIZE_U8: c_int = 0x00;
+pub const FUTEX2_SIZE_U16: c_int = 0x01;
+pub const FUTEX2_SIZE_U32: c_int = 0x02;
+pub const FUTEX2_SIZE_U64: c_int = 0x03;
+pub const FUTEX2_NUMA: c_int = 0x04;
+pub const FUTEX2_PRIVATE: c_int = FUTEX_PRIVATE_FLAG;
+pub const FUTEX2_SIZE_MASK: c_int = 0x03;
+pub const FUTEX_32: c_int = FUTEX2_SIZE_U32;
+pub const FUTEX_WAITV_MAX: c_int = 128;
+
 // linux/errqueue.h
 pub const SO_EE_ORIGIN_NONE: u8 = 0;
 pub const SO_EE_ORIGIN_LOCAL: u8 = 1;
@@ -3092,6 +2800,8 @@ pub const SCHED_DEADLINE: c_int = 6;
 pub const SCHED_RESET_ON_FORK: c_int = 0x40000000;
 
 pub const CLONE_PIDFD: c_int = 0x1000;
+pub const CLONE_CLEAR_SIGHAND: c_ulonglong = 0x100000000;
+pub const CLONE_INTO_CGROUP: c_ulonglong = 0x200000000;
 
 // linux/membarrier.h
 pub const MEMBARRIER_CMD_QUERY: c_int = 0;
@@ -3127,29 +2837,182 @@ pub const PF_VSOCK: c_int = AF_VSOCK;
 
 pub const SOMAXCONN: c_int = 128;
 
-// sys/prctl.h
-pub const PR_SET_PDEATHSIG: c_int = 1;
-pub const PR_GET_PDEATHSIG: c_int = 2;
-pub const PR_GET_SECUREBITS: c_int = 27;
-pub const PR_SET_SECUREBITS: c_int = 28;
-
 // sys/system_properties.h
 pub const PROP_VALUE_MAX: c_int = 92;
 pub const PROP_NAME_MAX: c_int = 32;
 
 // sys/prctl.h
-pub const PR_SET_VMA: c_int = 0x53564d41;
-pub const PR_SET_VMA_ANON_NAME: c_int = 0;
-pub const PR_SET_NO_NEW_PRIVS: c_int = 38;
-pub const PR_GET_NO_NEW_PRIVS: c_int = 39;
-pub const PR_GET_SECCOMP: c_int = 21;
-pub const PR_SET_SECCOMP: c_int = 22;
+pub const PR_SET_PDEATHSIG: c_int = 1;
+pub const PR_GET_PDEATHSIG: c_int = 2;
+pub const PR_GET_DUMPABLE: c_int = 3;
+pub const PR_SET_DUMPABLE: c_int = 4;
+pub const PR_GET_UNALIGN: c_int = 5;
+pub const PR_SET_UNALIGN: c_int = 6;
+pub const PR_UNALIGN_NOPRINT: c_int = 1;
+pub const PR_UNALIGN_SIGBUS: c_int = 2;
+pub const PR_GET_KEEPCAPS: c_int = 7;
+pub const PR_SET_KEEPCAPS: c_int = 8;
+pub const PR_GET_FPEMU: c_int = 9;
+pub const PR_SET_FPEMU: c_int = 10;
+pub const PR_FPEMU_NOPRINT: c_int = 1;
+pub const PR_FPEMU_SIGFPE: c_int = 2;
+pub const PR_GET_FPEXC: c_int = 11;
+pub const PR_SET_FPEXC: c_int = 12;
+pub const PR_FP_EXC_SW_ENABLE: c_int = 0x80;
+pub const PR_FP_EXC_DIV: c_int = 0x010000;
+pub const PR_FP_EXC_OVF: c_int = 0x020000;
+pub const PR_FP_EXC_UND: c_int = 0x040000;
+pub const PR_FP_EXC_RES: c_int = 0x080000;
+pub const PR_FP_EXC_INV: c_int = 0x100000;
+pub const PR_FP_EXC_DISABLED: c_int = 0;
+pub const PR_FP_EXC_NONRECOV: c_int = 1;
+pub const PR_FP_EXC_ASYNC: c_int = 2;
+pub const PR_FP_EXC_PRECISE: c_int = 3;
 pub const PR_GET_TIMING: c_int = 13;
 pub const PR_SET_TIMING: c_int = 14;
 pub const PR_TIMING_STATISTICAL: c_int = 0;
 pub const PR_TIMING_TIMESTAMP: c_int = 1;
 pub const PR_SET_NAME: c_int = 15;
 pub const PR_GET_NAME: c_int = 16;
+pub const PR_GET_ENDIAN: c_int = 19;
+pub const PR_SET_ENDIAN: c_int = 20;
+pub const PR_ENDIAN_BIG: c_int = 0;
+pub const PR_ENDIAN_LITTLE: c_int = 1;
+pub const PR_ENDIAN_PPC_LITTLE: c_int = 2;
+pub const PR_GET_SECCOMP: c_int = 21;
+pub const PR_SET_SECCOMP: c_int = 22;
+pub const PR_CAPBSET_READ: c_int = 23;
+pub const PR_CAPBSET_DROP: c_int = 24;
+pub const PR_GET_TSC: c_int = 25;
+pub const PR_SET_TSC: c_int = 26;
+pub const PR_TSC_ENABLE: c_int = 1;
+pub const PR_TSC_SIGSEGV: c_int = 2;
+pub const PR_GET_SECUREBITS: c_int = 27;
+pub const PR_SET_SECUREBITS: c_int = 28;
+pub const PR_SET_TIMERSLACK: c_int = 29;
+pub const PR_GET_TIMERSLACK: c_int = 30;
+pub const PR_TASK_PERF_EVENTS_DISABLE: c_int = 31;
+pub const PR_TASK_PERF_EVENTS_ENABLE: c_int = 32;
+pub const PR_MCE_KILL: c_int = 33;
+pub const PR_MCE_KILL_CLEAR: c_int = 0;
+pub const PR_MCE_KILL_SET: c_int = 1;
+pub const PR_MCE_KILL_LATE: c_int = 0;
+pub const PR_MCE_KILL_EARLY: c_int = 1;
+pub const PR_MCE_KILL_DEFAULT: c_int = 2;
+pub const PR_MCE_KILL_GET: c_int = 34;
+pub const PR_SET_MM: c_int = 35;
+pub const PR_SET_MM_START_CODE: c_int = 1;
+pub const PR_SET_MM_END_CODE: c_int = 2;
+pub const PR_SET_MM_START_DATA: c_int = 3;
+pub const PR_SET_MM_END_DATA: c_int = 4;
+pub const PR_SET_MM_START_STACK: c_int = 5;
+pub const PR_SET_MM_START_BRK: c_int = 6;
+pub const PR_SET_MM_BRK: c_int = 7;
+pub const PR_SET_MM_ARG_START: c_int = 8;
+pub const PR_SET_MM_ARG_END: c_int = 9;
+pub const PR_SET_MM_ENV_START: c_int = 10;
+pub const PR_SET_MM_ENV_END: c_int = 11;
+pub const PR_SET_MM_AUXV: c_int = 12;
+pub const PR_SET_MM_EXE_FILE: c_int = 13;
+pub const PR_SET_MM_MAP: c_int = 14;
+pub const PR_SET_MM_MAP_SIZE: c_int = 15;
+pub const PR_SET_PTRACER: c_int = 0x59616d61;
+pub const PR_SET_PTRACER_ANY: c_ulong = (-1 as c_long) as c_ulong;
+pub const PR_SET_CHILD_SUBREAPER: c_int = 36;
+pub const PR_GET_CHILD_SUBREAPER: c_int = 37;
+pub const PR_SET_NO_NEW_PRIVS: c_int = 38;
+pub const PR_GET_NO_NEW_PRIVS: c_int = 39;
+pub const PR_GET_TID_ADDRESS: c_int = 40;
+pub const PR_SET_THP_DISABLE: c_int = 41;
+pub const PR_GET_THP_DISABLE: c_int = 42;
+pub const PR_MPX_ENABLE_MANAGEMENT: c_int = 43;
+pub const PR_MPX_DISABLE_MANAGEMENT: c_int = 44;
+pub const PR_SET_FP_MODE: c_int = 45;
+pub const PR_GET_FP_MODE: c_int = 46;
+pub const PR_FP_MODE_FR: c_int = 1 << 0;
+pub const PR_FP_MODE_FRE: c_int = 1 << 1;
+pub const PR_CAP_AMBIENT: c_int = 47;
+pub const PR_CAP_AMBIENT_IS_SET: c_int = 1;
+pub const PR_CAP_AMBIENT_RAISE: c_int = 2;
+pub const PR_CAP_AMBIENT_LOWER: c_int = 3;
+pub const PR_CAP_AMBIENT_CLEAR_ALL: c_int = 4;
+pub const PR_SVE_SET_VL: c_int = 50;
+pub const PR_SVE_SET_VL_ONEXEC: c_int = 1 << 18;
+pub const PR_SVE_GET_VL: c_int = 51;
+pub const PR_SVE_VL_LEN_MASK: c_int = 0xffff;
+pub const PR_SVE_VL_INHERIT: c_int = 1 << 17;
+pub const PR_GET_SPECULATION_CTRL: c_int = 52;
+pub const PR_SET_SPECULATION_CTRL: c_int = 53;
+pub const PR_SPEC_STORE_BYPASS: c_int = 0;
+pub const PR_SPEC_INDIRECT_BRANCH: c_int = 1;
+pub const PR_SPEC_L1D_FLUSH: c_int = 2;
+pub const PR_SPEC_NOT_AFFECTED: c_int = 0;
+pub const PR_SPEC_PRCTL: c_ulong = 1 << 0;
+pub const PR_SPEC_ENABLE: c_ulong = 1 << 1;
+pub const PR_SPEC_DISABLE: c_ulong = 1 << 2;
+pub const PR_SPEC_FORCE_DISABLE: c_ulong = 1 << 3;
+pub const PR_SPEC_DISABLE_NOEXEC: c_ulong = 1 << 4;
+pub const PR_PAC_RESET_KEYS: c_int = 54;
+pub const PR_PAC_APIAKEY: c_ulong = 1 << 0;
+pub const PR_PAC_APIBKEY: c_ulong = 1 << 1;
+pub const PR_PAC_APDAKEY: c_ulong = 1 << 2;
+pub const PR_PAC_APDBKEY: c_ulong = 1 << 3;
+pub const PR_PAC_APGAKEY: c_ulong = 1 << 4;
+pub const PR_SET_TAGGED_ADDR_CTRL: c_int = 55;
+pub const PR_GET_TAGGED_ADDR_CTRL: c_int = 56;
+pub const PR_TAGGED_ADDR_ENABLE: c_ulong = 1 << 0;
+pub const PR_MTE_TCF_NONE: c_ulong = 0;
+pub const PR_MTE_TCF_SYNC: c_ulong = 1 << 1;
+pub const PR_MTE_TCF_ASYNC: c_ulong = 1 << 2;
+pub const PR_MTE_TCF_MASK: c_ulong = PR_MTE_TCF_SYNC | PR_MTE_TCF_ASYNC;
+pub const PR_MTE_TAG_SHIFT: c_ulong = 3;
+pub const PR_MTE_TAG_MASK: c_ulong = 0xffff << PR_MTE_TAG_SHIFT;
+pub const PR_MTE_TCF_SHIFT: c_ulong = 1;
+pub const PR_SET_IO_FLUSHER: c_int = 57;
+pub const PR_GET_IO_FLUSHER: c_int = 58;
+pub const PR_SET_SYSCALL_USER_DISPATCH: c_int = 59;
+pub const PR_SYS_DISPATCH_OFF: c_int = 0;
+pub const PR_SYS_DISPATCH_ON: c_int = 1;
+pub const SYSCALL_DISPATCH_FILTER_ALLOW: c_int = 0;
+pub const SYSCALL_DISPATCH_FILTER_BLOCK: c_int = 1;
+pub const PR_PAC_SET_ENABLED_KEYS: c_int = 60;
+pub const PR_PAC_GET_ENABLED_KEYS: c_int = 61;
+pub const PR_SCHED_CORE: c_int = 62;
+pub const PR_SCHED_CORE_GET: c_int = 0;
+pub const PR_SCHED_CORE_CREATE: c_int = 1;
+pub const PR_SCHED_CORE_SHARE_TO: c_int = 2;
+pub const PR_SCHED_CORE_SHARE_FROM: c_int = 3;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
+pub const PR_SCHED_CORE_MAX: c_int = 4;
+
+pub const PR_SCHED_CORE_SCOPE_THREAD: c_int = 0;
+pub const PR_SCHED_CORE_SCOPE_THREAD_GROUP: c_int = 1;
+pub const PR_SCHED_CORE_SCOPE_PROCESS_GROUP: c_int = 2;
+pub const PR_SME_SET_VL: c_int = 63;
+pub const PR_SME_SET_VL_ONEXEC: c_int = 1 << 18;
+pub const PR_SME_GET_VL: c_int = 64;
+pub const PR_SME_VL_LEN_MASK: c_int = 0xffff;
+pub const PR_SME_VL_INHERIT: c_int = 1 << 17;
+pub const PR_SET_MDWE: c_int = 65;
+pub const PR_MDWE_REFUSE_EXEC_GAIN: c_ulong = 1 << 0;
+pub const PR_MDWE_NO_INHERIT: c_ulong = 1 << 1;
+pub const PR_GET_MDWE: c_int = 66;
+pub const PR_SET_VMA: c_int = 0x53564d41;
+pub const PR_SET_VMA_ANON_NAME: c_int = 0;
+pub const PR_GET_AUXV: c_int = 0x41555856;
+pub const PR_SET_MEMORY_MERGE: c_int = 67;
+pub const PR_GET_MEMORY_MERGE: c_int = 68;
+pub const PR_RISCV_V_SET_CONTROL: c_int = 69;
+pub const PR_RISCV_V_GET_CONTROL: c_int = 70;
+pub const PR_RISCV_V_VSTATE_CTRL_DEFAULT: c_int = 0;
+pub const PR_RISCV_V_VSTATE_CTRL_OFF: c_int = 1;
+pub const PR_RISCV_V_VSTATE_CTRL_ON: c_int = 2;
+pub const PR_RISCV_V_VSTATE_CTRL_INHERIT: c_int = 1 << 4;
+pub const PR_RISCV_V_VSTATE_CTRL_CUR_MASK: c_int = 0x3;
+pub const PR_RISCV_V_VSTATE_CTRL_NEXT_MASK: c_int = 0xc;
+pub const PR_RISCV_V_VSTATE_CTRL_MASK: c_int = 0x1f;
 
 // linux/if_addr.h
 pub const IFA_UNSPEC: c_ushort = 0;
@@ -3391,7 +3254,6 @@ pub const KERN_PROF: c_int = 6;
 pub const KERN_NODENAME: c_int = 7;
 pub const KERN_DOMAINNAME: c_int = 8;
 pub const KERN_PANIC: c_int = 15;
-pub const KERN_REALROOTDEV: c_int = 16;
 pub const KERN_SPARC_REBOOT: c_int = 21;
 pub const KERN_CTLALTDEL: c_int = 22;
 pub const KERN_PRINTK: c_int = 23;
@@ -3426,7 +3288,11 @@ pub const KERN_S390_USER_DEBUG_LOGGING: c_int = 51;
 pub const KERN_CORE_USES_PID: c_int = 52;
 pub const KERN_TAINTED: c_int = 53;
 pub const KERN_CADPID: c_int = 54;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const KERN_PIDMAX: c_int = 55;
+
 pub const KERN_CORE_PATTERN: c_int = 56;
 pub const KERN_PANIC_ON_OOPS: c_int = 57;
 pub const KERN_HPPA_PWRSW: c_int = 58;
@@ -3434,7 +3300,11 @@ pub const KERN_HPPA_UNALIGNED: c_int = 59;
 pub const KERN_PRINTK_RATELIMIT: c_int = 60;
 pub const KERN_PRINTK_RATELIMIT_BURST: c_int = 61;
 pub const KERN_PTY: c_int = 62;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const KERN_NGROUPS_MAX: c_int = 63;
+
 pub const KERN_SPARC_SCONS_PWROFF: c_int = 64;
 pub const KERN_HZ_TIMER: c_int = 65;
 pub const KERN_UNKNOWN_NMI_PANIC: c_int = 66;
@@ -3461,7 +3331,6 @@ pub const VM_SWAPPINESS: c_int = 19;
 pub const VM_LOWMEM_RESERVE_RATIO: c_int = 20;
 pub const VM_MIN_FREE_KBYTES: c_int = 21;
 pub const VM_MAX_MAP_COUNT: c_int = 22;
-pub const VM_LAPTOP_MODE: c_int = 23;
 pub const VM_BLOCK_DUMP: c_int = 24;
 pub const VM_HUGETLB_GROUP: c_int = 25;
 pub const VM_VFS_CACHE_PRESSURE: c_int = 26;
@@ -3526,7 +3395,7 @@ pub const PF_NO_SETAFFINITY: c_int = 0x04000000;
 pub const PF_MCE_EARLY: c_int = 0x08000000;
 pub const PF_MEMALLOC_PIN: c_int = 0x10000000;
 
-pub const PF_SUSPEND_TASK: c_int = 0x80000000;
+pub const PF_SUSPEND_TASK: c_int = u32_cast_int(0x80000000);
 
 pub const KLOG_CLOSE: c_int = 0;
 pub const KLOG_OPEN: c_int = 1;
@@ -3565,8 +3434,24 @@ pub const AT_RANDOM: c_ulong = 25;
 pub const AT_HWCAP2: c_ulong = 26;
 pub const AT_RSEQ_FEATURE_SIZE: c_ulong = 27;
 pub const AT_RSEQ_ALIGN: c_ulong = 28;
+pub const AT_HWCAP3: c_ulong = 29;
+pub const AT_HWCAP4: c_ulong = 30;
 pub const AT_EXECFN: c_ulong = 31;
 pub const AT_MINSIGSTKSZ: c_ulong = 51;
+
+// siginfo.h
+pub const SI_DETHREAD: c_int = -7;
+pub const TRAP_PERF: c_int = 6;
+
+// Flags for preadv2/pwritev2
+pub const RWF_HIPRI: c_int = 0x00000001;
+pub const RWF_DSYNC: c_int = 0x00000002;
+pub const RWF_SYNC: c_int = 0x00000004;
+pub const RWF_NOWAIT: c_int = 0x00000008;
+pub const RWF_APPEND: c_int = 0x00000010;
+pub const RWF_NOAPPEND: c_int = 0x00000020;
+pub const RWF_ATOMIC: c_int = 0x00000040;
+pub const RWF_DONTCACHE: c_int = 0x00000080;
 
 // Most `*_SUPER_MAGIC` constants are defined at the `linux_like` level; the
 // following are only available on newer Linux versions than the versions
@@ -3580,89 +3465,92 @@ cfg_if! {
 }
 
 f! {
-    pub fn CMSG_NXTHDR(mhdr: *const msghdr, cmsg: *const cmsghdr) -> *mut cmsghdr {
+    pub unsafe fn CMSG_NXTHDR(mhdr: *const msghdr, cmsg: *const cmsghdr) -> *mut cmsghdr {
         let next = (cmsg as usize + super::CMSG_ALIGN((*cmsg).cmsg_len as usize)) as *mut cmsghdr;
         let max = (*mhdr).msg_control as usize + (*mhdr).msg_controllen as usize;
         if (next.offset(1)) as usize > max {
-            0 as *mut cmsghdr
+            ptr::null_mut()
         } else {
-            next as *mut cmsghdr
+            next.cast()
         }
     }
 
-    pub fn CPU_ALLOC_SIZE(count: c_int) -> size_t {
+    pub unsafe fn CPU_ALLOC_SIZE(count: c_int) -> size_t {
         let _dummy: cpu_set_t = mem::zeroed();
-        let size_in_bits = 8 * mem::size_of_val(&_dummy.__bits[0]);
+        let size_in_bits = 8 * size_of_val(&_dummy.__bits[0]);
         ((count as size_t + size_in_bits - 1) / 8) as size_t
     }
 
-    pub fn CPU_ZERO(cpuset: &mut cpu_set_t) -> () {
-        for slot in cpuset.__bits.iter_mut() {
-            *slot = 0;
-        }
+    pub unsafe fn CPU_ZERO(cpuset: &mut cpu_set_t) -> () {
+        cpuset.__bits.fill(0);
     }
 
-    pub fn CPU_SET(cpu: usize, cpuset: &mut cpu_set_t) -> () {
-        let size_in_bits = 8 * mem::size_of_val(&cpuset.__bits[0]); // 32, 64 etc
+    pub unsafe fn CPU_SET(cpu: usize, cpuset: &mut cpu_set_t) -> () {
+        let size_in_bits = 8 * size_of_val(&cpuset.__bits[0]); // 32, 64 etc
         let (idx, offset) = (cpu / size_in_bits, cpu % size_in_bits);
         cpuset.__bits[idx] |= 1 << offset;
         ()
     }
 
-    pub fn CPU_CLR(cpu: usize, cpuset: &mut cpu_set_t) -> () {
-        let size_in_bits = 8 * mem::size_of_val(&cpuset.__bits[0]); // 32, 64 etc
+    pub unsafe fn CPU_CLR(cpu: usize, cpuset: &mut cpu_set_t) -> () {
+        let size_in_bits = 8 * size_of_val(&cpuset.__bits[0]); // 32, 64 etc
         let (idx, offset) = (cpu / size_in_bits, cpu % size_in_bits);
         cpuset.__bits[idx] &= !(1 << offset);
         ()
     }
 
-    pub fn CPU_ISSET(cpu: usize, cpuset: &cpu_set_t) -> bool {
-        let size_in_bits = 8 * mem::size_of_val(&cpuset.__bits[0]);
+    pub unsafe fn CPU_ISSET(cpu: usize, cpuset: &cpu_set_t) -> bool {
+        let size_in_bits = 8 * size_of_val(&cpuset.__bits[0]);
         let (idx, offset) = (cpu / size_in_bits, cpu % size_in_bits);
         0 != (cpuset.__bits[idx] & (1 << offset))
     }
 
-    pub fn CPU_COUNT_S(size: usize, cpuset: &cpu_set_t) -> c_int {
+    pub unsafe fn CPU_COUNT_S(size: usize, cpuset: &cpu_set_t) -> c_int {
         let mut s: u32 = 0;
-        let size_of_mask = mem::size_of_val(&cpuset.__bits[0]);
+        let size_of_mask = size_of_val(&cpuset.__bits[0]);
         for i in cpuset.__bits[..(size / size_of_mask)].iter() {
             s += i.count_ones();
         }
         s as c_int
     }
 
-    pub fn CPU_COUNT(cpuset: &cpu_set_t) -> c_int {
-        CPU_COUNT_S(mem::size_of::<cpu_set_t>(), cpuset)
+    pub unsafe fn CPU_COUNT(cpuset: &cpu_set_t) -> c_int {
+        CPU_COUNT_S(size_of::<cpu_set_t>(), cpuset)
     }
 
-    pub fn CPU_EQUAL(set1: &cpu_set_t, set2: &cpu_set_t) -> bool {
+    pub unsafe fn CPU_EQUAL(set1: &cpu_set_t, set2: &cpu_set_t) -> bool {
         set1.__bits == set2.__bits
     }
 
-    pub fn major(dev: crate::dev_t) -> c_int {
-        ((dev >> 8) & 0xfff) as c_int
-    }
-    pub fn minor(dev: crate::dev_t) -> c_int {
-        ((dev & 0xff) | ((dev >> 12) & 0xfff00)) as c_int
-    }
-    pub fn NLA_ALIGN(len: c_int) -> c_int {
+    pub unsafe fn NLA_ALIGN(len: c_int) -> c_int {
         return ((len) + NLA_ALIGNTO - 1) & !(NLA_ALIGNTO - 1);
     }
 
-    pub fn SO_EE_OFFENDER(ee: *const crate::sock_extended_err) -> *mut crate::sockaddr {
+    pub unsafe fn SO_EE_OFFENDER(ee: *const crate::sock_extended_err) -> *mut crate::sockaddr {
         ee.offset(1) as *mut crate::sockaddr
     }
 }
 
 safe_f! {
-    pub {const} fn makedev(ma: c_uint, mi: c_uint) -> crate::dev_t {
+    pub const safe fn makedev(ma: c_uint, mi: c_uint) -> crate::dev_t {
         let ma = ma as crate::dev_t;
         let mi = mi as crate::dev_t;
         ((ma & 0xfff) << 8) | (mi & 0xff) | ((mi & 0xfff00) << 12)
     }
+
+    pub const safe fn major(dev: crate::dev_t) -> c_int {
+        ((dev >> 8) & 0xfff) as c_int
+    }
+
+    pub const safe fn minor(dev: crate::dev_t) -> c_int {
+        ((dev & 0xff) | ((dev >> 12) & 0xfff00)) as c_int
+    }
 }
 
 extern "C" {
+    pub fn setpwent();
+    pub fn endpwent();
+    pub fn getpwent() -> *mut passwd;
     pub fn setgrent();
     pub fn endgrent();
     pub fn getgrent() -> *mut crate::group;
@@ -3687,17 +3575,8 @@ extern "C" {
     pub fn gettimeofday(tp: *mut crate::timeval, tz: *mut crate::timezone) -> c_int;
     pub fn mlock2(addr: *const c_void, len: size_t, flags: c_int) -> c_int;
     pub fn madvise(addr: *mut c_void, len: size_t, advice: c_int) -> c_int;
-    pub fn ioctl(fd: c_int, request: c_int, ...) -> c_int;
     pub fn msync(addr: *mut c_void, len: size_t, flags: c_int) -> c_int;
     pub fn mprotect(addr: *mut c_void, len: size_t, prot: c_int) -> c_int;
-    pub fn recvfrom(
-        socket: c_int,
-        buf: *mut c_void,
-        len: size_t,
-        flags: c_int,
-        addr: *mut crate::sockaddr,
-        addrlen: *mut crate::socklen_t,
-    ) -> ssize_t;
     pub fn getnameinfo(
         sa: *const crate::sockaddr,
         salen: crate::socklen_t,
@@ -3802,6 +3681,20 @@ extern "C" {
         new_value: *const itimerspec,
         old_value: *mut itimerspec,
     ) -> c_int;
+    pub fn timer_create(
+        clockid: crate::clockid_t,
+        sevp: *mut crate::sigevent,
+        timerid: *mut crate::timer_t,
+    ) -> c_int;
+    pub fn timer_delete(timerid: crate::timer_t) -> c_int;
+    pub fn timer_getoverrun(timerid: crate::timer_t) -> c_int;
+    pub fn timer_gettime(timerid: crate::timer_t, curr_value: *mut crate::itimerspec) -> c_int;
+    pub fn timer_settime(
+        timerid: crate::timer_t,
+        flags: c_int,
+        new_value: *const crate::itimerspec,
+        old_value: *mut crate::itimerspec,
+    ) -> c_int;
     pub fn syscall(num: c_long, ...) -> c_long;
     pub fn sched_getaffinity(
         pid: crate::pid_t,
@@ -3822,11 +3715,6 @@ extern "C" {
         timeout: c_int,
     ) -> c_int;
     pub fn epoll_ctl(epfd: c_int, op: c_int, fd: c_int, event: *mut crate::epoll_event) -> c_int;
-    pub fn pthread_getschedparam(
-        native: crate::pthread_t,
-        policy: *mut c_int,
-        param: *mut crate::sched_param,
-    ) -> c_int;
     pub fn unshare(flags: c_int) -> c_int;
     pub fn umount(target: *const c_char) -> c_int;
     pub fn sched_get_priority_max(policy: c_int) -> c_int;
@@ -3840,7 +3728,7 @@ extern "C" {
         len: size_t,
         flags: c_uint,
     ) -> ssize_t;
-    pub fn eventfd(init: c_uint, flags: c_int) -> c_int;
+    pub fn eventfd(initval: c_uint, flags: c_int) -> c_int;
     pub fn eventfd_read(fd: c_int, value: *mut eventfd_t) -> c_int;
     pub fn eventfd_write(fd: c_int, value: eventfd_t) -> c_int;
     pub fn sched_rr_get_interval(pid: crate::pid_t, tp: *mut crate::timespec) -> c_int;
@@ -3867,32 +3755,7 @@ extern "C" {
         timeout: *const crate::timespec,
         sigmask: *const sigset_t,
     ) -> c_int;
-    pub fn pthread_mutex_timedlock(
-        lock: *mut pthread_mutex_t,
-        abstime: *const crate::timespec,
-    ) -> c_int;
-    pub fn pthread_barrierattr_init(attr: *mut crate::pthread_barrierattr_t) -> c_int;
-    pub fn pthread_barrierattr_destroy(attr: *mut crate::pthread_barrierattr_t) -> c_int;
-    pub fn pthread_barrierattr_getpshared(
-        attr: *const crate::pthread_barrierattr_t,
-        shared: *mut c_int,
-    ) -> c_int;
-    pub fn pthread_barrierattr_setpshared(
-        attr: *mut crate::pthread_barrierattr_t,
-        shared: c_int,
-    ) -> c_int;
-    pub fn pthread_barrier_init(
-        barrier: *mut pthread_barrier_t,
-        attr: *const crate::pthread_barrierattr_t,
-        count: c_uint,
-    ) -> c_int;
-    pub fn pthread_barrier_destroy(barrier: *mut pthread_barrier_t) -> c_int;
-    pub fn pthread_barrier_wait(barrier: *mut pthread_barrier_t) -> c_int;
-    pub fn pthread_spin_init(lock: *mut crate::pthread_spinlock_t, pshared: c_int) -> c_int;
-    pub fn pthread_spin_destroy(lock: *mut crate::pthread_spinlock_t) -> c_int;
-    pub fn pthread_spin_lock(lock: *mut crate::pthread_spinlock_t) -> c_int;
-    pub fn pthread_spin_trylock(lock: *mut crate::pthread_spinlock_t) -> c_int;
-    pub fn pthread_spin_unlock(lock: *mut crate::pthread_spinlock_t) -> c_int;
+
     pub fn clone(
         cb: extern "C" fn(*mut c_void) -> c_int,
         child_stack: *mut c_void,
@@ -3907,29 +3770,11 @@ extern "C" {
         rqtp: *const crate::timespec,
         rmtp: *mut crate::timespec,
     ) -> c_int;
-    pub fn pthread_attr_getguardsize(
-        attr: *const crate::pthread_attr_t,
-        guardsize: *mut size_t,
-    ) -> c_int;
-    pub fn pthread_attr_setguardsize(attr: *mut crate::pthread_attr_t, guardsize: size_t) -> c_int;
-    pub fn pthread_attr_getinheritsched(
-        attr: *const crate::pthread_attr_t,
-        flag: *mut c_int,
-    ) -> c_int;
-    pub fn pthread_attr_setinheritsched(attr: *mut crate::pthread_attr_t, flag: c_int) -> c_int;
+
     pub fn sethostname(name: *const c_char, len: size_t) -> c_int;
     pub fn sched_get_priority_min(policy: c_int) -> c_int;
-    pub fn pthread_condattr_getpshared(
-        attr: *const pthread_condattr_t,
-        pshared: *mut c_int,
-    ) -> c_int;
     pub fn sysinfo(info: *mut crate::sysinfo) -> c_int;
     pub fn umount2(target: *const c_char, flags: c_int) -> c_int;
-    pub fn pthread_setschedparam(
-        native: crate::pthread_t,
-        policy: c_int,
-        param: *const crate::sched_param,
-    ) -> c_int;
     pub fn swapon(path: *const c_char, swapflags: c_int) -> c_int;
     pub fn sched_setscheduler(
         pid: crate::pid_t,
@@ -3957,37 +3802,16 @@ extern "C" {
         buflen: size_t,
         result: *mut *mut crate::group,
     ) -> c_int;
-    pub fn pthread_sigmask(how: c_int, set: *const sigset_t, oldset: *mut sigset_t) -> c_int;
     pub fn sem_open(name: *const c_char, oflag: c_int, ...) -> *mut sem_t;
     pub fn getgrnam(name: *const c_char) -> *mut crate::group;
-    pub fn pthread_kill(thread: crate::pthread_t, sig: c_int) -> c_int;
     pub fn sem_unlink(name: *const c_char) -> c_int;
     pub fn daemon(nochdir: c_int, noclose: c_int) -> c_int;
-    pub fn getpwnam_r(
-        name: *const c_char,
-        pwd: *mut passwd,
-        buf: *mut c_char,
-        buflen: size_t,
-        result: *mut *mut passwd,
-    ) -> c_int;
-    pub fn getpwuid_r(
-        uid: crate::uid_t,
-        pwd: *mut passwd,
-        buf: *mut c_char,
-        buflen: size_t,
-        result: *mut *mut passwd,
-    ) -> c_int;
     pub fn sigtimedwait(
         set: *const sigset_t,
         info: *mut siginfo_t,
         timeout: *const crate::timespec,
     ) -> c_int;
     pub fn sigwait(set: *const sigset_t, sig: *mut c_int) -> c_int;
-    pub fn pthread_atfork(
-        prepare: Option<unsafe extern "C" fn()>,
-        parent: Option<unsafe extern "C" fn()>,
-        child: Option<unsafe extern "C" fn()>,
-    ) -> c_int;
     pub fn getgrgid(gid: crate::gid_t) -> *mut crate::group;
     pub fn getgrouplist(
         user: *const c_char,
@@ -3996,33 +3820,10 @@ extern "C" {
         ngroups: *mut c_int,
     ) -> c_int;
     pub fn initgroups(user: *const c_char, group: crate::gid_t) -> c_int;
-    pub fn pthread_mutexattr_getpshared(
-        attr: *const pthread_mutexattr_t,
-        pshared: *mut c_int,
-    ) -> c_int;
     pub fn popen(command: *const c_char, mode: *const c_char) -> *mut crate::FILE;
     pub fn faccessat(dirfd: c_int, pathname: *const c_char, mode: c_int, flags: c_int) -> c_int;
-    pub fn pthread_create(
-        native: *mut crate::pthread_t,
-        attr: *const crate::pthread_attr_t,
-        f: extern "C" fn(*mut c_void) -> *mut c_void,
-        value: *mut c_void,
-    ) -> c_int;
     pub fn __errno() -> *mut c_int;
     pub fn inotify_rm_watch(fd: c_int, wd: u32) -> c_int;
-    pub fn sendmmsg(
-        sockfd: c_int,
-        msgvec: *const crate::mmsghdr,
-        vlen: c_uint,
-        flags: c_int,
-    ) -> c_int;
-    pub fn recvmmsg(
-        sockfd: c_int,
-        msgvec: *mut crate::mmsghdr,
-        vlen: c_uint,
-        flags: c_int,
-        timeout: *const crate::timespec,
-    ) -> c_int;
     pub fn inotify_init() -> c_int;
     pub fn inotify_init1(flags: c_int) -> c_int;
     pub fn inotify_add_watch(fd: c_int, path: *const c_char, mask: u32) -> c_int;
@@ -4050,11 +3851,13 @@ extern "C" {
 
     pub fn gettid() -> crate::pid_t;
 
+    pub fn tgkill(tgid: crate::pid_t, tid: crate::pid_t, sig: c_int) -> c_int;
+
+    pub fn getauxval(type_: c_ulong) -> c_ulong;
+
     /// Only available in API Version 28+
     pub fn getrandom(buf: *mut c_void, buflen: size_t, flags: c_uint) -> ssize_t;
     pub fn getentropy(buf: *mut c_void, buflen: size_t) -> c_int;
-
-    pub fn pthread_setname_np(thread: crate::pthread_t, name: *const c_char) -> c_int;
 
     pub fn __system_property_set(__name: *const c_char, __value: *const c_char) -> c_int;
     pub fn __system_property_get(__name: *const c_char, __value: *mut c_char) -> c_int;
@@ -4079,8 +3882,6 @@ extern "C" {
     pub fn arc4random_buf(__buf: *mut c_void, __n: size_t);
 
     pub fn reallocarray(ptr: *mut c_void, nmemb: size_t, size: size_t) -> *mut c_void;
-
-    pub fn pthread_getcpuclockid(thread: crate::pthread_t, clk_id: *mut crate::clockid_t) -> c_int;
 
     pub fn dirname(path: *const c_char) -> *mut c_char;
     pub fn basename(path: *const c_char) -> *mut c_char;
@@ -4126,6 +3927,20 @@ extern "C" {
         newpath: *const c_char,
         flags: c_uint,
     ) -> c_int;
+    pub fn preadv2(
+        fd: c_int,
+        iov: *const crate::iovec,
+        iovcnt: c_int,
+        offset: off_t,
+        flags: c_int,
+    ) -> ssize_t;
+    pub fn pwritev2(
+        fd: c_int,
+        iov: *const crate::iovec,
+        iovcnt: c_int,
+        offset: off_t,
+        flags: c_int,
+    ) -> ssize_t;
 }
 
 cfg_if! {
@@ -4149,7 +3964,7 @@ impl siginfo_t {
             _si_code: c_int,
             si_addr: *mut c_void,
         }
-        (*(self as *const siginfo_t as *const siginfo_sigfault)).si_addr
+        (*(self as *const siginfo_t).cast::<siginfo_sigfault>()).si_addr
     }
 
     pub unsafe fn si_value(&self) -> crate::sigval {
@@ -4162,45 +3977,13 @@ impl siginfo_t {
             _si_overrun: c_int,
             si_sigval: crate::sigval,
         }
-        (*(self as *const siginfo_t as *const siginfo_timer)).si_sigval
+        (*(self as *const siginfo_t).cast::<siginfo_timer>()).si_sigval
     }
-}
-
-// Internal, for casts to access union fields
-#[repr(C)]
-struct sifields_sigchld {
-    si_pid: crate::pid_t,
-    si_uid: crate::uid_t,
-    si_status: c_int,
-    si_utime: c_long,
-    si_stime: c_long,
-}
-impl Copy for sifields_sigchld {}
-impl Clone for sifields_sigchld {
-    fn clone(&self) -> sifields_sigchld {
-        *self
-    }
-}
-
-// Internal, for casts to access union fields
-#[repr(C)]
-union sifields {
-    _align_pointer: *mut c_void,
-    sigchld: sifields_sigchld,
-}
-
-// Internal, for casts to access union fields. Note that some variants
-// of sifields start with a pointer, which makes the alignment of
-// sifields vary on 32-bit and 64-bit architectures.
-#[repr(C)]
-struct siginfo_f {
-    _siginfo_base: [c_int; 3],
-    sifields: sifields,
 }
 
 impl siginfo_t {
     unsafe fn sifields(&self) -> &sifields {
-        &(*(self as *const siginfo_t as *const siginfo_f)).sifields
+        &(*(self as *const siginfo_t).cast::<siginfo_f>()).sifields
     }
 
     pub unsafe fn si_pid(&self) -> crate::pid_t {

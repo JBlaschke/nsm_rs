@@ -71,7 +71,7 @@ pub type Sample = [u8; SAMPLE_LEN];
 
 /// A QUIC Header Protection Algorithm.
 pub struct Algorithm {
-    init: fn(key: &[u8]) -> Result<SymmetricCipherKey, error::Unspecified>,
+    init: fn(key: &[u8]) -> Result<SymmetricCipherKey, error::KeyRejected>,
 
     key_len: usize,
     id: AlgorithmID,
@@ -120,21 +120,21 @@ impl PartialEq for Algorithm {
 impl Eq for Algorithm {}
 
 /// AES-128.
-pub static AES_128: Algorithm = Algorithm {
+pub const AES_128: Algorithm = Algorithm {
     key_len: 16,
     init: SymmetricCipherKey::aes128,
     id: AlgorithmID::AES_128,
 };
 
 /// AES-256.
-pub static AES_256: Algorithm = Algorithm {
+pub const AES_256: Algorithm = Algorithm {
     key_len: 32,
     init: SymmetricCipherKey::aes256,
     id: AlgorithmID::AES_256,
 };
 
 /// `ChaCha20`.
-pub static CHACHA20: Algorithm = Algorithm {
+pub const CHACHA20: Algorithm = Algorithm {
     key_len: 32,
     init: SymmetricCipherKey::chacha20,
     id: AlgorithmID::CHACHA20,
@@ -160,10 +160,19 @@ fn cipher_new_mask(
                 .try_into()
                 .map_err(|_| error::Unspecified)?;
             let input = block::Block::zero();
-            unsafe {
-                let counter = core::mem::transmute::<[u8; 4], u32>(*counter_bytes).to_le();
-                encrypt_block_chacha20(raw_key, input, nonce, counter)?
-            }
+            let counter = u32::from_ne_bytes(*counter_bytes).to_le();
+            encrypt_block_chacha20(raw_key, input, nonce, counter)?
+        }
+        // DES variants cannot reach this branch: `Algorithm::init` is private
+        // and only the AES_128/AES_256/CHACHA20 consts populate it, so a
+        // `HeaderProtectionKey` can never be constructed with a DES
+        // `SymmetricCipherKey`. The arm exists only to satisfy match
+        // exhaustiveness when the `legacy-des` feature is enabled.
+        #[cfg(feature = "legacy-des")]
+        SymmetricCipherKey::Des { .. }
+        | SymmetricCipherKey::DesEde { .. }
+        | SymmetricCipherKey::DesEde3 { .. } => {
+            unreachable!("DES cipher keys cannot be used with QUIC header protection")
         }
     };
 

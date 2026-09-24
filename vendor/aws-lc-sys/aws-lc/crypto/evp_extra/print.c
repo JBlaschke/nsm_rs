@@ -1,54 +1,5 @@
-/* ====================================================================
- * Copyright (c) 2006 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com). */
+// Copyright (c) 2006 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/evp.h>
 
@@ -64,12 +15,8 @@
 #include "../internal.h"
 #include "../fipsmodule/evp/internal.h"
 #include "../fipsmodule/rsa/internal.h"
-
-#ifdef ENABLE_DILITHIUM
-#include "../dilithium/ml_dsa.h"
+#include "../fipsmodule/ml_dsa/ml_dsa.h"
 #include "../fipsmodule/pqdsa/internal.h"
-#endif
-
 
 static int print_hex(BIO *bp, const uint8_t *data, size_t len, int off) {
   for (size_t i = 0; i < len; i++) {
@@ -155,7 +102,9 @@ static int do_rsa_print(BIO *out, const RSA *rsa, int off,
 
   const char *s, *str;
   if (include_private && rsa->d) {
-    if (BIO_printf(out, "Private-Key: (%d bit)\n", mod_len) <= 0) {
+    // AWS-LC supports only standard two-prime RSA. Print prime count for
+    // OpenSSL compatibility in key format output.
+    if (BIO_printf(out, "Private-Key: (%d bit, %d primes)\n", mod_len, 2) <= 0) {
       return 0;
     }
     str = "modulus:";
@@ -312,8 +261,6 @@ static int eckey_priv_print(BIO *bp, const EVP_PKEY *pkey, int indent) {
   return do_EC_KEY_print(bp, EVP_PKEY_get0_EC_KEY(pkey), indent, 2);
 }
 
-#ifdef ENABLE_DILITHIUM
-
 // MLDSA keys.
 
 static int do_mldsa_65_print(BIO *bp, const EVP_PKEY *pkey, int off, int ptype) {
@@ -357,8 +304,6 @@ static int mldsa_65_priv_print(BIO *bp, const EVP_PKEY *pkey, int indent) {
   return do_mldsa_65_print(bp, pkey, indent, 2);
 }
 
-#endif
-
 typedef struct {
   int type;
   int (*pub_print)(BIO *out, const EVP_PKEY *pkey, int indent);
@@ -366,7 +311,7 @@ typedef struct {
   int (*param_print)(BIO *out, const EVP_PKEY *pkey, int indent);
 } EVP_PKEY_PRINT_METHOD;
 
-static EVP_PKEY_PRINT_METHOD kPrintMethods[] = {
+static const EVP_PKEY_PRINT_METHOD kPrintMethods[] = {
     {
         EVP_PKEY_RSA,
         rsa_pub_print,
@@ -385,19 +330,17 @@ static EVP_PKEY_PRINT_METHOD kPrintMethods[] = {
         eckey_priv_print,
         eckey_param_print,
     },
-#ifdef ENABLE_DILITHIUM
     {
         EVP_PKEY_PQDSA,
         mldsa_65_pub_print,
         mldsa_65_priv_print,
         NULL /* param_print */,
     },
-#endif
 };
 
 static size_t kPrintMethodsLen = OPENSSL_ARRAY_SIZE(kPrintMethods);
 
-static EVP_PKEY_PRINT_METHOD *find_method(int type) {
+static const EVP_PKEY_PRINT_METHOD *find_method(int type) {
   for (size_t i = 0; i < kPrintMethodsLen; i++) {
     if (kPrintMethods[i].type == type) {
       return &kPrintMethods[i];
@@ -415,7 +358,7 @@ static int print_unsupported(BIO *out, const EVP_PKEY *pkey, int indent,
 
 int EVP_PKEY_print_public(BIO *out, const EVP_PKEY *pkey, int indent,
                           ASN1_PCTX *pctx) {
-  EVP_PKEY_PRINT_METHOD *method = find_method(EVP_PKEY_id(pkey));
+  const EVP_PKEY_PRINT_METHOD *method = find_method(EVP_PKEY_id(pkey));
   if (method != NULL && method->pub_print != NULL) {
     return method->pub_print(out, pkey, indent);
   }
@@ -424,7 +367,7 @@ int EVP_PKEY_print_public(BIO *out, const EVP_PKEY *pkey, int indent,
 
 int EVP_PKEY_print_private(BIO *out, const EVP_PKEY *pkey, int indent,
                            ASN1_PCTX *pctx) {
-  EVP_PKEY_PRINT_METHOD *method = find_method(EVP_PKEY_id(pkey));
+  const EVP_PKEY_PRINT_METHOD *method = find_method(EVP_PKEY_id(pkey));
   if (method != NULL && method->priv_print != NULL) {
     return method->priv_print(out, pkey, indent);
   }
@@ -433,7 +376,7 @@ int EVP_PKEY_print_private(BIO *out, const EVP_PKEY *pkey, int indent,
 
 int EVP_PKEY_print_params(BIO *out, const EVP_PKEY *pkey, int indent,
                           ASN1_PCTX *pctx) {
-  EVP_PKEY_PRINT_METHOD *method = find_method(EVP_PKEY_id(pkey));
+  const EVP_PKEY_PRINT_METHOD *method = find_method(EVP_PKEY_id(pkey));
   if (method != NULL && method->param_print != NULL) {
     return method->param_print(out, pkey, indent);
   }

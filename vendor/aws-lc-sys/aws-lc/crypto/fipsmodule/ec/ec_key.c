@@ -1,69 +1,11 @@
-/* Originally written by Bodo Moeller for the OpenSSL project.
- * ====================================================================
- * Copyright (c) 1998-2005 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
- */
-/* ====================================================================
- * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
- *
- * Portions of the attached software ("Contribution") are developed by
- * SUN MICROSYSTEMS, INC., and are contributed to the OpenSSL project.
- *
- * The Contribution is licensed pursuant to the OpenSSL open source
- * license provided above.
- *
- * The elliptic curve binary polynomial software is originally written by
- * Sheueling Chang Shantz and Douglas Stebila of Sun Microsystems
- * Laboratories. */
+// Originally written by Bodo Moeller for the OpenSSL project.
+// Copyright (c) 1998-2005 The OpenSSL Project.  All rights reserved.
+// Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
+//
+// The elliptic curve binary polynomial software is originally written by
+// Sheueling Chang Shantz and Douglas Stebila of Sun Microsystems
+// Laboratories.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/ec_key.h>
 #include <openssl/evp.h>
@@ -80,6 +22,7 @@
 
 #include "internal.h"
 #include "../delocate.h"
+#include "../service_indicator/internal.h"
 #include "../../internal.h"
 
 
@@ -121,6 +64,7 @@ EC_KEY *EC_KEY_new_method(const ENGINE *engine) {
 
   ret->conv_form = POINT_CONVERSION_UNCOMPRESSED;
   ret->references = 1;
+  ret->group_decoded_from_explicit_params = 0;
 
   CRYPTO_new_ex_data(&ret->ex_data);
 
@@ -191,6 +135,7 @@ EC_KEY *EC_KEY_dup(const EC_KEY *src) {
 
   ret->enc_flag = src->enc_flag;
   ret->conv_form = src->conv_form;
+  ret->group_decoded_from_explicit_params = src->group_decoded_from_explicit_params;
   return ret;
 }
 
@@ -238,7 +183,10 @@ int EC_KEY_set_private_key(EC_KEY *key, const BIGNUM *priv_key) {
     return 0;
   }
   if (!ec_bignum_to_scalar(key->group, &scalar->scalar, priv_key) ||
-      ec_scalar_is_zero(key->group, &scalar->scalar)) {
+      // Zero is not a valid private key, so it is safe to leak the result of
+      // this comparison.
+      constant_time_declassify_int(
+          ec_scalar_is_zero(key->group, &scalar->scalar))) {
     OPENSSL_PUT_ERROR(EC, EC_R_INVALID_PRIVATE_KEY);
     ec_wrapped_scalar_free(scalar);
     return 0;
@@ -255,6 +203,11 @@ const EC_POINT *EC_KEY_get0_public_key(const EC_KEY *key) {
 int EC_KEY_set_public_key(EC_KEY *key, const EC_POINT *pub_key) {
   if (key->group == NULL) {
     OPENSSL_PUT_ERROR(EC, EC_R_MISSING_PARAMETERS);
+    return 0;
+  }
+
+  if (pub_key != NULL && EC_POINT_is_at_infinity(key->group, pub_key)) {
+    OPENSSL_PUT_ERROR(EC, EC_R_POINT_AT_INFINITY);
     return 0;
   }
 
@@ -289,6 +242,50 @@ void EC_KEY_set_conv_form(EC_KEY *key, point_conversion_form_t cform) {
   }
 }
 
+// ec_key_gen_pct computes the PCT: SP 800-56Arev3 Section 5.6.2.1.4 option ‘b’.
+// Should only be used for NIST P-curves.
+static int ec_key_gen_pct(const EC_KEY *key) {
+
+  if (key->priv_key != NULL) {
+
+    EC_SCALAR *priv_key_scalar = &key->priv_key->scalar;
+
+    // In theory, we could just flip a bit in the existing private key. The
+    // test below is supposed to hard abort and the code-path is only active
+    // during testing the break KAT framework. But prefer to keep it local to
+    // the PCT to isolate errors.
+    EC_SCALAR priv_key_scalar_bit_flipped = {{0}};
+    if (boringssl_fips_break_test("EC_PWCT")) {
+      OPENSSL_memcpy(&priv_key_scalar_bit_flipped, priv_key_scalar,
+        sizeof(priv_key_scalar->words));
+      priv_key_scalar_bit_flipped.words[0] ^= 0x1;
+      priv_key_scalar = &priv_key_scalar_bit_flipped;
+    }
+
+    EC_JACOBIAN point;
+    if (!ec_point_mul_scalar_base(key->group, &point,
+          priv_key_scalar)) {
+      OPENSSL_PUT_ERROR(EC, ERR_R_EC_LIB);
+      return 0;
+    }
+  
+    // Leaking this comparison only leaks whether |key|'s public key was
+    // correct.
+    //
+    // |ec_GFp_simple_points_equal| is quite expensive (relatively); The current
+    // comparison function does a non-negligible amount of field arithmetic If
+    // we were sure that points aren't in jacobian, but in affine
+    // representation, then the comparison reduces to fast byte array equality.
+    if (!constant_time_declassify_int(ec_GFp_simple_points_equal(
+          key->group, &point, &key->pub_key->raw))) {
+      OPENSSL_PUT_ERROR(EC, EC_R_INVALID_PRIVATE_KEY);
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
 int EC_KEY_check_key(const EC_KEY *eckey) {
   if (!eckey || !eckey->group || !eckey->pub_key) {
     OPENSSL_PUT_ERROR(EC, ERR_R_PASSED_NULL_PARAMETER);
@@ -306,71 +303,26 @@ int EC_KEY_check_key(const EC_KEY *eckey) {
     return 0;
   }
 
-  // Check the public and private keys match.
-  //
-  // NOTE: this is a FIPS pair-wise consistency check for the ECDH case. See SP
-  // 800-56Ar3, page 36.
-  if (eckey->priv_key != NULL) {
-    EC_JACOBIAN point;
-    if (!ec_point_mul_scalar_base(eckey->group, &point,
-                                  &eckey->priv_key->scalar)) {
-      OPENSSL_PUT_ERROR(EC, ERR_R_EC_LIB);
-      return 0;
-    }
-    // Leaking this comparison only leaks whether |eckey|'s public key was
-    // correct.
-    if (!constant_time_declassify_int(ec_GFp_simple_points_equal(
-            eckey->group, &point, &eckey->pub_key->raw))) {
-      OPENSSL_PUT_ERROR(EC, EC_R_INVALID_PRIVATE_KEY);
-      return 0;
-    }
+  // Many code-paths end up in |EC_KEY_check_key|. For example, ECDH operations.
+  // Technically, the PCT is not needed for ECDH in non-FIPS. However, other
+  // APIs use this function for validations e.g. the EVP private key parsing (to
+  // validate that public key is indeed generate from the private key) and there
+  // is currently no way to distinguish the code-paths at this level. This could
+  // be optimized.
+  if (!ec_key_gen_pct(eckey)) {
+    return 0;
   }
 
   return 1;
 }
 
-static int EVP_EC_KEY_check_fips(EC_KEY *key) {
-  uint8_t msg[16] = {0};
-  size_t msg_len = 16;
-  int ret = 0;
-  uint8_t* sig_der = NULL;
-  EVP_PKEY *evp_pkey = EVP_PKEY_new();
-  EVP_MD_CTX ctx;
-  EVP_MD_CTX_init(&ctx);
-  const EVP_MD *hash = EVP_sha256();
-  size_t sign_len;
-  if (!evp_pkey ||
-      !EVP_PKEY_set1_EC_KEY(evp_pkey, key) ||
-      !EVP_DigestSignInit(&ctx, NULL, hash, NULL, evp_pkey) ||
-      !EVP_DigestSign(&ctx, NULL, &sign_len, msg, msg_len)) {
-    goto err;
-  }
-  sig_der = OPENSSL_malloc(sign_len);
-  if (!sig_der ||
-      !EVP_DigestSign(&ctx, sig_der, &sign_len, msg, msg_len)) {
-    goto err;
-  }
-  if (boringssl_fips_break_test("ECDSA_PWCT")) {
-    msg[0] = ~msg[0];
-  }
-  if (!EVP_DigestVerifyInit(&ctx, NULL, hash, NULL, evp_pkey) ||
-      !EVP_DigestVerify(&ctx, sig_der, sign_len, msg, msg_len)) {
-    goto err;
-  }
-  ret = 1;
-err:
-  EVP_PKEY_free(evp_pkey);
-  EVP_MD_CTX_cleanse(&ctx);
-  OPENSSL_free(sig_der);
-  return ret;
-}
-
 int EC_KEY_check_fips(const EC_KEY *key) {
-  // We have to avoid the underlying |EVP_DigestSign| and |EVP_DigestVerify|
-  // services in |EVP_EC_KEY_check_fips| updating the indicator state, so we
-  // lock the state here.
-  FIPS_service_indicator_lock_state();
+
   int ret = 0;
+
+  // Nothing obvious will falsely increment the service indicator. But lock to
+  // be safe.
+  FIPS_service_indicator_lock_state();
 
   if (EC_KEY_is_opaque(key)) {
     // Opaque keys can't be checked.
@@ -413,18 +365,11 @@ int EC_KEY_check_fips(const EC_KEY *key) {
     }
   }
 
-  if (key->priv_key) {
-    if (!EVP_EC_KEY_check_fips((EC_KEY*)key)) {
-      OPENSSL_PUT_ERROR(EC, EC_R_PUBLIC_KEY_VALIDATION_FAILED);
-      goto end;
-    }
-  }
-
   ret = 1;
 end:
   FIPS_service_indicator_unlock_state();
   if(ret){
-    EC_KEY_keygen_verify_service_indicator((EC_KEY*)key);
+    EC_KEY_keygen_verify_service_indicator(key);
   }
   return ret;
 }
@@ -524,8 +469,8 @@ int EC_KEY_generate_key(EC_KEY *key) {
 int EC_KEY_generate_key_fips(EC_KEY *eckey) {
   int ret = 0;
 
-  // We have to verify both |EC_KEY_generate_key| and |EC_KEY_check_fips| both
-  // succeed before updating the indicator state, so we lock the state here.
+  // At least |EC_KEY_check_fips| will certainly update the service indicator.
+  // Hence, must lock here.
   FIPS_service_indicator_lock_state();
 
   boringssl_ensure_ecc_self_test();
@@ -546,10 +491,9 @@ int EC_KEY_generate_key_fips(EC_KEY *eckey) {
   eckey->priv_key = NULL;
 
 #if defined(AWSLC_FIPS)
-  BORINGSSL_FIPS_abort();
-#else
-  return 0;
+  AWS_LC_FIPS_failure("EC keygen checks failed");
 #endif
+  return 0;
 }
 
 int EC_KEY_get_ex_new_index(long argl, void *argp, CRYPTO_EX_unused *unused,
@@ -586,7 +530,6 @@ EC_KEY_METHOD *EC_KEY_METHOD_new(const EC_KEY_METHOD *eckey_meth) {
 
   ret = OPENSSL_zalloc(sizeof(EC_KEY_METHOD));
   if(ret == NULL) {
-    OPENSSL_PUT_ERROR(EC, ERR_R_MALLOC_FAILURE);
     return NULL;
   }
 
@@ -658,4 +601,8 @@ int EC_KEY_METHOD_set_flags(EC_KEY_METHOD *meth, int flags) {
 
   meth->flags |= flags;
   return 1;
+}
+
+int EC_KEY_decoded_from_explicit_params(const EC_KEY *key) {
+  return key->group_decoded_from_explicit_params;
 }

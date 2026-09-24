@@ -1,16 +1,5 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2014, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #ifndef OPENSSL_HEADER_PKCS7_H
 #define OPENSSL_HEADER_PKCS7_H
@@ -158,6 +147,8 @@ struct pkcs7_st {
     PKCS7_SIGN_ENVELOPE *signed_and_enveloped;
     PKCS7_DIGEST *digest;
     PKCS7_ENCRYPT *encrypted;
+    // Other things provided by the user. Not specified in the RFC.
+    ASN1_TYPE *other;
   } d;
 };
 
@@ -211,7 +202,7 @@ struct pkcs7_signer_info_st {
   X509_ALGOR *digest_enc_alg;
   ASN1_OCTET_STRING *enc_digest;
   STACK_OF(X509_ATTRIBUTE) *unauth_attr;
-  EVP_PKEY *pkey;  // NOTE: |pkey| is not seriliazed.
+  EVP_PKEY *pkey;  // NOTE: |pkey| is not serialized.
 };
 
 // ASN.1 defined here https://datatracker.ietf.org/doc/html/rfc2315#section-11.1
@@ -449,9 +440,6 @@ OPENSSL_EXPORT OPENSSL_DEPRECATED PKCS7 *PKCS7_sign(X509 *sign_cert,
 // written to |out| and 1 is returned. On error or verification failure, 0 is
 // returned.
 //
-// We don't currently support authenticated attributes, so if any of |p7|'s
-// signer infos have authenticated attributes, PKCS7_verify will fail.
-//
 // Flags: If |PKCS7_NOVERIFY| is specified, trust chain validation is skipped.
 // This function also enforces the behavior of OpenSSL's |PKCS7_NO_DUAL_CONTENT|
 // meaning that |indata| may not be specified if |p7|'s signed data is attached.
@@ -466,6 +454,16 @@ OPENSSL_EXPORT OPENSSL_DEPRECATED int PKCS7_verify(PKCS7 *p7,
 
 // PKCS7_is_detached returns 0 if |p7| has attached content and 1 otherwise.
 OPENSSL_EXPORT OPENSSL_DEPRECATED int PKCS7_is_detached(PKCS7 *p7);
+
+// PKCS7_set_detached frees the attached content of |p7| if |detach| is set to
+// 1. It returns 0 if otherwise or if |p7| is not of type signed.
+//
+// Note: |detach| is intended to be a boolean and MUST be set with either 1 or
+//       0.
+OPENSSL_EXPORT OPENSSL_DEPRECATED int PKCS7_set_detached(PKCS7 *p7, int detach);
+
+// PKCS7_get_detached returns 0 if |p7| has attached content and 1 otherwise.
+OPENSSL_EXPORT OPENSSL_DEPRECATED int PKCS7_get_detached(PKCS7 *p7);
 
 // PKCS7_dataInit creates or initializes a BIO chain for reading data from or
 // writing data to |p7|. If |bio| is non-null, it is added to the chain.
@@ -490,6 +488,12 @@ PKCS7_get_recipient_info(PKCS7 *p7);
 // and returns that |PCKS7_RECEPIENT_INFO|.
 OPENSSL_EXPORT OPENSSL_DEPRECATED PKCS7_RECIP_INFO *PKCS7_add_recipient(
     PKCS7 *p7, X509 *x509);
+
+// PKCS7_get0_signers retrieves the signer's certificates from p7. It does not
+// check their validity or whether any signatures are valid. The caller owns the
+// returned X509 stack and is responsible for freeing it.
+OPENSSL_EXPORT OPENSSL_DEPRECATED STACK_OF(X509) *PKCS7_get0_signers(
+    PKCS7 *p7, STACK_OF(X509) *certs, int flags);
 
 // PKCS7_encrypt encrypts the contents of |in| with |cipher| and adds |certs| as
 // recipient infos and returns an encrypted |PKCS7| or NULL on failed
@@ -522,6 +526,11 @@ OPENSSL_EXPORT OPENSSL_DEPRECATED PKCS7 *SMIME_read_PKCS7(BIO *in, BIO **bcont);
 // SMIME_write_PKCS7 is a no-op and returns 0
 OPENSSL_EXPORT OPENSSL_DEPRECATED int SMIME_write_PKCS7(BIO *out, PKCS7 *p7,
                                                         BIO *data, int flags);
+
+// PKCS7_print_ctx prints "PKCS7 printing is not supported" and returns 1.
+OPENSSL_EXPORT OPENSSL_DEPRECATED int PKCS7_print_ctx(BIO *bio, PKCS7 *pkcs7,
+                                                      int indent,
+                                                      const ASN1_PCTX *pctx);
 
 #if defined(__cplusplus)
 }  // extern C
@@ -571,5 +580,6 @@ BSSL_NAMESPACE_END
 #define PKCS7_R_PKCS7_ADD_SIGNATURE_ERROR 132
 #define PKCS7_R_NO_DEFAULT_DIGEST 133
 #define PKCS7_R_CERT_MUST_BE_RSA 134
+#define PKCS7_R_OPERATION_NOT_SUPPORTED_ON_THIS_TYPE 135
 
 #endif  // OPENSSL_HEADER_PKCS7_H

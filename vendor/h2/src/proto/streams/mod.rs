@@ -31,6 +31,12 @@ use crate::proto::*;
 use bytes::Bytes;
 use std::time::Duration;
 
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum BufferStatus {
+    Complete,
+    CodecFull,
+}
+
 #[derive(Debug)]
 pub struct Config {
     /// Initial maximum number of locally initiated streams.
@@ -72,4 +78,62 @@ pub struct Config {
     ///
     /// When this gets exceeded, we issue GOAWAYs.
     pub local_max_error_reset_streams: Option<usize>,
+
+    /// connection-level budget (in bytes) for DATA framing overhead.
+    ///
+    /// Default 25600 bytes
+    pub data_frame_budget: usize,
+}
+
+trait DebugStructExt<'a, 'b> {
+    // h2_ prefixes to protect against possible future name collisions
+    fn h2_field_if(&mut self, name: &str, val: &bool) -> &mut std::fmt::DebugStruct<'a, 'b>;
+
+    fn h2_field_if_then<T: std::fmt::Debug>(
+        &mut self,
+        name: &str,
+        cond: bool,
+        val: &T,
+    ) -> &mut std::fmt::DebugStruct<'a, 'b>;
+
+    fn h2_field_some<T: std::fmt::Debug>(
+        &mut self,
+        name: &str,
+        val: &Option<T>,
+    ) -> &mut std::fmt::DebugStruct<'a, 'b>;
+}
+
+impl<'a, 'b> DebugStructExt<'a, 'b> for std::fmt::DebugStruct<'a, 'b> {
+    fn h2_field_if(&mut self, name: &str, val: &bool) -> &mut std::fmt::DebugStruct<'a, 'b> {
+        if *val {
+            self.field(name, val)
+        } else {
+            self
+        }
+    }
+
+    fn h2_field_if_then<T: std::fmt::Debug>(
+        &mut self,
+        name: &str,
+        cond: bool,
+        val: &T,
+    ) -> &mut std::fmt::DebugStruct<'a, 'b> {
+        if cond {
+            self.field(name, val)
+        } else {
+            self
+        }
+    }
+
+    fn h2_field_some<T: std::fmt::Debug>(
+        &mut self,
+        name: &str,
+        val: &Option<T>,
+    ) -> &mut std::fmt::DebugStruct<'a, 'b> {
+        if val.is_some() {
+            self.field(name, val)
+        } else {
+            self
+        }
+    }
 }

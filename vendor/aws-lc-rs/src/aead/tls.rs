@@ -1,10 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR ISC
 
-use super::{
-    aead_ctx::{self, AeadCtx},
-    Aad, Algorithm, AlgorithmID, Nonce, Tag, UnboundKey,
-};
+use super::aead_ctx::{self, AeadCtx};
+use super::{Aad, Algorithm, AlgorithmID, Nonce, Tag, UnboundKey};
 use crate::error::Unspecified;
 use core::fmt::Debug;
 use core::ops::RangeFrom;
@@ -33,10 +31,8 @@ pub enum TlsProtocolId {
 /// Prefer this type in place of `LessSafeKey`, `OpeningKey`, `SealingKey` for TLS protocol implementations.
 #[allow(clippy::module_name_repetitions)]
 pub struct TlsRecordSealingKey {
-    // The TLS specific construction for TLS ciphers in AWS-LC are not thread-safe!
-    // The choice here was either wrap the underlying EVP_AEAD_CTX in a Mutex as done here,
-    // or force this type to !Sync. Since this is an implementation detail of AWS-LC
-    // we have optex to manage this behavior internally.
+    // The TLS-specific AEAD seal constructions in AWS-LC maintain internal mutable state
+    // (nonce counter). The seal methods take `&mut self` to prevent concurrent access.
     key: UnboundKey,
     protocol: TlsProtocolId,
 }
@@ -144,6 +140,49 @@ impl TlsRecordSealingKey {
             .map(|(_, tag)| tag)
     }
 
+    /// Encrypts and signs (“seals”) `in_plaintext` into a separate `out_ciphertext`
+    /// buffer, leaving `in_plaintext` untouched.
+    ///
+    /// This is the out-of-place counterpart to [`Self::seal_in_place_separate_tag`].
+    ///
+    /// `out_ciphertext` must be exactly `in_plaintext.len()` bytes. `extra_in` is
+    /// additional plaintext, such as TLS 1.3's inner content-type byte, that is
+    /// encrypted into `extra_out_and_tag` ahead of the tag, so `extra_out_and_tag` must
+    /// be `extra_in.len() + self.algorithm().tag_len()` bytes. A caller with no extra
+    /// plaintext passes an empty `extra_in` and an `extra_out_and_tag` of
+    /// `self.algorithm().tag_len()` bytes.
+    ///
+    /// `nonce` must be unique and incremented per sealing operation, as for the in-place
+    /// methods: both advance the same counter.
+    ///
+    /// # Errors
+    /// `error::Unspecified` if the buffer lengths are wrong or the encryption operation
+    /// fails. A length mismatch is rejected before the AEAD runs, leaving both output
+    /// buffers untouched.
+    #[inline]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn seal_out_of_place_scatter<A>(
+        &mut self,
+        nonce: Nonce,
+        aad: Aad<A>,
+        in_plaintext: &[u8],
+        out_ciphertext: &mut [u8],
+        extra_in: &[u8],
+        extra_out_and_tag: &mut [u8],
+    ) -> Result<(), Unspecified>
+    where
+        A: AsRef<[u8]>,
+    {
+        self.key.seal_out_of_place_scatter(
+            nonce,
+            aad.as_ref(),
+            in_plaintext,
+            out_ciphertext,
+            extra_in,
+            extra_out_and_tag,
+        )
+    }
+
     /// The key's AEAD algorithm.
     #[inline]
     #[must_use]
@@ -179,10 +218,8 @@ impl Debug for TlsRecordSealingKey {
 /// Prefer this type in place of `LessSafeKey`, `OpeningKey`, `SealingKey` for TLS protocol implementations.
 #[allow(clippy::module_name_repetitions)]
 pub struct TlsRecordOpeningKey {
-    // The TLS specific construction for TLS ciphers in AWS-LC are not thread-safe!
-    // The choice here was either wrap the underlying EVP_AEAD_CTX in a Mutex as done here,
-    // or force this type to !Sync. Since this is an implementation detail of AWS-LC
-    // we have optex to manage this behavior internally.
+    // Unlike the seal path, the TLS-specific AEAD open operations in AWS-LC are stateless
+    // and safe for concurrent use. The open methods take `&self`.
     key: UnboundKey,
     protocol: TlsProtocolId,
 }
@@ -298,11 +335,8 @@ impl Debug for TlsRecordOpeningKey {
 #[cfg(test)]
 mod tests {
     use super::{TlsProtocolId, TlsRecordOpeningKey, TlsRecordSealingKey};
-    use crate::{
-        aead::Aad,
-        aead::{Nonce, AES_128_GCM, AES_256_GCM, CHACHA20_POLY1305},
-        test::from_hex,
-    };
+    use crate::aead::{Aad, Nonce, AES_128_GCM, AES_256_GCM, CHACHA20_POLY1305};
+    use crate::test::from_hex;
     use paste::paste;
 
     const TEST_128_BIT_KEY: &[u8] = &[

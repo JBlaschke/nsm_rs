@@ -1,58 +1,6 @@
-/*
- * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project
- * 1999.
- */
-/* ====================================================================
- * Copyright (c) 1999 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com). */
+// Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project 1999.
+// Copyright (c) 1999 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <assert.h>
 #include <limits.h>
@@ -66,10 +14,10 @@
 #include "internal.h"
 
 
-static int trust_1oidany(const X509_TRUST *trust, X509 *x, int flags);
-static int trust_compat(const X509_TRUST *trust, X509 *x, int flags);
+static int trust_1oidany(const X509_TRUST *trust, X509 *x);
+static int trust_compat(const X509_TRUST *trust, X509 *x);
 
-static int obj_trust(int id, X509 *x, int flags);
+static int obj_trust(int id, X509 *x);
 
 static const X509_TRUST trstandard[] = {
     {X509_TRUST_COMPAT, 0, trust_compat, (char *)"compatible", 0, NULL},
@@ -90,18 +38,18 @@ int X509_check_trust(X509 *x, int id, int flags) {
   }
   // We get this as a default value
   if (id == 0) {
-    int rv = obj_trust(NID_anyExtendedKeyUsage, x, 0);
+    int rv = obj_trust(NID_anyExtendedKeyUsage, x);
     if (rv != X509_TRUST_UNTRUSTED) {
       return rv;
     }
-    return trust_compat(NULL, x, 0);
+    return trust_compat(NULL, x);
   }
   int idx = X509_TRUST_get_by_id(id);
   if (idx == -1) {
-    return obj_trust(id, x, flags);
+    return obj_trust(id, x);
   }
   const X509_TRUST *pt = X509_TRUST_get0(idx);
-  return pt->check_trust(pt, x, flags);
+  return pt->check_trust(pt, x);
 }
 
 int X509_TRUST_get_count(void) { return OPENSSL_ARRAY_SIZE(trstandard); }
@@ -139,16 +87,26 @@ char *X509_TRUST_get0_name(const X509_TRUST *xp) { return xp->name; }
 
 int X509_TRUST_get_trust(const X509_TRUST *xp) { return xp->trust; }
 
-static int trust_1oidany(const X509_TRUST *trust, X509 *x, int flags) {
+void X509_TRUST_cleanup(void) {
+      // This is an intentional No-Op (no operation) function.
+      //
+      // Historical Context:
+      // - This function existed in OpenSSL versions prior to 1.1.0
+      // - AWS-LC does not support static trust settings storage
+      //
+      // - Kept for API compatibility with older versions
+}
+
+static int trust_1oidany(const X509_TRUST *trust, X509 *x) {
   if (x->aux && (x->aux->trust || x->aux->reject)) {
-    return obj_trust(trust->arg1, x, flags);
+    return obj_trust(trust->arg1, x);
   }
   // we don't have any trust settings: for compatibility we return trusted
   // if it is self signed
-  return trust_compat(trust, x, flags);
+  return trust_compat(trust, x);
 }
 
-static int trust_compat(const X509_TRUST *trust, X509 *x, int flags) {
+static int trust_compat(const X509_TRUST *trust, X509 *x) {
   if (!x509v3_cache_extensions(x)) {
     return X509_TRUST_UNTRUSTED;
   }
@@ -159,7 +117,7 @@ static int trust_compat(const X509_TRUST *trust, X509 *x, int flags) {
   }
 }
 
-static int obj_trust(int id, X509 *x, int flags) {
+static int obj_trust(int id, X509 *x) {
   ASN1_OBJECT *obj;
   size_t i;
   X509_CERT_AUX *ax;

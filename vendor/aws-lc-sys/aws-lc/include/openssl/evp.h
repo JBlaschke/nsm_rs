@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENSSL_HEADER_EVP_H
 #define OPENSSL_HEADER_EVP_H
@@ -70,6 +17,7 @@
 #include <openssl/digest.h>
 #include <openssl/nid.h>
 #include <openssl/objects.h>
+#include <openssl/hmac.h> // Needed by Apache mod_ssl
 
 #if defined(__cplusplus)
 extern "C" {
@@ -79,7 +27,7 @@ extern "C" {
 // EVP abstracts over public/private key algorithms.
 
 
-// Public key objects.
+// Public/private key objects.
 //
 // An |EVP_PKEY| object represents a public or private key. A given object may
 // be used concurrently on multiple threads by non-mutating functions, provided
@@ -123,12 +71,12 @@ OPENSSL_EXPORT int EVP_PKEY_missing_parameters(const EVP_PKEY *pkey);
 // EVP_PKEY_size returns the maximum size, in bytes, of a signature signed by
 // |pkey|. For an RSA key, this returns the number of bytes needed to represent
 // the modulus. For an EC key, this returns the maximum size of a DER-encoded
-// ECDSA signature. For a Dilithium key, this returns the signature byte size.
+// ECDSA signature. For an ML-DSA key, this returns the signature byte size.
 OPENSSL_EXPORT int EVP_PKEY_size(const EVP_PKEY *pkey);
 
 // EVP_PKEY_bits returns the "size", in bits, of |pkey|. For an RSA key, this
 // returns the bit length of the modulus. For an EC key, this returns the bit
-// length of the group order. For a Dilithium key, this returns the bit length
+// length of the group order. For an ML-DSA key, this returns the bit length
 // of the public key.
 OPENSSL_EXPORT int EVP_PKEY_bits(const EVP_PKEY *pkey);
 
@@ -136,9 +84,9 @@ OPENSSL_EXPORT int EVP_PKEY_bits(const EVP_PKEY *pkey);
 // values.
 OPENSSL_EXPORT int EVP_PKEY_id(const EVP_PKEY *pkey);
 
-// EVP_PKEY_type returns |nid| if |nid| is a known key type and |NID_undef|
-// otherwise.
-OPENSSL_EXPORT int EVP_PKEY_type(int nid);
+// EVP_PKEY_pqdsa_get_type returns the |nid| of the configured PQDSA key. |pkey|
+// must not be NULL.
+OPENSSL_EXPORT int EVP_PKEY_pqdsa_get_type(const EVP_PKEY *pkey);
 
 // EVP_MD_get0_name returns the short name of |md|
 OPENSSL_EXPORT const char *EVP_MD_get0_name(const EVP_MD *md);
@@ -146,9 +94,32 @@ OPENSSL_EXPORT const char *EVP_MD_get0_name(const EVP_MD *md);
 // EVP_MD_name calls |EVP_MD_get0_name|
 OPENSSL_EXPORT const char *EVP_MD_name(const EVP_MD *md);
 
-// Getting and setting concrete public key types.
+// EVP Password Utility Functions
+
+// EVP_get_pw_prompt returns an internal pointer to static memory containing
+// the default prompt. In AWS-LC, this default is hardcoded. In OpenSSL,
+// the default prompt must be configured by a user and is otherwise NULL.
+OPENSSL_EXPORT char *EVP_get_pw_prompt(void);
+
+// EVP_read_pw_string writes the prompt to /dev/tty, or, if that could not be opened,
+// to standard output, turns echo off, and reads an input string from /dev/tty, or,
+// if that could not be opened, from standard input. If |prompt| is NULL, the default
+// prompt is used. The user input is returned in |buf|, which must have space for at
+// least length bytes. If verify is set, the user is asked for the password twice and
+// unless the two copies match, an error is returned.
+// Returns 0 on success, -1 on error, or -2 on out-of-band events (Interrupt, Cancel, ...).
+OPENSSL_EXPORT int EVP_read_pw_string(char *buf, int length, const char *prompt, int verify);
+
+// EVP_read_pw_string_min implements the functionality for |EVP_read_pw_string|. It
+// additionally checks that the password is at least |min_length| bytes long.
+// Returns 0 on success, -1 on error, or -2 on out-of-band events (Interrupt, Cancel, ...).
+OPENSSL_EXPORT int EVP_read_pw_string_min(char *buf, int min_length, int length,
+                                          const char *prompt, int verify);
+
+
+// Getting and setting concrete key types.
 //
-// The following functions get and set the underlying public key in an
+// The following functions get and set the underlying key representation in an
 // |EVP_PKEY| object. The |set1| functions take an additional reference to the
 // underlying key and return one on success or zero if |key| is NULL. The
 // |assign| functions adopt the caller's reference and return one on success or
@@ -198,21 +169,26 @@ OPENSSL_EXPORT int EVP_PKEY_CTX_set_dh_paramgen_generator(EVP_PKEY_CTX *ctx, int
 #define EVP_PKEY_RSA_PSS NID_rsassaPss
 #define EVP_PKEY_EC NID_X9_62_id_ecPublicKey
 #define EVP_PKEY_ED25519 NID_ED25519
+#define EVP_PKEY_ED25519PH NID_ED25519ph
 #define EVP_PKEY_X25519 NID_X25519
 #define EVP_PKEY_HKDF NID_hkdf
 #define EVP_PKEY_HMAC NID_hmac
 #define EVP_PKEY_DH NID_dhKeyAgreement
-
-#ifdef ENABLE_DILITHIUM
 #define EVP_PKEY_PQDSA NID_PQDSA
-#endif
-
 #define EVP_PKEY_KEM NID_kem
 
 // EVP_PKEY_set_type sets the type of |pkey| to |type|. It returns one if
 // successful or zero if the |type| argument is not one of the |EVP_PKEY_*|
 // values. If |pkey| is NULL, it simply reports whether the type is known.
 OPENSSL_EXPORT int EVP_PKEY_set_type(EVP_PKEY *pkey, int type);
+
+// EVP_PKEY_set_type_str sets the type of |pkey| to the PEM type string given
+// by the first |len| bytes of |str|. It returns one if successful or zero if it
+// cannot find the PEM type among the |EVP_PKEY_*| values. If |pkey| is NULL,
+// it simply reports whether the type is known.
+OPENSSL_EXPORT int EVP_PKEY_set_type_str(EVP_PKEY *pkey,
+                                         const char *str,
+                                         int len);
 
 // EVP_PKEY_cmp_parameters compares the parameters of |a| and |b|. It returns
 // one if they match, zero if not, or a negative number of on error.
@@ -256,7 +232,7 @@ OPENSSL_EXPORT EVP_PKEY *EVP_parse_private_key(CBS *cbs);
 
 // EVP_marshal_private_key marshals |key| as a DER-encoded PrivateKeyInfo
 // structure (RFC 5208) and appends the result to |cbb|. It returns one on
-// success and zero on error.
+// success and zero on error. For ML-DSA, the private seed is encoded.
 OPENSSL_EXPORT int EVP_marshal_private_key(CBB *cbb, const EVP_PKEY *key);
 
 // EVP_marshal_private_key_v2 marshals |key| as a DER-encoded
@@ -274,17 +250,18 @@ OPENSSL_EXPORT int EVP_marshal_private_key_v2(CBB *cbb, const EVP_PKEY *key);
 // raw formats are X25519 and Ed25519, where the formats are those specified in
 // RFC 7748 and RFC 8032, respectively. Note the RFC 8032 private key format
 // is the 32-byte prefix of |ED25519_sign|'s 64-byte private key.
-// For Dilithium the public key and private key formats are those specified
-// in draft-ietf-lamps-dilithium-certificates-00 and the Dilithium specification.
+// For ML-DSA use EVP_PKEY_pqdsa_new_raw_private_key.
 
 // EVP_PKEY_new_raw_private_key returns a newly allocated |EVP_PKEY| wrapping a
 // private key of the specified type. It returns NULL on error.
+// For ML-DSA use EVP_PKEY_pqdsa_new_raw_public_key.
 OPENSSL_EXPORT EVP_PKEY *EVP_PKEY_new_raw_private_key(int type, ENGINE *unused,
                                                       const uint8_t *in,
                                                       size_t len);
 
 // EVP_PKEY_new_raw_public_key returns a newly allocated |EVP_PKEY| wrapping a
 // public key of the specified type. It returns NULL on error.
+// For ML-DSA use EVP_PKEY_pqdsa_new_raw_private_key.
 OPENSSL_EXPORT EVP_PKEY *EVP_PKEY_new_raw_public_key(int type, ENGINE *unused,
                                                      const uint8_t *in,
                                                      size_t len);
@@ -319,8 +296,9 @@ OPENSSL_EXPORT int EVP_PKEY_get_raw_public_key(const EVP_PKEY *pkey,
 // signing options.
 //
 // For single-shot signing algorithms which do not use a pre-hash, such as
-// Ed25519 and Dilithium, |type| should be NULL. The |EVP_MD_CTX| itself is
-// unused but is present so the API is uniform. See |EVP_DigestSign|.
+// Ed25519, or when using ML-DSA in non pre-hash mode, |type| should be NULL.
+// The |EVP_MD_CTX| itself is unused but is present so the API is uniform.
+// See |EVP_DigestSign|.
 //
 // This function does not mutate |pkey| for thread-safety purposes and may be
 // used concurrently with other non-mutating functions on |pkey|.
@@ -375,8 +353,9 @@ OPENSSL_EXPORT int EVP_DigestSign(EVP_MD_CTX *ctx, uint8_t *out_sig,
 // signing options.
 //
 // For single-shot signing algorithms which do not use a pre-hash, such as
-// Ed25519 and Dilithium, |type| should be NULL. The |EVP_MD_CTX| itself is
-// unused but is present so the API is uniform. See |EVP_DigestVerify|.
+// Ed25519, or when using ML-DSA in non pre-hash mode, |type| should be NULL.
+// The |EVP_MD_CTX| itself is unused but is present so the API is uniform.
+// See |EVP_DigestVerify|.
 //
 // This function does not mutate |pkey| for thread-safety purposes and may be
 // used concurrently with other non-mutating functions on |pkey|.
@@ -507,6 +486,8 @@ OPENSSL_EXPORT int EVP_PKEY_print_params(BIO *out, const EVP_PKEY *pkey,
 // function that results in a key suitable for use in symmetric
 // cryptography.
 
+// PKCS5_SALT_LEN is a deprecated constant as used by deprecated
+// EVP_BytesToKey() which cannot change.
 #define PKCS5_SALT_LEN 8
 
 // PKCS5_PBKDF2_HMAC computes |iterations| iterations of PBKDF2 of |password|
@@ -586,8 +567,13 @@ OPENSSL_EXPORT int EVP_PKEY_sign_init(EVP_PKEY_CTX *ctx);
 // Otherwise, |*sig_len| must contain the number of bytes of space available at
 // |sig|. If sufficient, the signature will be written to |sig| and |*sig_len|
 // updated with the true length. This function will fail for signature
-// algorithms like Ed25519 and Dilithium that do not support signing pre-hashed
-// inputs.
+// Ed25519 as it does not support signing pre-hashed inputs. For ML-DSA this
+// function expects the format of |digest| to conform with "ExternalMu", i.e.,
+// the digest mu is the SHAKE256 hash of the associated public key concatenated
+// with a zero byte to indicate pure-mode, the context string length, the
+// contents of the context string, and the input message in this order e.g.
+// mu = SHAKE256(SHAKE256(pk) || 0 || |ctx| || ctx || M).
+//
 //
 // WARNING: |digest| must be the output of some hash function on the data to be
 // signed. Passing unhashed inputs will not result in a secure signature scheme.
@@ -610,8 +596,12 @@ OPENSSL_EXPORT int EVP_PKEY_verify_init(EVP_PKEY_CTX *ctx);
 
 // EVP_PKEY_verify verifies that |sig_len| bytes from |sig| are a valid
 // signature for |digest|. This function will fail for signature
-// algorithms like Ed25519 and Dilithium that do not support signing pre-hashed
-// inputs.
+// Ed25519 as it does not support signing pre-hashed inputs. For ML-DSA this
+// function expects the format of |digest| to conform with "ExternalMu", i.e.,
+// the digest mu is the SHAKE256 hash of the associated public key concatenated
+// with a zero byte to indicate pure-mode, the context string length, the
+// contents of the context string, and the input message in this order e.g.
+// mu = SHAKE256(SHAKE256(pk) || 0 || |ctx| || ctx || M).
 //
 // WARNING: |digest| must be the output of some hash function on the data to be
 // verified. Passing unhashed inputs will not result in a secure signature
@@ -717,6 +707,33 @@ OPENSSL_EXPORT int EVP_PKEY_derive_set_peer(EVP_PKEY_CTX *ctx, EVP_PKEY *peer);
 OPENSSL_EXPORT int EVP_PKEY_derive(EVP_PKEY_CTX *ctx, uint8_t *key,
                                    size_t *out_key_len);
 
+// EVP_PKEY_check supports EC and RSA keys and validates both the public and
+// private components of a key pair. For EC keys, it verifies that the private
+// key component exists and calls EC_KEY_check_key. For RSA keys, it calls
+// RSA_check_key which validates both public and private key relationships.
+//
+// It returns one on success and zero on error.
+OPENSSL_EXPORT int EVP_PKEY_check(EVP_PKEY_CTX *ctx);
+
+// EVP_PKEY_public_check validates at least the public component of a key.
+// For EC keys, this calls |EC_KEY_check_key| which validates the public component,
+// and if available, the private key as well.
+// For RSA keys, this calls |RSA_check_key| which requires the public and private
+// components of the key pair. This is different from OpenSSL which does not
+// support RSA keys via this API.
+//
+// It returns one on success and zero on error.
+OPENSSL_EXPORT int EVP_PKEY_public_check(EVP_PKEY_CTX *ctx);
+
+// EVP_PKEY_param_check validates the parameters component of the key given by
+// |ctx|. OpenSSL only supports by DH and EC keys via this API.
+// For DH keys, this calls |DH_check| to validate the parameters. EC key
+// parameter validations are not supported as of now.
+// TODO: Support EC group validations.
+//
+// It returns one on success and zero on error.
+OPENSSL_EXPORT int EVP_PKEY_param_check(EVP_PKEY_CTX *ctx);
+
 // EVP_PKEY_keygen_init initialises an |EVP_PKEY_CTX| for a key generation
 // operation. It should be called before |EVP_PKEY_keygen|.
 //
@@ -811,6 +828,45 @@ OPENSSL_EXPORT int EVP_PKEY_CTX_get_signature_md(EVP_PKEY_CTX *ctx,
                                                  const EVP_MD **out_md);
 
 
+// EVP_PKEY_CTX_set1_signature_context_string sets |context| of length |context_len| to
+// be used as the context octet string for the signing operation. |context| will
+// be copied to an internal buffer allowing for the caller to free it
+// afterwards.
+//
+// EVP_PKEY_ED25519PH and EVP_PKEY_PQDSA are the key types that currently
+// support setting a signature context. For Ed25519ph, the context is used in
+// computing the HashEdDSA signature. For ML-DSA (PQDSA), the context string is
+// used per FIPS 204 sections 5.2-5.3. The maximum context length is 255 bytes.
+// Note: for ML-DSA, the context string is only used with
+// |EVP_DigestSign|/|EVP_DigestVerify| (message signing). It is not permitted
+// and will return an error when using |EVP_PKEY_sign|/|EVP_PKEY_verify|
+// (digest signing), because the pre-hashed |mu| input already encodes the
+// context per FIPS 204 section 5.3.
+//
+// It returns one on success or zero on error.
+OPENSSL_EXPORT int EVP_PKEY_CTX_set1_signature_context_string(EVP_PKEY_CTX *ctx,
+                                                      const uint8_t *context,
+                                                      size_t context_len);
+
+// EVP_PKEY_CTX_set_signature_context is the previous name for
+// |EVP_PKEY_CTX_set1_signature_context_string|. It is retained for backward
+// compatibility.
+OPENSSL_EXPORT int EVP_PKEY_CTX_set_signature_context(EVP_PKEY_CTX *ctx,
+                                                      const uint8_t *context,
+                                                      size_t context_len);
+
+// EVP_PKEY_CTX_get0_signature_context sets |*context| to point to the internal
+// buffer containing the signing context octet string (which may be NULL) and
+// writes the length to |*context_len|.
+//
+// EVP_PKEY_ED25519PH and EVP_PKEY_PQDSA are the key types that currently
+// support retrieving a signature context.
+//
+// It returns one on success or zero on error.
+OPENSSL_EXPORT int EVP_PKEY_CTX_get0_signature_context(EVP_PKEY_CTX *ctx,
+                                                       const uint8_t **context,
+                                                       size_t *context_len);
+
 // RSA specific control functions.
 
 // EVP_PKEY_CTX_set_rsa_padding sets the padding type to use. It should be one
@@ -854,7 +910,9 @@ OPENSSL_EXPORT int EVP_PKEY_CTX_set_rsa_keygen_bits(EVP_PKEY_CTX *ctx,
                                                     int bits);
 
 // EVP_PKEY_CTX_set_rsa_keygen_pubexp sets |e| as the public exponent for key
-// generation. Returns one on success or zero on error.
+// generation. Returns one on success or zero on error. On success, |ctx| takes
+// ownership of |e|. The library will then call |BN_free| on |e| when |ctx| is
+// destroyed.
 OPENSSL_EXPORT int EVP_PKEY_CTX_set_rsa_keygen_pubexp(EVP_PKEY_CTX *ctx,
                                                       BIGNUM *e);
 
@@ -946,9 +1004,16 @@ OPENSSL_EXPORT EVP_PKEY *EVP_PKEY_kem_new_raw_key(int nid,
 // to the secret key in |key|.
 OPENSSL_EXPORT int EVP_PKEY_kem_check_key(EVP_PKEY *key);
 
+// EVP_PKEY_kem_get_type returns the |nid| of the configured KEM key in |pkey|.
+// If |pkey| is not of type |EVP_PKEY_KEM|, it returns 0 and pushes
+// |EVP_R_EXPECTING_A_KEM_KEY| onto the error queue. If |pkey| is of type
+// |EVP_PKEY_KEM| but has no underlying KEM key attached, it returns 0 and
+// pushes |EVP_R_NO_PARAMETERS_SET| onto the error queue. |pkey| must not be
+// NULL.
+OPENSSL_EXPORT int EVP_PKEY_kem_get_type(const EVP_PKEY *pkey);
+
 // PQDSA specific functions.
 
-#ifdef ENABLE_DILITHIUM
 // EVP_PKEY_CTX_pqdsa_set_params sets in |ctx| the parameters associated with
 // the signature scheme defined by the given |nid|. It returns one on success
 // and zero on error.
@@ -962,10 +1027,11 @@ OPENSSL_EXPORT EVP_PKEY *EVP_PKEY_pqdsa_new_raw_public_key(int nid, const uint8_
 
 // EVP_PKEY_pqdsa_new_raw_private_key generates a new EVP_PKEY object of type
 // EVP_PKEY_PQDSA, initializes the PQDSA key based on |nid| and populates the
-// secret key part of the PQDSA key with the contents of |in|. It returns the
-// pointer to the allocated PKEY on sucess and NULL on error.
+// secret key part of the PQDSA key with the contents of |in|. If the contents
+// of |in| is the private key seed, then this function will generate the
+// corresponding key pair and populate both public and private parts of the PKEY.
+// It returns the pointer to the allocated PKEY on sucess and NULL on error.
 OPENSSL_EXPORT EVP_PKEY *EVP_PKEY_pqdsa_new_raw_private_key(int nid, const uint8_t *in, size_t len);
-#endif
 
 // Diffie-Hellman-specific control functions.
 
@@ -1019,6 +1085,18 @@ OPENSSL_EXPORT int EVP_PKEY_asn1_get0_info(int *ppkey_id, int *pkey_base_id,
                                            int *ppkey_flags, const char **pinfo,
                                            const char **ppem_str,
                                            const EVP_PKEY_ASN1_METHOD *ameth);
+
+// EVP_PKEY_get_private_seed returns the seed representation of the private key
+// for the key type configured in |key|. If |out| is NULL, it sets |*out_len| to
+// the size of the seed. Otherwise, it writes at most |*out_len| bytes to |out|
+// and sets |*out_len| to the number of bytes written.
+//
+// Return 1 on success and 0 otherwise.
+//
+// Note, the private key might not have a seed representation configured. In
+// this case, the operation is unsupported and 0 is returned.
+OPENSSL_EXPORT int EVP_PKEY_get_private_seed(const EVP_PKEY *key, uint8_t *out,
+  size_t *out_len);
 
 
 // EVP_PKEY_CTX keygen/paramgen functions.
@@ -1261,6 +1339,9 @@ OPENSSL_EXPORT EC_KEY *d2i_EC_PUBKEY(EC_KEY **out, const uint8_t **inp,
 // Otherwise, if |type| cannot be set via |EVP_PKEY_set_type| or if the key
 // is NULL, it returns zero.
 OPENSSL_EXPORT int EVP_PKEY_assign(EVP_PKEY *pkey, int type, void *key);
+
+// EVP_PKEY_type returns |nid|.
+OPENSSL_EXPORT int EVP_PKEY_type(int nid);
 
 // EVP_PKEY_new_mac_key is deprecated. It allocates a fresh |EVP_PKEY| of
 // |type|. Only |EVP_PKEY_HMAC| is supported. |mac_key| is used as the HMAC key,

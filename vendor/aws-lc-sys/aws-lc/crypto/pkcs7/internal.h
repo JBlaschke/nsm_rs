@@ -1,16 +1,5 @@
-/* Copyright (c) 2017, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2017, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #ifndef OPENSSL_HEADER_PKCS7_INTERNAL_H
 #define OPENSSL_HEADER_PKCS7_INTERNAL_H
@@ -30,6 +19,8 @@ DECLARE_ASN1_FUNCTIONS(PKCS7_ENCRYPT)
 DECLARE_ASN1_FUNCTIONS(PKCS7_ENVELOPE)
 DECLARE_ASN1_FUNCTIONS(PKCS7_DIGEST)
 DECLARE_ASN1_FUNCTIONS(PKCS7_SIGN_ENVELOPE)
+
+DECLARE_ASN1_ITEM(PKCS7_ATTR_VERIFY)
 
 DEFINE_STACK_OF(PKCS7)
 
@@ -104,17 +95,6 @@ int pkcs7_add_signed_data(CBB *out,
                           int (*cert_crl_cb)(CBB *out, const void *arg),
                           int (*signer_infos_cb)(CBB *out, const void *arg),
                           const void *arg);
-
-// BIO_f_md is used internally by the pkcs7 module. It is not recommended
-// for external use. The BIO must be initialized with |BIO_set_md| or
-// |BIO_get_md_ctx| before it can be used.
-OPENSSL_EXPORT const BIO_METHOD *BIO_f_md(void);
-
-// BIO_get_md_ctx writes a reference of |b|'s EVP_MD_CTX* to |*ctx|
-OPENSSL_EXPORT int BIO_get_md_ctx(BIO *b, EVP_MD_CTX **ctx);
-
-// BIO_set_md set's |b|'s EVP_MD* to |md|
-OPENSSL_EXPORT int BIO_set_md(BIO *b, const EVP_MD *md);
 
 // BIO_f_cipher is used internally by the pkcs7 module. It is not recommended
 // for external use.

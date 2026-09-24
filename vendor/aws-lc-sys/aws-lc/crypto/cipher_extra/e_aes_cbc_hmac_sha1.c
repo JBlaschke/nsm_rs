@@ -1,11 +1,5 @@
-/*
- * Copyright 2011-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 2011-2016 The OpenSSL Project Authors. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/opensslconf.h>
 
@@ -372,7 +366,6 @@ static const EVP_CIPHER aesni_128_cbc_hmac_sha1_cipher = {
     AES_BLOCK_SIZE /* iv len */,
     sizeof(EVP_AES_HMAC_SHA1) /* ctx_size */,
     EVP_CIPH_CBC_MODE | EVP_CIPH_FLAG_AEAD_CIPHER /* flags */,
-    NULL /* app_data */,
     aesni_cbc_hmac_sha1_init_key,
     aesni_cbc_hmac_sha1_cipher,
     NULL /* cleanup */,
@@ -385,7 +378,6 @@ static const EVP_CIPHER aesni_256_cbc_hmac_sha1_cipher = {
     AES_BLOCK_SIZE /* iv len */,
     sizeof(EVP_AES_HMAC_SHA1) /* ctx_size */,
     EVP_CIPH_CBC_MODE | EVP_CIPH_FLAG_AEAD_CIPHER /* flags */,
-    NULL /* app_data */,
     aesni_cbc_hmac_sha1_init_key,
     aesni_cbc_hmac_sha1_cipher,
     NULL,

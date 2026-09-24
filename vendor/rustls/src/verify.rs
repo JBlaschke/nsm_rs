@@ -76,9 +76,10 @@ pub trait ServerCertVerifier: Debug + Send + Sync {
     ///
     /// Note that none of the certificates have been parsed yet, so it is the responsibility of
     /// the implementer to handle invalid data. It is recommended that the implementer returns
-    /// [`Error::InvalidCertificate(CertificateError::BadEncoding)`] when these cases are encountered.
+    /// [`Error::InvalidCertificate`] containing [`CertificateError::BadEncoding`] when these cases are encountered.
     ///
     /// [Certificate]: https://datatracker.ietf.org/doc/html/rfc8446#section-4.4.2
+    /// [`CertificateError::BadEncoding`]: crate::error::CertificateError::BadEncoding
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
@@ -141,6 +142,16 @@ pub trait ServerCertVerifier: Debug + Send + Sync {
     /// in [RFC 7250](https://tools.ietf.org/html/rfc7250).
     fn requires_raw_public_keys(&self) -> bool {
         false
+    }
+
+    /// Return the [`DistinguishedName`]s of certificate authorities that this verifier trusts.
+    ///
+    /// If specified, will be sent as the [`certificate_authorities`] extension in ClientHello.
+    /// Note that this is only applicable to TLS 1.3.
+    ///
+    /// [`certificate_authorities`]: https://datatracker.ietf.org/doc/html/rfc8446#section-4.2.4
+    fn root_hint_subjects(&self) -> Option<&[DistinguishedName]> {
+        None
     }
 }
 

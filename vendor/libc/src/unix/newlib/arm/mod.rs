@@ -1,11 +1,7 @@
 use crate::prelude::*;
 
 pub type clock_t = c_long;
-pub type c_char = u8;
 pub type wchar_t = u32;
-
-pub type c_long = i32;
-pub type c_ulong = u32;
 
 s! {
     pub struct sockaddr {
@@ -30,7 +26,7 @@ s! {
 
     pub struct sockaddr_storage {
         pub ss_family: crate::sa_family_t,
-        pub __ss_padding: [u8; 26],
+        __ss_padding: Padding<[u8; 26]>,
     }
 }
 
@@ -55,4 +51,8 @@ pub const MSG_WAITALL: c_int = 0;
 pub const MSG_MORE: c_int = 0;
 pub const MSG_NOSIGNAL: c_int = 0;
 
-pub use crate::unix::newlib::generic::{dirent, sigset_t, stat};
+pub use crate::unix::newlib::generic::{
+    dirent,
+    sigset_t,
+    stat,
+};

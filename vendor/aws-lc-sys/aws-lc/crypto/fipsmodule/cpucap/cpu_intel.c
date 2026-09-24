@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/base.h>
 #include "internal.h"
@@ -126,6 +73,22 @@ static uint64_t OPENSSL_xgetbv(uint32_t xcr) {
 #endif
 }
 
+static bool os_supports_avx512(uint64_t xcr0) {
+#if defined(OPENSSL_APPLE)
+  // The Darwin kernel had a bug where it could corrupt the opmask registers.
+  // See
+  // https://community.intel.com/t5/Software-Tuning-Performance/MacOS-Darwin-kernel-bug-clobbers-AVX-512-opmask-register-state/m-p/1327259
+  // Darwin also does not initially set the XCR0 bits for AVX512, but they are
+  // set if the thread tries to use AVX512 anyway.  Thus, to safely and
+  // consistently use AVX512 on macOS we'd need to check the kernel version as
+  // well as detect AVX512 support using a macOS-specific method.  We don't
+  // bother with this, especially given Apple's transition to arm64.
+  return false;
+#else
+  return (xcr0 & 0xe6) == 0xe6;
+#endif
+}
+
 // handle_cpu_env applies the value from |in| to the CPUID values in |out[0]|
 // and |out[1]|. See the comment in |OPENSSL_cpuid_setup| about this.
 static void handle_cpu_env(uint32_t *out, const char *in) {
@@ -179,6 +142,31 @@ static void handle_cpu_env(uint32_t *out, const char *in) {
 
 extern uint8_t OPENSSL_cpucap_initialized;
 
+static int amd_rdrand_maybe_apply_restrictions(const uint32_t family,
+                                               const uint32_t model) {
+
+  // Disable RDRAND on AMD families before 0x17 (Zen) due to reported failures
+  // after suspend. https://bugzilla.redhat.com/show_bug.cgi?id=1150286
+  // Also disable for family 0x17, models 0x70–0x7f, due to possible RDRAND
+  // failures there too.
+  if (family < 0x17 || (family == 0x17 && 0x70 <= model && model <= 0x7f)) {
+    return 1;
+  }
+
+  // Zen2 EPYC have prohibitively slow RDRAND implementations. Specifically,
+  // measured on the model EPYC 7R32. Please see q/VxC3AiwXpAjJ.
+  // We assume that slow implementations is universal to all AMD models based
+  // on the Zen2 uarch. Additionally, extend this assumptions to Zen1 based
+  // AMD models as well because Zen1 and Zen2 shares family number.
+  if (family == 0x17) {
+    return 1;
+  }
+
+  // No restrictions.
+  return 0;
+}
+
+
 void OPENSSL_cpuid_setup(void) {
   // Determine the vendor and maximum input value.
   uint32_t eax, ebx, ecx, edx;
@@ -216,12 +204,7 @@ void OPENSSL_cpuid_setup(void) {
       model |= ext_model << 4;
     }
 
-    if (family < 0x17 || (family == 0x17 && 0x70 <= model && model <= 0x7f)) {
-      // Disable RDRAND on AMD families before 0x17 (Zen) due to reported
-      // failures after suspend.
-      // https://bugzilla.redhat.com/show_bug.cgi?id=1150286
-      // Also disable for family 0x17, models 0x70–0x7f, due to possible RDRAND
-      // failures there too.
+    if (amd_rdrand_maybe_apply_restrictions(family, model) != 0) {
       ecx &= ~(1u << 30);
     }
   }
@@ -274,7 +257,7 @@ void OPENSSL_cpuid_setup(void) {
         ~((1u << 5) | (1u << 16) | (1u << 21) | (1u << 30) | (1u << 31));
   }
   // See Intel manual, volume 1, section 15.2.
-  if ((xcr0 & 0xe6) != 0xe6) {
+  if (!os_supports_avx512(xcr0)) {
     // Clear AVX512F. Note we don't touch other AVX512 extensions because they
     // can be used with YMM.
     extended_features[0] &= ~(1u << 16);

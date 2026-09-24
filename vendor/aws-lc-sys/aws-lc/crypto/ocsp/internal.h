@@ -1,11 +1,5 @@
-/*
- * Copyright 2015-2021 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the Apache License 2.0 (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 2015-2021 The OpenSSL Project Authors. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "openssl/ocsp.h"
 #include "openssl/x509.h"
@@ -234,7 +228,6 @@ struct ocsp_basic_response_st {
   STACK_OF(X509) *certs;
 };
 
-DECLARE_ASN1_FUNCTIONS(OCSP_ONEREQ)
 DECLARE_ASN1_FUNCTIONS(OCSP_RESPDATA)
 DECLARE_ASN1_FUNCTIONS(OCSP_REQINFO)
 DECLARE_ASN1_FUNCTIONS(OCSP_SIGNATURE)

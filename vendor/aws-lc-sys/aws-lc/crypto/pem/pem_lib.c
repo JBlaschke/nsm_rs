@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <assert.h>
 #include <ctype.h>
@@ -70,17 +17,16 @@
 #include <openssl/rand.h>
 #include <openssl/x509.h>
 
+#include "internal.h"
 #include "../internal.h"
+#include "../console/internal.h"
 #include "../fipsmodule/evp/internal.h"
 
-
-#define MIN_LENGTH 4
 
 static int load_iv(char **fromp, unsigned char *to, size_t num);
 static int check_pem(const char *nm, const char *name);
 
-// PEM_proc_type appends a Proc-Type header to |buf|, determined by |type|.
-static void PEM_proc_type(char buf[PEM_BUFSIZE], int type) {
+void PEM_proc_type(char buf[PEM_BUFSIZE], int type) {
   const char *str;
 
   if (type == PEM_TYPE_ENCRYPTED) {
@@ -98,9 +44,7 @@ static void PEM_proc_type(char buf[PEM_BUFSIZE], int type) {
   OPENSSL_strlcat(buf, "\n", PEM_BUFSIZE);
 }
 
-// PEM_dek_info appends a DEK-Info header to |buf|, with an algorithm of |type|
-// and a single parameter, specified by hex-encoding |len| bytes from |str|.
-static void PEM_dek_info(char buf[PEM_BUFSIZE], const char *type, size_t len,
+void PEM_dek_info(char buf[PEM_BUFSIZE], const char *type, size_t len,
                          char *str) {
   static const unsigned char map[17] = "0123456789ABCDEF";
 
@@ -286,7 +230,7 @@ int PEM_ASN1_write_bio(i2d_of_void *i2d, const char *name, BIO *bp, void *x,
                        const EVP_CIPHER *enc, const unsigned char *pass,
                        int pass_len, pem_password_cb *callback, void *u) {
   EVP_CIPHER_CTX ctx;
-  int dsize = 0, i, j, ret = 0;
+  int i, j, ret = 0;
   unsigned char *p, *data = NULL;
   const char *objstr = NULL;
   char buf[PEM_BUFSIZE];
@@ -302,9 +246,10 @@ int PEM_ASN1_write_bio(i2d_of_void *i2d, const char *name, BIO *bp, void *x,
     }
   }
 
-  if ((dsize = i2d(x, NULL)) < 0) {
+  int dsize = i2d(x, NULL);
+  if (dsize < 0) {
     OPENSSL_PUT_ERROR(PEM, ERR_R_ASN1_LIB);
-    dsize = 0;
+    OPENSSL_cleanse(&dsize, sizeof(dsize));
     goto err;
   }
   // dzise + 8 bytes are needed
@@ -320,21 +265,19 @@ int PEM_ASN1_write_bio(i2d_of_void *i2d, const char *name, BIO *bp, void *x,
     const unsigned iv_len = EVP_CIPHER_iv_length(enc);
 
     if (pass == NULL) {
-      pass_len = 0;
       if (!callback) {
         callback = PEM_def_callback;
       }
       pass_len = (*callback)(buf, PEM_BUFSIZE, 1, u);
-      if (pass_len <= 0) {
-        OPENSSL_PUT_ERROR(PEM, PEM_R_READ_KEY);
-        goto err;
-      }
       pass = (const unsigned char *)buf;
     }
-    assert(iv_len <= sizeof(iv));
-    if (!RAND_bytes(iv, iv_len)) {  // Generate a salt
+    if (pass_len < 0) {
+      OPENSSL_PUT_ERROR(PEM, PEM_R_READ_KEY);
       goto err;
     }
+    assert(iv_len <= sizeof(iv));
+    AWSLC_ABORT_IF_NOT_ONE(RAND_bytes(iv, iv_len));  // Generate a salt
+
     // The 'iv' is used as the iv and as a salt.  It is NOT taken from
     // the BytesToKey function
     if (!EVP_BytesToKey(enc, EVP_md5(), iv, pass, pass_len, 1, key, NULL)) {
@@ -396,12 +339,11 @@ int PEM_do_header(EVP_CIPHER_INFO *cipher, unsigned char *data, long *plen,
     return 1;
   }
 
-  pass_len = 0;
   if (!callback) {
     callback = PEM_def_callback;
   }
   pass_len = callback(buf, PEM_BUFSIZE, 0, u);
-  if (pass_len <= 0) {
+  if (pass_len < 0) {
     OPENSSL_PUT_ERROR(PEM, PEM_R_BAD_PASSWORD_READ);
     return 0;
   }
@@ -541,7 +483,8 @@ int PEM_write(FILE *fp, const char *name, const char *header,
 
 int PEM_write_bio(BIO *bp, const char *name, const char *header,
                   const unsigned char *data, long len) {
-  int nlen, n, i, j, outl;
+  int nlen, n, outl;
+  long i, j;
   unsigned char *buf = NULL;
   EVP_ENCODE_CTX ctx;
   int reason = ERR_R_BUF_LIB;
@@ -591,7 +534,11 @@ int PEM_write_bio(BIO *bp, const char *name, const char *header,
       (BIO_write(bp, "-----\n", 6) != 6)) {
     goto err;
   }
-  return i + outl;
+  if (i + outl > INT_MAX) {
+    reason = ERR_R_OVERFLOW;
+    goto err;
+  }
+  return (int)(i + outl);
 err:
   if (buf) {
     OPENSSL_free(buf);
@@ -683,7 +630,11 @@ int PEM_read_bio(BIO *bp, char **name, char **header, unsigned char **data,
     if (!BUF_MEM_grow(headerB, hl + i + 9)) {
       goto err;
     }
-    if (strncmp(buf, "-----END ", 9) == 0) {
+    // To resolve following error:
+    // /home/runner/work/aws-lc-rs/aws-lc-rs/aws-lc-sys/aws-lc/crypto/pem/pem_lib.c:707:11: error: 'strncmp' of strings of length 1 and 9 and bound of 9 evaluates to nonzero [-Werror=string-compare]
+    //       707 |       if (strncmp(buf, "-----END ", 9) == 0) {
+    //           |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    if (CRYPTO_memcmp(buf, "-----END ", 9) == 0) {
       nohead = 1;
       break;
     }
@@ -713,7 +664,7 @@ int PEM_read_bio(BIO *bp, char **name, char **header, unsigned char **data,
       if (i != 65) {
         end = 1;
       }
-      if (strncmp(buf, "-----END ", 9) == 0) {
+      if (CRYPTO_memcmp(buf, "-----END ", 9) == 0) {
         break;
       }
       if (i > 65) {
@@ -748,7 +699,7 @@ int PEM_read_bio(BIO *bp, char **name, char **header, unsigned char **data,
     bl = hl;
   }
   i = strlen(nameB->data);
-  if ((strncmp(buf, "-----END ", 9) != 0) ||
+  if ((CRYPTO_memcmp(buf, "-----END ", 9) != 0) ||
       (strncmp(nameB->data, &(buf[9]), i) != 0) ||
       (strncmp(&(buf[9 + i]), "-----\n", 6) != 0)) {
     OPENSSL_PUT_ERROR(PEM, PEM_R_BAD_END_LINE);
@@ -776,11 +727,13 @@ int PEM_read_bio(BIO *bp, char **name, char **header, unsigned char **data,
   *header = headerB->data;
   *data = (unsigned char *)dataB->data;
   *len = bl;
+  OPENSSL_cleanse(buf, sizeof(buf));
   OPENSSL_free(nameB);
   OPENSSL_free(headerB);
   OPENSSL_free(dataB);
   return 1;
 err:
+  OPENSSL_cleanse(buf, sizeof(buf));
   BUF_MEM_free(nameB);
   BUF_MEM_free(headerB);
   BUF_MEM_free(dataB);
@@ -788,13 +741,40 @@ err:
 }
 
 int PEM_def_callback(char *buf, int size, int rwflag, void *userdata) {
-  if (!buf || !userdata || size < 0) {
+  if (!buf || size <= 0) {
     return 0;
   }
-  size_t len = strlen((char *)userdata);
-  if (len >= (size_t)size) {
+
+  // Proactively zeroize |buf|
+  OPENSSL_cleanse(buf, size);
+
+  if (userdata) {
+    size_t len =  strlen((char *)userdata);
+    if (len >= (size_t)size) {
+      return 0;
+    }
+    OPENSSL_strlcpy(buf, userdata, (size_t)size);
+    return (int)len;
+  }
+
+  const char *prompt = EVP_get_pw_prompt();
+  if (prompt == NULL) {
+    prompt = "Enter PEM pass phrase:";
+  }
+
+  /*
+     * rwflag == 0 means decryption
+     * rwflag == 1 means encryption
+     *
+     * We assume that for encryption, we want a minimum length, while for
+     * decryption, we cannot know any minimum length, so we assume zero.
+     */
+  int min_len = rwflag ? MIN_LENGTH : 0;
+
+  int ret = EVP_read_pw_string_min(buf, min_len, size, prompt, rwflag);
+  if (ret != 0) {
     return 0;
   }
-  OPENSSL_strlcpy(buf, userdata, (size_t)size);
-  return (int)len;
+
+  return (int)OPENSSL_strnlen(buf, size);
 }

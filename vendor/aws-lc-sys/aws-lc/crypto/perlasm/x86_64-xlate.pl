@@ -1,10 +1,6 @@
 #! /usr/bin/env perl
 # Copyright 2005-2016 The OpenSSL Project Authors. All Rights Reserved.
-#
-# Licensed under the OpenSSL license (the "License").  You may not use
-# this file except in compliance with the License.  You can obtain a copy
-# in the file LICENSE in the source distribution or at
-# https://www.openssl.org/source/license.html
+# SPDX-License-Identifier: Apache-2.0
 
 
 # Ascetic x86_64 AT&T to MASM/NASM assembler translator by <appro>.
@@ -893,6 +889,7 @@ ____
 	# https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-170#struct-unwind_info
 	my $frame_encoded = $info{frame_reg} | (($info{frame_offset} / 16) << 4);
 	$xdata .= <<____;
+.align	4
 $info{info_label}:
 	.byte	1	# version 1, no flags
 	.byte	$info{endprolog}-$info{start_label}
@@ -1021,7 +1018,6 @@ ____
 	if ($xdata ne "") {
 	    $ret .= <<____;
 .section	.xdata
-.align	4
 $xdata
 ____
 	}
@@ -1188,7 +1184,7 @@ ____
 					my $qualifiers = "";
 					if ($$line=~/\.([prx])data/) {
 					    $qualifiers = "rdata align=";
-					    $qualifiers .= $1 eq "p"? 4 : 8;
+					    $qualifiers .= ($1 eq "p" || $1 eq "x")? 4 : 8;
 					} elsif ($$line=~/\.CRT\$/i) {
 					    $qualifiers = "rdata align=8";
 					}
@@ -1198,7 +1194,7 @@ ____
 					$v.="$$line\tSEGMENT";
 					if ($$line=~/\.([prx])data/) {
 					    $v.=" READONLY";
-					    $v.=" ALIGN(".($1 eq "p" ? 4 : 8).")" if ($masm>=$masmref);
+					    $v.=" ALIGN(".(($1 eq "p" || $1 eq "x") ? 4 : 8).")" if ($masm>=$masmref);
 					} elsif ($$line=~/\.CRT\$/i) {
 					    $v.=" READONLY ";
 					    $v.=$masm>=$masmref ? "ALIGN(8)" : "DWORD";

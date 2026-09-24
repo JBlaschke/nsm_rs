@@ -1,11 +1,7 @@
 #! /usr/bin/env perl
 # Copyright 2013-2016 The OpenSSL Project Authors. All Rights Reserved.
 # Copyright (c) 2012, Intel Corporation. All Rights Reserved.
-#
-# Licensed under the OpenSSL license (the "License").  You may not use
-# this file except in compliance with the License.  You can obtain a copy
-# in the file LICENSE in the source distribution or at
-# https://www.openssl.org/source/license.html
+# SPDX-License-Identifier: Apache-2.0
 #
 # Originally written by Shay Gueron (1, 2), and Vlad Krasnov (1)
 # (1) Intel Corporation, Israel Development Center, Haifa, Israel
@@ -1881,17 +1877,19 @@ rsaz_se_handler:
 	.rva	.LSEH_end_rsaz_1024_gather5
 	.rva	.LSEH_info_rsaz_1024_gather5
 .section	.xdata
-.align	8
+.align	4
 .LSEH_info_rsaz_1024_sqr_avx2:
 	.byte	9,0,0,0
 	.rva	rsaz_se_handler
 	.rva	.Lsqr_1024_body,.Lsqr_1024_epilogue,.Lsqr_1024_in_tail
 	.long	0
+.align	4
 .LSEH_info_rsaz_1024_mul_avx2:
 	.byte	9,0,0,0
 	.rva	rsaz_se_handler
 	.rva	.Lmul_1024_body,.Lmul_1024_epilogue,.Lmul_1024_in_tail
 	.long	0
+.align	4
 .LSEH_info_rsaz_1024_gather5:
 	.byte	0x01,0x36,0x17,0x0b
 	.byte	0x36,0xf8,0x09,0x00	# vmovaps 0x90(rsp),xmm15

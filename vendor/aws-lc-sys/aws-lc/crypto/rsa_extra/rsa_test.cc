@@ -1,58 +1,5 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/rsa.h>
 
@@ -68,6 +15,7 @@
 #include <openssl/evp.h>
 #include <openssl/digest.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/nid.h>
 
 #include "../fipsmodule/bn/internal.h"
@@ -403,6 +351,7 @@ TEST_P(RSAEncryptTest, TestKey) {
   const auto &param = GetParam();
   bssl::UniquePtr<RSA> parsed(
       RSA_private_key_from_bytes(param.der, param.der_len));
+
   ASSERT_TRUE(parsed);
   EXPECT_TRUE(RSA_get0_e(parsed.get()));
   EXPECT_TRUE(RSA_get0_d(parsed.get()));
@@ -438,6 +387,14 @@ TEST_P(RSAEncryptTest, TestKey) {
   for (RSA *key :
        {parsed.get(), constructed.get(), no_crt.get(), no_e.get(), pub.get()}) {
     EXPECT_TRUE(RSA_check_key(key));
+    bssl::UniquePtr<EVP_PKEY> rsa_pkey(EVP_PKEY_new());
+    ASSERT_TRUE(rsa_pkey);
+    ASSERT_TRUE(EVP_PKEY_set1_RSA(rsa_pkey.get(), key));
+    bssl::UniquePtr<EVP_PKEY_CTX> rsa_key_ctx(
+            EVP_PKEY_CTX_new(rsa_pkey.get(), NULL));
+    ASSERT_TRUE(rsa_key_ctx);
+    EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+    EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
     uint8_t ciphertext[256], plaintext[256];
     size_t ciphertext_len = 0, plaintext_len = 0;
@@ -514,6 +471,15 @@ TEST(RSATest, TestDecrypt) {
 
   EXPECT_TRUE(RSA_check_key(rsa.get()));
 
+  bssl::UniquePtr<EVP_PKEY> rsa_pkey(EVP_PKEY_new());
+  ASSERT_TRUE(rsa_pkey);
+  ASSERT_TRUE(EVP_PKEY_set1_RSA(rsa_pkey.get(), rsa.get()));
+  bssl::UniquePtr<EVP_PKEY_CTX> rsa_key_ctx(
+          EVP_PKEY_CTX_new(rsa_pkey.get(), NULL));
+  ASSERT_TRUE(rsa_key_ctx);
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
+
   uint8_t out[256];
   size_t out_len;
   ASSERT_TRUE(RSA_decrypt(
@@ -576,6 +542,15 @@ TEST(RSATest, BadKey) {
   // Bad keys are detected.
   EXPECT_FALSE(RSA_check_key(key.get()));
   EXPECT_FALSE(RSA_check_fips(key.get()));
+
+  bssl::UniquePtr<EVP_PKEY> rsa_pkey(EVP_PKEY_new());
+  ASSERT_TRUE(rsa_pkey);
+  ASSERT_TRUE(EVP_PKEY_set1_RSA(rsa_pkey.get(), key.get()));
+  bssl::UniquePtr<EVP_PKEY_CTX> rsa_key_ctx(
+          EVP_PKEY_CTX_new(rsa_pkey.get(), NULL));
+  ASSERT_TRUE(rsa_key_ctx);
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
   // Bad keys may not be parsed.
   uint8_t *der;
@@ -818,52 +793,80 @@ TEST(RSATest, CheckKey) {
   bssl::UniquePtr<RSA> rsa(RSA_new());
   ASSERT_TRUE(rsa);
 
+  bssl::UniquePtr<EVP_PKEY> rsa_pkey(EVP_PKEY_new());
+  ASSERT_TRUE(rsa_pkey);
+  ASSERT_TRUE(EVP_PKEY_set1_RSA(rsa_pkey.get(), rsa.get()));
+
   // Missing n or e does not pass.
   ASSERT_TRUE(BN_hex2bn(&rsa->n, kN));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+
+  bssl::UniquePtr<EVP_PKEY_CTX> rsa_key_ctx(
+          EVP_PKEY_CTX_new(rsa_pkey.get(), NULL));
+  ASSERT_TRUE(rsa_key_ctx);
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
 
   BN_free(rsa->n);
   rsa->n = nullptr;
   ASSERT_TRUE(BN_hex2bn(&rsa->e, kE));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
 
   // Public keys pass.
   ASSERT_TRUE(BN_hex2bn(&rsa->n, kN));
   EXPECT_TRUE(RSA_check_key(rsa.get()));
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
   // Invalid e values (e = 1 or e odd).
   ASSERT_TRUE(BN_hex2bn(&rsa->e, "1"));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
   // Restore the valid public key values.
   ASSERT_TRUE(BN_hex2bn(&rsa->n, kN));
   ASSERT_TRUE(BN_hex2bn(&rsa->e, kE));
   EXPECT_TRUE(RSA_check_key(rsa.get()));
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
   // Configuring d also passes.
   ASSERT_TRUE(BN_hex2bn(&rsa->d, kD));
   EXPECT_TRUE(RSA_check_key(rsa.get()));
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
   // p and q must be provided together.
   ASSERT_TRUE(BN_hex2bn(&rsa->p, kP));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
 
   BN_free(rsa->p);
   rsa->p = nullptr;
   ASSERT_TRUE(BN_hex2bn(&rsa->q, kQ));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
 
   // Supplying p and q without CRT parameters passes.
   ASSERT_TRUE(BN_hex2bn(&rsa->p, kP));
   EXPECT_TRUE(RSA_check_key(rsa.get()));
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
   // With p and q together, it is sufficient to check d against e.
   ASSERT_TRUE(BN_add_word(rsa->d, 1));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
 
   // Test another invalid d. p-1 is divisible by 3, so there is no valid value
@@ -881,6 +884,9 @@ TEST(RSATest, CheckKey) {
   ASSERT_TRUE(BN_set_word(rsa->e, 111));
   ASSERT_TRUE(BN_hex2bn(&rsa->d, kDBogus));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
+
   ERR_clear_error();
   ASSERT_TRUE(BN_hex2bn(&rsa->e, kE));
 
@@ -897,6 +903,8 @@ TEST(RSATest, CheckKey) {
       "c62bbe81";
   ASSERT_TRUE(BN_hex2bn(&rsa->d, kDEuler));
   EXPECT_TRUE(RSA_check_key(rsa.get()));
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
   // If d is out of range, d > n,  but otherwise valid, it is accepted.
   static const char kDgtN[] =
@@ -910,59 +918,81 @@ TEST(RSATest, CheckKey) {
       "42e770c1";
   ASSERT_TRUE(BN_hex2bn(&rsa->d, kDgtN));
   EXPECT_TRUE(RSA_check_key(rsa.get()));
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ASSERT_TRUE(BN_hex2bn(&rsa->d, kD));
 
   // CRT value must either all be provided or all missing.
   ASSERT_TRUE(BN_hex2bn(&rsa->dmp1, kDMP1));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
   BN_free(rsa->dmp1);
   rsa->dmp1 = nullptr;
 
   ASSERT_TRUE(BN_hex2bn(&rsa->dmq1, kDMQ1));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
   BN_free(rsa->dmq1);
   rsa->dmq1 = nullptr;
 
   ASSERT_TRUE(BN_hex2bn(&rsa->iqmp, kIQMP));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
 
   // The full key is accepted.
   ASSERT_TRUE(BN_hex2bn(&rsa->dmp1, kDMP1));
   ASSERT_TRUE(BN_hex2bn(&rsa->dmq1, kDMQ1));
   EXPECT_TRUE(RSA_check_key(rsa.get()));
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
 
   // Incorrect CRT values are rejected.
   ASSERT_TRUE(BN_add_word(rsa->dmp1, 1));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
   ASSERT_TRUE(BN_sub_word(rsa->dmp1, 1));
 
   ASSERT_TRUE(BN_add_word(rsa->dmq1, 1));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
   ASSERT_TRUE(BN_sub_word(rsa->dmq1, 1));
 
   ASSERT_TRUE(BN_add_word(rsa->iqmp, 1));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
   ASSERT_TRUE(BN_sub_word(rsa->iqmp, 1));
 
   // Non-reduced CRT values are rejected.
   ASSERT_TRUE(BN_add(rsa->dmp1, rsa->dmp1, rsa->p));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
   ASSERT_TRUE(BN_sub(rsa->dmp1, rsa->dmp1, rsa->p));
 
   ASSERT_TRUE(BN_add(rsa->dmq1, rsa->dmq1, rsa->q));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
   ASSERT_TRUE(BN_sub(rsa->dmq1, rsa->dmq1, rsa->q));
 
   ASSERT_TRUE(BN_add(rsa->iqmp, rsa->iqmp, rsa->p));
   EXPECT_FALSE(RSA_check_key(rsa.get()));
+  EXPECT_FALSE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_FALSE(EVP_PKEY_public_check((rsa_key_ctx.get())));
   ERR_clear_error();
   ASSERT_TRUE(BN_sub(rsa->iqmp, rsa->iqmp, rsa->p));
 }
@@ -1037,7 +1067,7 @@ TEST(RSATest, RSAMETHOD) {
 
   // Encrypt Decrypt Operations (pub_enc & priv_dec)
   size_t out_len = EVP_PKEY_size(rsa_key.get());
-  uint8_t in, out;
+  uint8_t in = 0, out = 0;
   ASSERT_TRUE(EVP_PKEY_encrypt_init(rsa_key_ctx.get()));
   ASSERT_TRUE(EVP_PKEY_encrypt(rsa_key_ctx.get(), &out, &out_len, &in, 0));
   // Custom func return 0 since they don't write any data to out
@@ -1090,7 +1120,8 @@ TEST(RSATest, RSAEngine) {
   ASSERT_TRUE(key);
 
   size_t out_len = 16;
-  uint8_t in, out;
+  const uint8_t in = 0;
+  uint8_t out = 0;
   // Call custom Engine implementation
   ASSERT_TRUE(RSA_decrypt(key, &out_len, &out, out_len, &in, 0, 0));
   ASSERT_EQ(out_len, (size_t)0);
@@ -1158,6 +1189,16 @@ TEST(RSATest, KeygenFail) {
   // Generating a key over an existing key works, despite any cached state.
   EXPECT_TRUE(RSA_generate_key_ex(rsa.get(), 2048, e.get(), nullptr));
   EXPECT_TRUE(RSA_check_key(rsa.get()));
+
+  bssl::UniquePtr<EVP_PKEY> rsa_pkey(EVP_PKEY_new());
+  ASSERT_TRUE(rsa_pkey);
+  ASSERT_TRUE(EVP_PKEY_set1_RSA(rsa_pkey.get(), rsa.get()));
+  bssl::UniquePtr<EVP_PKEY_CTX> rsa_key_ctx(
+          EVP_PKEY_CTX_new(rsa_pkey.get(), NULL));
+  ASSERT_TRUE(rsa_key_ctx);
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
+
   uint8_t *der3;
   size_t der3_len;
   ASSERT_TRUE(RSA_private_key_to_bytes(&der3, &der3_len, rsa.get()));
@@ -1304,6 +1345,15 @@ TEST(RSATest, OverwriteKey) {
   ASSERT_TRUE(key1);
 
   ASSERT_TRUE(RSA_check_key(key1.get()));
+  bssl::UniquePtr<EVP_PKEY> rsa_pkey(EVP_PKEY_new());
+  ASSERT_TRUE(rsa_pkey);
+  ASSERT_TRUE(EVP_PKEY_set1_RSA(rsa_pkey.get(), key1.get()));
+  bssl::UniquePtr<EVP_PKEY_CTX> rsa_key_ctx(
+          EVP_PKEY_CTX_new(rsa_pkey.get(), NULL));
+  ASSERT_TRUE(rsa_key_ctx);
+  EXPECT_TRUE(EVP_PKEY_check(rsa_key_ctx.get()));
+  EXPECT_TRUE(EVP_PKEY_public_check((rsa_key_ctx.get())));
+
   size_t len;
   std::vector<uint8_t> ciphertext(RSA_size(key1.get()));
   ASSERT_TRUE(RSA_encrypt(key1.get(), &len, ciphertext.data(),
@@ -1396,7 +1446,7 @@ TEST(RSATest, PrintBio) {
   BIO_mem_contents(bio.get(), &data, &len);
 
   const char *expected = ""
-      "    Private-Key: (512 bit)\n"
+      "    Private-Key: (512 bit, 2 primes)\n"
       "    modulus:\n"
       "        00:aa:36:ab:ce:88:ac:fd:ff:55:52:3c:7f:c4:52:\n"
       "        3f:90:ef:a0:0d:f3:77:4a:25:9f:2e:62:b4:c5:d9:\n"
@@ -1596,6 +1646,82 @@ TEST(RSATest, LargeE) {
   ASSERT_TRUE(bad_e);
   ASSERT_TRUE(BN_add_word(bad_e.get(), 2));  // Preserve parity.
   EXPECT_FALSE(RSA_new_public_key_large_e(n, bad_e.get()));
+}
+
+// PSSWithVariousDigests proves that RSASSA-PSS works with a range of digest
+// and MGF1 hash functions (currently the SHA-2 and SHA-3 families). It
+// exercises the low-level padding functions (|RSA_padding_add_PKCS1_PSS_mgf1| /
+// |RSA_verify_PKCS1_PSS_mgf1|) and the higher-level sign/verify functions
+// (|RSA_sign_pss_mgf1| / |RSA_verify_pss_mgf1|), including cases where the
+// message digest and the MGF1 digest differ.
+TEST(RSATest, PSSWithVariousDigests) {
+  // A 2048-bit key so that even SHA-512 / SHA3-512 with a digest-length salt
+  // fits within the modulus (64-byte hash + 64-byte salt + overhead).
+  bssl::UniquePtr<RSA> key(RSA_new());
+  ASSERT_TRUE(key);
+  bssl::UniquePtr<BIGNUM> e(BN_new());
+  ASSERT_TRUE(e);
+  ASSERT_TRUE(BN_set_word(e.get(), RSA_F4));
+  ASSERT_TRUE(RSA_generate_key_ex(key.get(), 2048, e.get(), nullptr));
+
+  struct {
+    const EVP_MD *md;
+    const EVP_MD *mgf1_md;
+  } kTests[] = {
+      // SHA-2 family, message digest == MGF1 digest.
+      {EVP_sha224(), EVP_sha224()},
+      {EVP_sha256(), EVP_sha256()},
+      {EVP_sha384(), EVP_sha384()},
+      {EVP_sha512(), EVP_sha512()},
+      // SHA-3 family, message digest == MGF1 digest.
+      {EVP_sha3_256(), EVP_sha3_256()},
+      {EVP_sha3_384(), EVP_sha3_384()},
+      {EVP_sha3_512(), EVP_sha3_512()},
+      // The message digest and MGF1 digest are independent.
+      {EVP_sha256(), EVP_sha512()},
+      {EVP_sha3_256(), EVP_sha3_512()},
+  };
+
+  static const uint8_t kMsg[] = "RSASSA-PSS with SHA-3";
+  for (const auto &t : kTests) {
+    SCOPED_TRACE(EVP_MD_type(t.md));
+    SCOPED_TRACE(EVP_MD_type(t.mgf1_md));
+
+    // Hash the message with the message digest.
+    uint8_t digest[EVP_MAX_MD_SIZE];
+    unsigned digest_len;
+    ASSERT_TRUE(EVP_Digest(kMsg, sizeof(kMsg), digest, &digest_len, t.md,
+                           /*impl=*/nullptr));
+    ASSERT_EQ(digest_len, EVP_MD_size(t.md));
+
+    // Low-level padding round-trips: add the PSS padding, then verify it.
+    std::vector<uint8_t> em(RSA_size(key.get()));
+    ASSERT_TRUE(RSA_padding_add_PKCS1_PSS_mgf1(key.get(), em.data(), digest,
+                                               t.md, t.mgf1_md,
+                                               RSA_PSS_SALTLEN_DIGEST));
+    EXPECT_TRUE(RSA_verify_PKCS1_PSS_mgf1(key.get(), digest, t.md, t.mgf1_md,
+                                          em.data(), RSA_PSS_SALTLEN_DIGEST));
+
+    // High-level sign/verify round-trips.
+    std::vector<uint8_t> sig(RSA_size(key.get()));
+    size_t sig_len;
+    ASSERT_TRUE(RSA_sign_pss_mgf1(key.get(), &sig_len, sig.data(), sig.size(),
+                                  digest, digest_len, t.md, t.mgf1_md,
+                                  RSA_PSS_SALTLEN_DIGEST));
+    sig.resize(sig_len);
+    EXPECT_TRUE(RSA_verify_pss_mgf1(key.get(), digest, digest_len, t.md,
+                                    t.mgf1_md, RSA_PSS_SALTLEN_DIGEST,
+                                    sig.data(), sig.size()));
+
+    // A signature over a different digest must not verify.
+    uint8_t bad_digest[EVP_MAX_MD_SIZE];
+    OPENSSL_memcpy(bad_digest, digest, digest_len);
+    bad_digest[0] ^= 0xff;
+    EXPECT_FALSE(RSA_verify_pss_mgf1(key.get(), bad_digest, digest_len, t.md,
+                                     t.mgf1_md, RSA_PSS_SALTLEN_DIGEST,
+                                     sig.data(), sig.size()));
+    ERR_clear_error();
+  }
 }
 
 #if !defined(BORINGSSL_SHARED_LIBRARY)

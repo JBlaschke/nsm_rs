@@ -3,27 +3,23 @@
 
 #![cfg(debug_assertions)]
 
-use crate::{
-    fips::{assert_fips_status_indicator, FipsServiceStatus},
-    rand::SystemRandom,
-    signature::{
-        EcdsaKeyPair, Ed25519KeyPair, EdDSAParameters, KeyPair, RsaKeyPair, VerificationAlgorithm,
-        ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING, ECDSA_P256_SHA256_FIXED,
-        ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA256_ASN1,
-        ECDSA_P384_SHA384_ASN1, ECDSA_P384_SHA384_ASN1_SIGNING, ECDSA_P384_SHA384_FIXED,
-        ECDSA_P384_SHA384_FIXED_SIGNING, ECDSA_P384_SHA3_384_ASN1,
-        ECDSA_P384_SHA3_384_ASN1_SIGNING, ECDSA_P384_SHA3_384_FIXED,
-        ECDSA_P384_SHA3_384_FIXED_SIGNING, ECDSA_P521_SHA3_512_ASN1,
-        ECDSA_P521_SHA3_512_ASN1_SIGNING, ECDSA_P521_SHA3_512_FIXED,
-        ECDSA_P521_SHA3_512_FIXED_SIGNING, ECDSA_P521_SHA512_ASN1, ECDSA_P521_SHA512_ASN1_SIGNING,
-        ECDSA_P521_SHA512_FIXED, ECDSA_P521_SHA512_FIXED_SIGNING,
-        RSA_PKCS1_1024_8192_SHA1_FOR_LEGACY_USE_ONLY,
-        RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY,
-        RSA_PKCS1_1024_8192_SHA512_FOR_LEGACY_USE_ONLY, RSA_PKCS1_2048_8192_SHA256,
-        RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512, RSA_PKCS1_SHA256, RSA_PKCS1_SHA384,
-        RSA_PKCS1_SHA512, RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384,
-        RSA_PSS_2048_8192_SHA512, RSA_PSS_SHA256, RSA_PSS_SHA384, RSA_PSS_SHA512,
-    },
+use crate::fips::{assert_fips_status_indicator, FipsServiceStatus};
+use crate::rand::SystemRandom;
+use crate::signature::{
+    EcdsaKeyPair, Ed25519KeyPair, EdDSAParameters, KeyPair, RsaKeyPair, VerificationAlgorithm,
+    ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING, ECDSA_P256_SHA256_FIXED,
+    ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA256_ASN1,
+    ECDSA_P384_SHA384_ASN1, ECDSA_P384_SHA384_ASN1_SIGNING, ECDSA_P384_SHA384_FIXED,
+    ECDSA_P384_SHA384_FIXED_SIGNING, ECDSA_P384_SHA3_384_ASN1, ECDSA_P384_SHA3_384_ASN1_SIGNING,
+    ECDSA_P384_SHA3_384_FIXED, ECDSA_P384_SHA3_384_FIXED_SIGNING, ECDSA_P521_SHA3_512_ASN1,
+    ECDSA_P521_SHA3_512_ASN1_SIGNING, ECDSA_P521_SHA3_512_FIXED, ECDSA_P521_SHA3_512_FIXED_SIGNING,
+    ECDSA_P521_SHA512_ASN1, ECDSA_P521_SHA512_ASN1_SIGNING, ECDSA_P521_SHA512_FIXED,
+    ECDSA_P521_SHA512_FIXED_SIGNING, RSA_PKCS1_1024_8192_SHA1_FOR_LEGACY_USE_ONLY,
+    RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY, RSA_PKCS1_1024_8192_SHA512_FOR_LEGACY_USE_ONLY,
+    RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
+    RSA_PKCS1_SHA256, RSA_PKCS1_SHA384, RSA_PKCS1_SHA512, RSA_PSS_2048_8192_SHA256,
+    RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512, RSA_PSS_SHA256, RSA_PSS_SHA384,
+    RSA_PSS_SHA512,
 };
 
 mod keys;
@@ -442,3 +438,49 @@ rsa_verify!(
     &TEST_MESSAGE_RSA_PKCS1_1024_SHA512,
     FipsServiceStatus::Approved
 );
+
+mod pqdsa {
+    use super::TEST_MESSAGE;
+    use crate::fips::{assert_fips_status_indicator, FipsServiceStatus};
+    use crate::signature::{
+        KeyPair, PqdsaKeyPair, VerificationAlgorithm, ML_DSA_44, ML_DSA_44_SIGNING, ML_DSA_65,
+        ML_DSA_65_SIGNING, ML_DSA_87, ML_DSA_87_SIGNING,
+    };
+
+    macro_rules! mldsa_generate_sign_verify {
+        ($name:ident, $sign_alg:expr, $verify_alg:expr) => {
+            #[test]
+            fn $name() {
+                let keypair = assert_fips_status_indicator!(
+                    PqdsaKeyPair::generate($sign_alg),
+                    FipsServiceStatus::Approved
+                )
+                .unwrap();
+
+                let mut signature = vec![0u8; $sign_alg.signature_len()];
+                let signature_len = assert_fips_status_indicator!(
+                    keypair.sign(TEST_MESSAGE.as_bytes(), &mut signature),
+                    FipsServiceStatus::Approved
+                )
+                .unwrap();
+                assert_eq!(signature_len, signature.len());
+
+                let public_key = keypair.public_key();
+
+                assert_fips_status_indicator!(
+                    $verify_alg.verify_sig(
+                        public_key.as_ref(),
+                        TEST_MESSAGE.as_bytes(),
+                        signature.as_ref()
+                    ),
+                    FipsServiceStatus::Approved
+                )
+                .unwrap();
+            }
+        };
+    }
+
+    mldsa_generate_sign_verify!(mldsa_44_generate_sign_verify, &ML_DSA_44_SIGNING, ML_DSA_44);
+    mldsa_generate_sign_verify!(mldsa_65_generate_sign_verify, &ML_DSA_65_SIGNING, ML_DSA_65);
+    mldsa_generate_sign_verify!(mldsa_87_generate_sign_verify, &ML_DSA_87_SIGNING, ML_DSA_87);
+}

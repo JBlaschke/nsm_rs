@@ -29,7 +29,6 @@ use std::time::Duration;
 /// [runtime]: crate::runtime::Runtime
 /// [module]: crate::runtime
 #[derive(Debug)]
-#[cfg_attr(docsrs, doc(cfg(tokio_unstable)))]
 pub struct LocalRuntime {
     /// Task scheduler
     scheduler: LocalRuntimeScheduler,
@@ -92,7 +91,7 @@ impl LocalRuntime {
     pub fn new() -> std::io::Result<LocalRuntime> {
         Builder::new_current_thread()
             .enable_all()
-            .build_local(&Default::default())
+            .build_local(Default::default())
     }
 
     /// Returns a handle to the runtime's spawner.
@@ -166,7 +165,8 @@ impl LocalRuntime {
     ///
     /// This function _will_ be run on another thread.
     ///
-    /// See the documentation in the non-local runtime for more information.
+    /// See the [documentation in the non-local runtime][Runtime] for more
+    /// information.
     ///
     /// [Runtime]: crate::runtime::Runtime::spawn_blocking
     ///
@@ -197,7 +197,8 @@ impl LocalRuntime {
     /// Runs a future to completion on the Tokio runtime. This is the
     /// runtime's entry point.
     ///
-    /// See the documentation for [the equivalent method on Runtime] for more information.
+    /// See the documentation for [the equivalent method on Runtime][Runtime]
+    /// for more information.
     ///
     /// [Runtime]: crate::runtime::Runtime::block_on
     ///
@@ -230,10 +231,15 @@ impl LocalRuntime {
     fn block_on_inner<F: Future>(&self, future: F, _meta: SpawnMeta<'_>) -> F::Output {
         #[cfg(all(
             tokio_unstable,
-            tokio_taskdump,
+            feature = "taskdump",
             feature = "rt",
             target_os = "linux",
-            any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")
+            any(
+                target_arch = "aarch64",
+                target_arch = "x86",
+                target_arch = "x86_64",
+                target_arch = "s390x"
+            )
         ))]
         let future = crate::runtime::task::trace::Trace::root(future);
 
@@ -311,6 +317,8 @@ impl LocalRuntime {
     /// # Examples
     ///
     /// ```
+    /// # #[cfg(not(target_family = "wasm"))]
+    /// # {
     /// use tokio::runtime::LocalRuntime;
     /// use tokio::task;
     ///
@@ -328,6 +336,7 @@ impl LocalRuntime {
     ///
     ///    runtime.shutdown_timeout(Duration::from_millis(100));
     /// }
+    /// # }
     /// ```
     pub fn shutdown_timeout(mut self, duration: Duration) {
         // Wakeup and shutdown all the worker threads
@@ -374,7 +383,6 @@ impl LocalRuntime {
     }
 }
 
-#[allow(clippy::single_match)] // there are comments in the error branch, so we don't want if-let
 impl Drop for LocalRuntime {
     fn drop(&mut self) {
         if let LocalRuntimeScheduler::CurrentThread(current_thread) = &mut self.scheduler {

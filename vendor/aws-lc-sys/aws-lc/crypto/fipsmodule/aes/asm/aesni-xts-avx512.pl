@@ -1,10 +1,6 @@
 #! /usr/bin/env perl
 # Copyright (C) 2023 Intel Corporation
-#
-# Licensed under the OpenSSL license (the "License").  You may not use
-# this file except in compliance with the License.  You can obtain a copy
-# in the file LICENSE in the source distribution or at
-# https://www.openssl.org/source/license.html
+# SPDX-License-Identifier: Apache-2.0
 
 # This implementation is based on the AES-XTS code (AVX512VAES + VPCLMULQDQ)
 # from Intel(R) Intelligent Storage Acceleration Library Crypto Version
@@ -1460,9 +1456,12 @@ ___
 
   my $rndsuffix = &random_string();
 
+  # Keep the disabled output non-empty. Some NASM versions reject an object
+  # with no sections (nasm.us bug 3392738), and NASM 2.16.01 crashes while
+  # generating CodeView debug information for an empty section.
   $code .= <<___;
-#ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
 .text
+#ifndef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
 ___
 
   {
@@ -1598,7 +1597,7 @@ ___
   vmovdqu8 	 %zmm1,($output)
   vmovdqu 	 %xmm2,0x40($output)
   add 	 \$0x50,$output
-  movdqa 	 %xmm2,%xmm8
+  vmovdqa 	 %xmm2,%xmm8
   vextracti32x4 	 \$0x1,%zmm10,%xmm0
   and 	 \$0xf,$length
   je 	 .L_ret_${rndsuffix}
@@ -2493,7 +2492,7 @@ ___
   vmovdqu8 	 0x40($input),%zmm2
   vmovdqu8 	 0x80($input),%zmm3
   vmovdqu8 	 0xc0($input),%zmm4
-  vmovdqu8 	 0xf0($input),%zmm5
+  vmovdqu8 	 0xf0($input),%xmm5
   add 	 \$0x100,$input
 ___
   }
@@ -3111,6 +3110,9 @@ ___
     .byte  0xff, 0xff, 0xff, 0xff, 0xff
 
 .text
+#endif
+#ifdef MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX
+.byte 0
 #endif
 ___
 } else {

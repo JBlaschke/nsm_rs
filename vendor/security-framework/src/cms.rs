@@ -3,6 +3,7 @@
 use std::{fmt, ptr};
 
 use core_foundation::array::CFArray;
+use core_foundation::base::TCFType;
 use core_foundation::data::CFData;
 use core_foundation::string::CFString;
 use core_foundation_sys::array::CFArrayRef;
@@ -15,7 +16,6 @@ use security_framework_sys::trust::SecTrustRef;
 
 use crate::base::Result;
 use crate::certificate::SecCertificate;
-use crate::core_foundation::base::TCFType;
 use crate::cvt;
 use crate::policy::SecPolicy;
 use crate::trust::SecTrust;
@@ -31,6 +31,7 @@ pub use encoder::CMS_DIGEST_ALGORITHM_SHA256;
 mod encoder {
     use super::*;
     use crate::identity::SecIdentity;
+    use core_foundation::{declare_TCFType, impl_TCFType};
 
     /// SHA1 digest algorithm
     pub const CMS_DIGEST_ALGORITHM_SHA1: &str = "sha1";
@@ -125,7 +126,8 @@ mod encoder {
             cvt(unsafe {
                 CMSEncoderAddRecipients(
                     self.0,
-                    if recipients.is_empty() { ptr::null() } else { recipients.as_CFTypeRef() })
+                    if recipients.is_empty() { ptr::null() } else { recipients.as_CFTypeRef() },
+                )
             })?;
             Ok(())
         }
@@ -215,7 +217,7 @@ mod encoder {
 
         /// Feeds content bytes into the encoder
         pub fn update_content(&self, content: &[u8]) -> Result<()> {
-            cvt(unsafe { CMSEncoderUpdateContent(self.0, content.as_ptr() as _, content.len()) })?;
+            cvt(unsafe { CMSEncoderUpdateContent(self.0, content.as_ptr().cast(), content.len()) })?;
             Ok(())
         }
 
@@ -245,7 +247,8 @@ mod encoder {
                     self.0,
                     timestamp_policy.map(|p| p.as_void_ptr()).unwrap_or(ptr::null()),
                     signer_index,
-                    &mut out)
+                    &mut out,
+                )
             })?;
 
             Ok(out)
@@ -273,7 +276,7 @@ mod encoder {
                 content_type_oid.as_ref().map(|oid| oid.as_CFTypeRef()).unwrap_or(ptr::null()),
                 detached_content.into(),
                 signed_attributes.bits(),
-                content.as_ptr() as _,
+                content.as_ptr().cast(),
                 content.len(),
                 &mut out,
             )
@@ -285,6 +288,7 @@ mod encoder {
 
 mod decoder {
     use super::*;
+    use core_foundation::{declare_TCFType, impl_TCFType};
 
     /// Holds a result of the `CMSDecoder::get_signer_status` function
     pub struct SignerStatus {
@@ -322,7 +326,7 @@ mod decoder {
 
         /// Feeds raw bytes of the message to be decoded into the decoder
         pub fn update_message(&self, message: &[u8]) -> Result<()> {
-            cvt(unsafe { CMSDecoderUpdateMessage(self.0, message.as_ptr() as _, message.len()) })?;
+            cvt(unsafe { CMSDecoderUpdateMessage(self.0, message.as_ptr().cast(), message.len()) })?;
             Ok(())
         }
 
@@ -465,9 +469,7 @@ mod decoder {
             cvt(unsafe {
                 CMSDecoderCopySignerTimestampWithPolicy(
                     self.0,
-                    timestamp_policy
-                        .map(|p| p.as_void_ptr())
-                        .unwrap_or(ptr::null()),
+                    timestamp_policy.map(|p| p.as_void_ptr()).unwrap_or(ptr::null()),
                     signer_index,
                     &mut out,
                 )
@@ -477,14 +479,9 @@ mod decoder {
         }
 
         /// Returns an array containing the certificates from a timestamp response
-        pub fn get_signer_timestamp_certificates(
-            &self,
-            signer_index: usize,
-        ) -> Result<Vec<SecCertificate>> {
+        pub fn get_signer_timestamp_certificates(&self, signer_index: usize) -> Result<Vec<SecCertificate>> {
             let mut out: CFArrayRef = ptr::null_mut();
-            cvt(unsafe {
-                CMSDecoderCopySignerTimestampCertificates(self.0, signer_index, &mut out)
-            })?;
+            cvt(unsafe { CMSDecoderCopySignerTimestampCertificates(self.0, signer_index, &mut out) })?;
 
             if out.is_null() {
                 Ok(Vec::new())
@@ -502,23 +499,27 @@ mod tests {
     use crate::import_export::{ImportedIdentity, Pkcs12ImportOptions};
     use crate::policy::SecPolicy;
     use security_framework_sys::cms::CMSSignerStatus;
+    use std::sync::OnceLock;
 
     const KEYSTORE: &[u8] = include_bytes!("../test/cms/keystore.p12");
     const ENCRYPTED_CMS: &[u8] = include_bytes!("../test/cms/encrypted.p7m");
     const SIGNED_ENCRYPTED_CMS: &[u8] = include_bytes!("../test/cms/signed-encrypted.p7m");
+    static KEYSTORE_IDENTITY: OnceLock<Vec<ImportedIdentity>> = OnceLock::new();
 
-    fn import_keystore() -> Vec<ImportedIdentity> {
-        let mut import_opts = Pkcs12ImportOptions::new();
-        import_opts.passphrase("cms").import(KEYSTORE).unwrap()
+    fn import_keystore() -> &'static [ImportedIdentity] {
+        KEYSTORE_IDENTITY.get_or_init(|| {
+            let mut import_opts = Pkcs12ImportOptions::new();
+            import_opts.passphrase("cms").import(KEYSTORE).expect("import keystore.p12")
+        })
     }
 
     #[test]
-    fn test_decode_encrypted() {
-        let _identities = import_keystore();
+    fn test_decode_encrypted_with_keystore_identities() {
+        let _ = import_keystore();
 
-        let decoder = CMSDecoder::create().unwrap();
-        decoder.update_message(ENCRYPTED_CMS).unwrap();
-        decoder.finalize_message().unwrap();
+        let decoder = CMSDecoder::create().expect("create");
+        decoder.update_message(ENCRYPTED_CMS).expect("update");
+        decoder.finalize_message().expect("finalize");
 
         assert!(decoder.is_content_encrypted().unwrap());
         assert_eq!(decoder.get_content().unwrap(), b"encrypted message\n");
@@ -527,8 +528,8 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_signed_and_encrypted() {
-        let _identities = import_keystore();
+    fn test_decode_signed_and_encrypted_with_keystore_identities() {
+        let _ = import_keystore();
 
         let decoder = CMSDecoder::create().unwrap();
         decoder.update_message(SIGNED_ENCRYPTED_CMS).unwrap();
@@ -551,13 +552,11 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_encrypted() {
+    fn test_encode_encrypted_with_keystore_identities() {
         let identities = import_keystore();
 
         let chain = identities
-            .iter()
-            .filter_map(|id| id.cert_chain.as_ref())
-            .next()
+            .iter().find_map(|id| id.cert_chain.as_ref())
             .unwrap();
 
         let message = cms_encode_content(
@@ -576,23 +575,19 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_signed_encrypted() {
+    fn test_encode_signed_encrypted_with_keystore_identities() {
         let identities = import_keystore();
 
         let chain = identities
-            .iter()
-            .filter_map(|id| id.cert_chain.as_ref())
-            .next()
+            .iter().find_map(|id| id.cert_chain.as_ref())
             .unwrap();
 
         let identity = identities
-            .iter()
-            .filter_map(|id| id.identity.as_ref())
-            .next()
+            .iter().find_map(|id| id.identity.as_ref())
             .unwrap();
 
         let message = cms_encode_content(
-            &[identity.clone()],
+            std::slice::from_ref(identity),
             &chain[0..1],
             None,
             false,
@@ -608,23 +603,19 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_with_cms_encoder() {
+    fn test_encode_with_cms_encoder_with_keystore_identities() {
         let identities = import_keystore();
 
         let chain = identities
-            .iter()
-            .filter_map(|id| id.cert_chain.as_ref())
-            .next()
+            .iter().find_map(|id| id.cert_chain.as_ref())
             .unwrap();
 
         let identity = identities
-            .iter()
-            .filter_map(|id| id.identity.as_ref())
-            .next()
+            .iter().find_map(|id| id.identity.as_ref())
             .unwrap();
 
         let message = cms_encode_content(
-            &[identity.clone()],
+            std::slice::from_ref(identity),
             &chain[0..1],
             None,
             false,

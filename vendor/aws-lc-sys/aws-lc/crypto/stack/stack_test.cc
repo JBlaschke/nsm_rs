@@ -1,16 +1,5 @@
-/* Copyright (c) 2018, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2018, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #include <openssl/stack.h>
 
@@ -507,4 +496,18 @@ TEST(StackTest, IsSorted) {
   // Without a comparison function, the list cannot be sorted.
   sk_TEST_INT_set_cmp_func(sk.get(), nullptr);
   EXPECT_FALSE(sk_TEST_INT_is_sorted(sk.get()));
+}
+
+TEST(StackTest, NullIsEmpty) {
+  EXPECT_EQ(0u, sk_TEST_INT_num(nullptr));
+
+  EXPECT_EQ(nullptr, sk_TEST_INT_value(nullptr, 0));
+  EXPECT_EQ(nullptr, sk_TEST_INT_value(nullptr, 1));
+
+  bssl::UniquePtr<TEST_INT> value = TEST_INT_new(6);
+  ASSERT_TRUE(value);
+  // The return value of -1 is compatible with OpenSSL
+  // BoringSSL's function takes 3 arguments in this case
+  // and returns False.
+  EXPECT_EQ(-1, sk_TEST_INT_find(nullptr, value.get()));
 }

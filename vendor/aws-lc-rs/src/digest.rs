@@ -33,12 +33,13 @@ use crate::{debug, derive_debug_via_id};
 
 pub(crate) mod digest_ctx;
 mod sha;
-use crate::error::Unspecified;
-use crate::ptr::ConstPointer;
-use aws_lc::{
+use crate::aws_lc::{
     EVP_DigestFinal, EVP_DigestUpdate, EVP_sha1, EVP_sha224, EVP_sha256, EVP_sha384, EVP_sha3_256,
     EVP_sha3_384, EVP_sha3_512, EVP_sha512, EVP_sha512_256, EVP_MD,
 };
+use crate::error::Unspecified;
+use crate::ptr::ConstPointer;
+use core::ffi::c_uint;
 use core::mem::MaybeUninit;
 use digest_ctx::DigestContext;
 pub use sha::{
@@ -46,9 +47,6 @@ pub use sha::{
     SHA256_OUTPUT_LEN, SHA384, SHA384_OUTPUT_LEN, SHA3_256, SHA3_384, SHA3_512, SHA512, SHA512_256,
     SHA512_256_OUTPUT_LEN, SHA512_OUTPUT_LEN,
 };
-// TODO: Uncomment when MSRV >= 1.64
-//use core::ffi::c_uint;
-use std::os::raw::c_uint;
 
 /// A context for multi-step (Init-Update-Finish) digest calculations.
 //
@@ -155,8 +153,8 @@ impl Context {
 
         Ok(Digest {
             algorithm: self.algorithm,
-            digest_msg: output,
-            digest_len: self.algorithm.output_len,
+            message: output,
+            len: self.algorithm.output_len,
         })
     }
 
@@ -199,8 +197,8 @@ pub fn digest(algorithm: &'static Algorithm, data: &[u8]) -> Digest {
 
     Digest {
         algorithm,
-        digest_msg: output,
-        digest_len: algorithm.output_len,
+        message: output,
+        len: algorithm.output_len,
     }
 }
 
@@ -211,13 +209,37 @@ pub fn digest(algorithm: &'static Algorithm, data: &[u8]) -> Digest {
 pub struct Digest {
     /// The trait `Copy` can't be implemented for dynamic arrays, so we set a
     /// fixed array and the appropriate length.
-    digest_msg: [u8; MAX_OUTPUT_LEN],
-    digest_len: usize,
+    message: [u8; MAX_OUTPUT_LEN],
+    len: usize,
 
     algorithm: &'static Algorithm,
 }
 
 impl Digest {
+    /// Imports a digest value provide by an external source. This allows for the signing of
+    /// content that might not be directly accessible.
+    ///
+    /// WARNING: Ensure that the digest is provided by a trusted source.
+    /// When possible, prefer to directly compute the digest of content.
+    ///
+    /// # Errors
+    /// Returns `Unspecified` if the imported value is the wrong length for the specified algorithm.
+    pub fn import_less_safe(
+        digest: &[u8],
+        algorithm: &'static Algorithm,
+    ) -> Result<Self, Unspecified> {
+        if digest.len() != algorithm.output_len {
+            return Err(Unspecified);
+        }
+        let mut my_digest = [0u8; MAX_OUTPUT_LEN];
+        my_digest[0..digest.len()].copy_from_slice(&digest[0..digest.len()]);
+        Ok(Digest {
+            message: my_digest,
+            len: digest.len(),
+            algorithm,
+        })
+    }
+
     /// The algorithm that was used to calculate the digest value.
     #[inline]
     #[must_use]
@@ -229,7 +251,7 @@ impl Digest {
 impl AsRef<[u8]> for Digest {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        &self.digest_msg[..self.digest_len]
+        &self.message[..self.len]
     }
 }
 
@@ -340,9 +362,9 @@ pub const MAX_OUTPUT_LEN: usize = 512 / 8;
 pub const MAX_CHAINING_LEN: usize = MAX_OUTPUT_LEN;
 
 /// Match digest types for `EVP_MD` functions.
-pub(crate) fn match_digest_type(algorithm_id: &AlgorithmID) -> ConstPointer<EVP_MD> {
+pub(crate) fn match_digest_type(algorithm_id: &AlgorithmID) -> ConstPointer<'_, EVP_MD> {
     unsafe {
-        ConstPointer::new(match algorithm_id {
+        ConstPointer::new_static(match algorithm_id {
             AlgorithmID::SHA1 => EVP_sha1(),
             AlgorithmID::SHA224 => EVP_sha224(),
             AlgorithmID::SHA256 => EVP_sha256(),
@@ -359,6 +381,7 @@ pub(crate) fn match_digest_type(algorithm_id: &AlgorithmID) -> ConstPointer<EVP_
 
 #[cfg(test)]
 mod tests {
+    use crate::digest;
     #[cfg(feature = "fips")]
     mod fips;
 
@@ -439,8 +462,6 @@ mod tests {
 
     #[test]
     fn digest_coverage() {
-        use crate::digest;
-
         for alg in [
             &digest::SHA1_FOR_LEGACY_USE_ONLY,
             &digest::SHA224,
@@ -462,5 +483,15 @@ mod tests {
             assert_eq!(orig_digest.as_ref(), clone_digest.as_ref());
             assert_eq!(orig_digest.clone().as_ref(), clone_digest.as_ref());
         }
+    }
+
+    #[test]
+    fn test_import_less_safe() {
+        let digest = digest::digest(&digest::SHA256, b"hello, world");
+        let digest_copy =
+            digest::Digest::import_less_safe(digest.as_ref(), &digest::SHA256).unwrap();
+
+        assert_eq!(digest.as_ref(), digest_copy.as_ref());
+        assert_eq!(digest.algorithm, digest_copy.algorithm);
     }
 }

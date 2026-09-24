@@ -5,7 +5,7 @@
 #include "../cpucap/internal.h"
 
 #if defined(CURVE25519_S2N_BIGNUM_CAPABLE)
-#include "../../../third_party/s2n-bignum/include/s2n-bignum_aws-lc.h"
+#include "../../../third_party/s2n-bignum/s2n-bignum_aws-lc.h"
 
 void x25519_scalar_mult_generic_s2n_bignum(
   uint8_t out_shared_key[X25519_SHARED_KEY_LEN],
@@ -21,6 +21,8 @@ void x25519_scalar_mult_generic_s2n_bignum(
   curve25519_x25519_byte_selector(out_shared_key,
                                   private_key_internal_demask,
                                   peer_public_value);
+
+  OPENSSL_cleanse(private_key_internal_demask, sizeof(private_key_internal_demask));
 }
 
 void x25519_public_from_private_s2n_bignum(
@@ -34,6 +36,8 @@ void x25519_public_from_private_s2n_bignum(
   private_key_internal_demask[31] |= 64;
 
   curve25519_x25519base_byte_selector(out_public_value, private_key_internal_demask);
+
+  OPENSSL_cleanse(private_key_internal_demask, sizeof(private_key_internal_demask));
 }
 
 void ed25519_public_key_from_hashed_seed_s2n_bignum(
@@ -47,11 +51,13 @@ void ed25519_public_key_from_hashed_seed_s2n_bignum(
   edwards25519_scalarmulbase_selector(uint64_point, uint64_hashed_seed);
 
   edwards25519_encode(out_public_key, uint64_point);
+
+  OPENSSL_cleanse(uint64_hashed_seed, sizeof(uint64_hashed_seed));
 }
 
 void ed25519_sign_s2n_bignum(uint8_t out_sig[ED25519_SIGNATURE_LEN],
   uint8_t r[SHA512_DIGEST_LENGTH], const uint8_t *s, const uint8_t *A,
-  const void *message, size_t message_len) {
+  const void *message, size_t message_len, const uint8_t *dom2, size_t dom2_len) {
 
   uint8_t k[SHA512_DIGEST_LENGTH] = {0};
   uint64_t R[8] = {0};
@@ -69,10 +75,16 @@ void ed25519_sign_s2n_bignum(uint8_t out_sig[ED25519_SIGNATURE_LEN],
   edwards25519_scalarmulbase_selector(R, uint64_r);
   edwards25519_encode(out_sig, R);
 
-  // Compute k = SHA512(R || A || message)
   // R is of length 32 octets
-  ed25519_sha512(k, out_sig, 32, A, ED25519_PUBLIC_KEY_LEN, message,
-    message_len);
+  if (dom2_len > 0) {
+    // Compute k = SHA512(dom2(phflag, context) || R || A || message)
+    ed25519_sha512(k, dom2, dom2_len, out_sig, 32, A, ED25519_PUBLIC_KEY_LEN, message,
+                   message_len);
+  } else {
+    // Compute k = SHA512(R || A || message)
+    ed25519_sha512(k, out_sig, 32, A, ED25519_PUBLIC_KEY_LEN, message,
+                   message_len, NULL, 0);
+  }
   OPENSSL_memcpy(uint64_k, k, SHA512_DIGEST_LENGTH);
   bignum_mod_n25519(uint64_k, 8, uint64_k);
 
@@ -80,11 +92,16 @@ void ed25519_sign_s2n_bignum(uint8_t out_sig[ED25519_SIGNATURE_LEN],
   // out_sig = R || S
   bignum_madd_n25519_selector(S, uint64_k, uint64_s, uint64_r);
   OPENSSL_memcpy(out_sig + 32, S, 32);
+
+  OPENSSL_cleanse(k, sizeof(k));
+  OPENSSL_cleanse(uint64_r, sizeof(uint64_r));
+  OPENSSL_cleanse(uint64_k, sizeof(uint64_k));
+  OPENSSL_cleanse(uint64_s, sizeof(uint64_s));
 }
 
 int ed25519_verify_s2n_bignum(uint8_t R_computed_encoded[32],
   const uint8_t public_key[ED25519_PUBLIC_KEY_LEN], uint8_t R_expected[32],
-  uint8_t S[32], const uint8_t *message, size_t message_len) {
+  uint8_t S[32], const uint8_t *message, size_t message_len, const uint8_t *dom2, size_t dom2_len) {
 
   uint8_t k[SHA512_DIGEST_LENGTH] = {0};
   uint64_t uint64_k[8] = {0};
@@ -98,9 +115,15 @@ int ed25519_verify_s2n_bignum(uint8_t R_computed_encoded[32],
   }
 
   // Step: rfc8032 5.1.7.2
-  // Compute k = SHA512(R_expected || public_key || message).
-  ed25519_sha512(k, R_expected, 32, public_key, ED25519_PUBLIC_KEY_LEN, message,
-    message_len);
+  if(dom2_len > 0) {
+    // Compute k = SHA512(dom2(phflag, context) || R_expected || public_key || message).
+    ed25519_sha512(k, dom2, dom2_len, R_expected, 32, public_key,
+                   ED25519_PUBLIC_KEY_LEN, message, message_len);
+  } else {
+    // Compute k = SHA512(R_expected || public_key || message).
+    ed25519_sha512(k, R_expected, 32, public_key, ED25519_PUBLIC_KEY_LEN,
+                   message, message_len, NULL, 0);
+  }
   OPENSSL_memcpy(uint64_k, k, SHA512_DIGEST_LENGTH);
   bignum_mod_n25519(uint64_k, 8, uint64_k);
 

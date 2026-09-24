@@ -25,8 +25,9 @@ function(msbuild_aarch64_asm)
       COMMAND "${CMAKE_ASM_COMPILER}"
               --target=arm64-pc-windows-msvc
               /c
-              /I "${PROJECT_BINARY_DIR}/symbol_prefix_include/"
-              /I "${PROJECT_SOURCE_DIR}/include"
+              /I "${AWSLC_BINARY_DIR}/symbol_prefix_include"
+              /I "${AWSLC_SOURCE_DIR}/include"
+              /I "${AWSLC_SOURCE_DIR}/third_party/s2n-bignum/s2n-bignum-imported/include"
               /o "${OBJ_FILE}"
               "${ASM_FILE}"
       DEPENDS ${ASM_FILE}
@@ -44,7 +45,7 @@ function(msbuild_aarch64_asm)
 endfunction()
 
 if(NOT OPENSSL_NO_ASM)
-  if(UNIX)
+  if(NOT WIN32)
     if(ARCH STREQUAL "aarch64")
       # The "armx" Perl scripts look for "64" in the style argument
       # in order to decide whether to generate 32- or 64-bit asm.
@@ -102,6 +103,12 @@ if(NOT OPENSSL_NO_ASM)
   else()
     if(ARCH STREQUAL "aarch64")
       set(PERLASM_STYLE win64)
+      if("${CMAKE_BUILD_TYPE_LOWER}" STREQUAL "relwithdebinfo" OR
+              "${CMAKE_BUILD_TYPE_LOWER}" STREQUAL "debug")
+        # Provide debug in the default format
+        set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -g")
+      endif()
+
       set(ASM_EXT S)
       enable_language(ASM)
     else()
@@ -136,6 +143,10 @@ if(PERL_EXECUTABLE)
       set(PERLASM_FLAGS "${PERLASM_FLAGS} -DMY_ASSEMBLER_IS_TOO_OLD_FOR_AVX")
     endif()
 
+    if(MY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2)
+      set(PERLASM_FLAGS "${PERLASM_FLAGS} -DMY_ASSEMBLER_IS_TOO_OLD_FOR_ADX_AVX2")
+    endif()
+
     if(MY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX)
       set(PERLASM_FLAGS "${PERLASM_FLAGS} -DMY_ASSEMBLER_IS_TOO_OLD_FOR_512AVX")
     endif()
@@ -152,13 +163,13 @@ if(PERL_EXECUTABLE)
       COMMAND ${PERL_COMMAND}
       DEPENDS
       ${src}
-      ${PROJECT_SOURCE_DIR}/crypto/perlasm/arm-xlate.pl
-      ${PROJECT_SOURCE_DIR}/crypto/perlasm/ppc-xlate.pl
-      ${PROJECT_SOURCE_DIR}/crypto/perlasm/x86_64-xlate.pl
-      ${PROJECT_SOURCE_DIR}/crypto/perlasm/x86asm.pl
-      ${PROJECT_SOURCE_DIR}/crypto/perlasm/x86gas.pl
-      ${PROJECT_SOURCE_DIR}/crypto/perlasm/x86masm.pl
-      ${PROJECT_SOURCE_DIR}/crypto/perlasm/x86nasm.pl
+      ${AWSLC_SOURCE_DIR}/crypto/perlasm/arm-xlate.pl
+      ${AWSLC_SOURCE_DIR}/crypto/perlasm/ppc-xlate.pl
+      ${AWSLC_SOURCE_DIR}/crypto/perlasm/x86_64-xlate.pl
+      ${AWSLC_SOURCE_DIR}/crypto/perlasm/x86asm.pl
+      ${AWSLC_SOURCE_DIR}/crypto/perlasm/x86gas.pl
+      ${AWSLC_SOURCE_DIR}/crypto/perlasm/x86masm.pl
+      ${AWSLC_SOURCE_DIR}/crypto/perlasm/x86nasm.pl
       WORKING_DIRECTORY .
     )
   endfunction()
@@ -169,10 +180,8 @@ if(PERL_EXECUTABLE)
   perlasm(cipher_extra/aes128gcmsiv-x86_64.${ASM_EXT} cipher_extra/asm/aes128gcmsiv-x86_64.pl)
   perlasm(cipher_extra/chacha20_poly1305_x86_64.${ASM_EXT} cipher_extra/asm/chacha20_poly1305_x86_64.pl)
   perlasm(cipher_extra/chacha20_poly1305_armv8.${ASM_EXT} cipher_extra/asm/chacha20_poly1305_armv8.pl)
-  if(NOT MY_ASSEMBLER_IS_TOO_OLD_FOR_AVX)
-      perlasm(cipher_extra/aesni-sha1-x86_64.${ASM_EXT} cipher_extra/asm/aesni-sha1-x86_64.pl)
-      perlasm(cipher_extra/aesni-sha256-x86_64.${ASM_EXT} cipher_extra/asm/aesni-sha256-x86_64.pl)
-  endif()
+  perlasm(cipher_extra/aesni-sha1-x86_64.${ASM_EXT} cipher_extra/asm/aesni-sha1-x86_64.pl)
+  perlasm(cipher_extra/aesni-sha256-x86_64.${ASM_EXT} cipher_extra/asm/aesni-sha256-x86_64.pl)
   perlasm(test/trampoline-armv4.${ASM_EXT} test/asm/trampoline-armv4.pl)
   perlasm(test/trampoline-armv8.${ASM_EXT} test/asm/trampoline-armv8.pl)
   perlasm(test/trampoline-ppc.${ASM_EXT} test/asm/trampoline-ppc.pl)
@@ -186,7 +195,7 @@ else()
     set(ASSEMBLY_SOURCE ${GENERATE_CODE_ROOT}/ios-arm/crypto/)
   elseif(APPLE)
     set(ASSEMBLY_SOURCE ${GENERATE_CODE_ROOT}/mac-${ARCH}/crypto/)
-  elseif(UNIX)
+  elseif(NOT WIN32)
     if(${ARCH} STREQUAL "generic")
       message(STATUS "Detected generic linux platform. No assembly files will be included.")
     else()
@@ -257,34 +266,17 @@ if(ARCH STREQUAL "x86")
 endif()
 
 if(ARCH STREQUAL "x86_64")
-  if(MY_ASSEMBLER_IS_TOO_OLD_FOR_AVX)
-    # CryptoAlg-1091:
-    # Stitch code |aesni-sha1/256-x86_64.${ASM_EXT}| are not enabled due
-    # to some build issues and lack of tools to measure the performance gap.
-    # The disable is safer choice because |EVP_aes_128/256_cbc_hmac_sha1/256|
-    # are deprecated.
-    set(
-      CRYPTO_ARCH_SOURCES
+  set(
+    CRYPTO_ARCH_SOURCES
 
-      chacha/chacha-x86_64.${ASM_EXT}
-      cipher_extra/chacha20_poly1305_x86_64.${ASM_EXT}
-      cipher_extra/aes128gcmsiv-x86_64.${ASM_EXT}
-      test/trampoline-x86_64.${ASM_EXT}
-      hrss/asm/poly_rq_mul.S
-    )
-  else()
-    set(
-      CRYPTO_ARCH_SOURCES
-
-      chacha/chacha-x86_64.${ASM_EXT}
-      cipher_extra/chacha20_poly1305_x86_64.${ASM_EXT}
-      cipher_extra/aes128gcmsiv-x86_64.${ASM_EXT}
-      cipher_extra/aesni-sha1-x86_64.${ASM_EXT}
-      cipher_extra/aesni-sha256-x86_64.${ASM_EXT}
-      test/trampoline-x86_64.${ASM_EXT}
-      hrss/asm/poly_rq_mul.S
-    )
-  endif()
+    chacha/chacha-x86_64.${ASM_EXT}
+    cipher_extra/chacha20_poly1305_x86_64.${ASM_EXT}
+    cipher_extra/aes128gcmsiv-x86_64.${ASM_EXT}
+    cipher_extra/aesni-sha1-x86_64.${ASM_EXT}
+    cipher_extra/aesni-sha256-x86_64.${ASM_EXT}
+    test/trampoline-x86_64.${ASM_EXT}
+    hrss/asm/poly_rq_mul.S
+  )
 endif()
 
 if(GO_EXECUTABLE)
@@ -322,16 +314,6 @@ if(GO_EXECUTABLE)
   )
 else()
   file(COPY ${GENERATE_CODE_ROOT}/err_data.c DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/)
-endif()
-
-set(DILITHIUM_SOURCES)
-if(ENABLE_DILITHIUM)
-  set(
-    DILITHIUM_SOURCES
-
-    evp_extra/p_pqdsa_asn1.c
-    dilithium/ml_dsa.c
-  )
 endif()
 
 set(CRYPTO_ARCH_OBJECTS "")
@@ -372,12 +354,15 @@ add_library(
   asn1/posix_time.c
   base64/base64.c
   bio/bio.c
+  bio/bio_addr.c
   bio/bio_mem.c
   bio/connect.c
+  bio/dgram.c
   bio/errno.c
   bio/fd.c
   bio/file.c
   bio/hexdump.c
+  bio/md.c
   bio/pair.c
   bio/printf.c
   bio/socket.c
@@ -393,6 +378,7 @@ add_library(
   bytestring/unicode.c
   chacha/chacha.c
   cipher_extra/cipher_extra.c
+  cipher_extra/cts.c
   cipher_extra/derive_key.c
   cipher_extra/e_aesctrhmac.c
   cipher_extra/e_aesgcmsiv.c
@@ -406,17 +392,18 @@ add_library(
   cipher_extra/e_tls.c
   cipher_extra/tls_cbc.c
   conf/conf.c
+  console/console.c
   crypto.c
   des/des.c
   dh_extra/params.c
   dh_extra/dh_asn1.c
   digest_extra/digest_extra.c
-  ${DILITHIUM_SOURCES}
   dsa/dsa.c
   dsa/dsa_asn1.c
   ecdh_extra/ecdh_extra.c
   ecdsa_extra/ecdsa_asn1.c
   ec_extra/ec_asn1.c
+  ec_extra/ec_brainpool.c
   ec_extra/ec_derive.c
   ec_extra/hash_to_curve.c
   err/err.c
@@ -431,6 +418,7 @@ add_library(
   evp_extra/p_ed25519_asn1.c
   evp_extra/p_hmac_asn1.c
   evp_extra/p_kem_asn1.c
+  evp_extra/p_pqdsa_asn1.c
   evp_extra/p_rsa_asn1.c
   evp_extra/p_x25519.c
   evp_extra/p_x25519_asn1.c
@@ -441,12 +429,9 @@ add_library(
   ex_data.c
   hpke/hpke.c
   hrss/hrss.c
-  kyber/kyber512r3_ref.c
-  kyber/kyber768r3_ref.c
-  kyber/kyber1024r3_ref.c
-  kyber/pqcrystals_kyber_ref_common/fips202.c
-  kyber/kem_kyber.c
+  keccak/keccak.c
   lhash/lhash.c
+  md4/md4.c
   mem.c
   obj/obj.c
   obj/obj_xref.c
@@ -467,7 +452,6 @@ add_library(
   pem/pem_x509.c
   pem/pem_xaux.c
   pkcs7/bio/cipher.c
-  pkcs7/bio/md.c
   pkcs7/pkcs7.c
   pkcs7/pkcs7_asn1.c
   pkcs7/pkcs7_x509.c
@@ -478,12 +462,12 @@ add_library(
   poly1305/poly1305_arm.c
   poly1305/poly1305_vec.c
   pool/pool.c
+  rand_extra/ccrandomgeneratebytes.c
   rand_extra/deterministic.c
-  rand_extra/entropy_passive.c
-  rand_extra/forkunsafe.c
-  rand_extra/fuchsia.c
+  rand_extra/getentropy.c
   rand_extra/rand_extra.c
-  rand_extra/trusty.c
+  rand_extra/vm_ube_fallback.c
+  rand_extra/urandom.c
   rand_extra/windows.c
   rc4/rc4.c
   refcount_c11.c
@@ -503,6 +487,9 @@ add_library(
   trust_token/pmbtoken.c
   trust_token/trust_token.c
   trust_token/voprf.c
+  ube/ube.c
+  ube/fork_ube_detect.c
+  ube/vm_ube_detect.c
   x509/a_digest.c
   x509/a_sign.c
   x509/a_verify.c
@@ -573,6 +560,7 @@ add_library(
   x509/x509name.c
   x509/x509rset.c
   x509/x509spki.c
+  ui/ui.c
   decrepit/bio/base64_bio.c
   decrepit/blowfish/blowfish.c
   decrepit/cast/cast.c
@@ -590,74 +578,105 @@ add_library(
 )
 
 target_compile_definitions(crypto_objects PRIVATE BORINGSSL_IMPLEMENTATION)
-# For the prefix build, the object files need the prefix header files to build.
-add_dependencies(crypto_objects boringssl_prefix_symbols)
-target_include_directories(crypto_objects BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
-target_include_directories(crypto_objects PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_add_awslc_include_paths(TARGET crypto_objects SCOPE PRIVATE)
 
-function(build_libcrypto name module_source)
-  if(FIPS AND ENABLE_FIPS_ENTROPY_CPU_JITTER)
-    # If the jitter cpu entropy source is enabled add an object dependency to
-    # the libcrypto target.
-    add_library(${name} $<TARGET_OBJECTS:crypto_objects> ${CRYPTO_FIPS_OBJECTS} ${module_source} $<TARGET_OBJECTS:jitterentropy>)
+function(build_libcrypto)
+  set(options SET_OUTPUT_NAME)
+  set(oneValueArgs NAME)
+  set(multiValueArgs MODULE_SOURCE)
+
+  if(CMAKE_VERSION VERSION_LESS "3.7")
+    cmake_parse_arguments(arg "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
   else()
-    add_library(${name} $<TARGET_OBJECTS:crypto_objects> ${CRYPTO_FIPS_OBJECTS} ${module_source})
+    cmake_parse_arguments(PARSE_ARGV 0 arg "${options}" "${oneValueArgs}" "${multiValueArgs}")
+  endif()
+
+  if(arg_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "Unparsed arguments to build_libcrypto: ${arg_UNPARSED_ARGUMENTS}")
+  endif()
+
+  if(arg_KEYWORDS_MISSING_VALUES)
+    message(FATAL_ERROR "Missing value(s) for keyword(s) to build_libcrypto: ${arg_KEYWORDS_MISSING_VALUES}")
+  endif()
+
+  if(NOT DEFINED arg_NAME OR NOT DEFINED arg_MODULE_SOURCE)
+    message(FATAL_ERROR "NAME, MODULE_SOURCE are required arguments to build_libcrypto")
+  endif()
+
+  add_library(${arg_NAME} $<TARGET_OBJECTS:crypto_objects> ${CRYPTO_FIPS_OBJECTS} ${arg_MODULE_SOURCE})
+
+  if(NOT DISABLE_CPU_JITTER_ENTROPY)
+    target_sources(${arg_NAME} PRIVATE $<TARGET_OBJECTS:jitterentropy>)
   endif()
 
   if(FIPS_DELOCATE OR FIPS_SHARED)
-    add_dependencies(${name} bcm_o_target)
+    add_dependencies(${arg_NAME} bcm_o_target)
   endif()
-  SET_TARGET_PROPERTIES(${name} PROPERTIES LINKER_LANGUAGE C)
   if(WIN32)
-    target_link_libraries(${name} PUBLIC ws2_32)
-  endif()
-  if(NOT WIN32 AND NOT ANDROID)
-    target_link_libraries(${name} PUBLIC pthread)
+    target_link_libraries(${arg_NAME} PUBLIC ws2_32)
+    # MinGW (non-Clang) builds target Windows 7 (see the top-level
+    # CMakeLists.txt, which adds -D_WIN32_WINNT=_WIN32_WINNT_WIN7), so
+    # `crypto/rand_extra/windows.c` compiles under the AWSLC_WINDOWS_7_COMPAT
+    # branch and calls BCryptGenRandom from bcrypt.dll. On MSVC this is
+    # handled by `#pragma comment(lib, "bcrypt.lib")` in that file, but
+    # MinGW ignores that pragma so we need to add the link explicitly.
+    if(MINGW)
+      target_link_libraries(${arg_NAME} PUBLIC bcrypt)
+    endif()
   endif()
 
-  add_dependencies(${name} boringssl_prefix_symbols)
-  target_include_directories(${name} BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
+  if(AWSLC_LINK_THREADS)
+    target_link_libraries(${arg_NAME} PUBLIC Threads::Threads)
+  endif()
+  target_add_awslc_include_paths(TARGET ${arg_NAME} SCOPE PUBLIC)
 
-  target_include_directories(${name} PUBLIC
-          $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-          $<INSTALL_INTERFACE:include>)
+  if(arg_SET_OUTPUT_NAME)
+    set_target_properties(${arg_NAME} PROPERTIES OUTPUT_NAME "${CRYPTO_LIB_NAME}")
+  endif()
+
+  if(SET_LIB_SONAME)
+    set_target_properties(${arg_NAME} PROPERTIES
+      VERSION "${SOFTWARE_VERSION}"
+      SOVERSION "${ABI_VERSION}")
+  endif()
+
+  # Apply symbol versioning for shared libraries. The version script is a
+  # checked-in source file, so if versioning is enabled it must be present;
+  # apply_version_script() fatal-errors if it is missing rather than silently
+  # producing an unversioned library.
+  if(ENABLE_SYMBOL_VERSIONING)
+    apply_version_script(
+      TARGET ${arg_NAME}
+      VERSION_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/libcrypto.map"
+      NAMESPACE "${SYMBOL_VERSION_NAMESPACE}"
+    )
+  endif()
 endfunction()
 
 if(FIPS_SHARED)
   # Rewrite libcrypto.so, libcrypto.dylib, or crypto.dll to inject the correct module
   # hash value. For now we support the FIPS build only on Linux, macOS, iOS, and Windows.
   if(MSVC)
-    # On Windows we use capture_hash.go to capture the computed integrity value that bcm.o prints to generate the
-    # correct value in generated_fips_shared_support.c. See FIPS.md for a full explanation of the process
-    build_libcrypto(precrypto $<TARGET_OBJECTS:fipsmodule>)
-    add_executable(fips_empty_main fipsmodule/fips_empty_main.c)
-    target_link_libraries(fips_empty_main PUBLIC precrypto)
-    target_include_directories(fips_empty_main PRIVATE ${PROJECT_SOURCE_DIR}/include)
-    target_include_directories(fips_empty_main BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
-    add_custom_command(OUTPUT generated_fips_shared_support.c
-            COMMAND ${GO_EXECUTABLE} run
-            ${PROJECT_SOURCE_DIR}/util/fipstools/capture_hash/capture_hash.go
-            -in-executable $<TARGET_FILE:fips_empty_main> > generated_fips_shared_support.c
-            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-            DEPENDS fips_empty_main ${PROJECT_SOURCE_DIR}/util/fipstools/capture_hash/capture_hash.go
-            )
-    add_library(
-      generated_fipsmodule
+    # On Windows, inject_hash.go parses the linker map file and the PE to locate
+    # module boundaries, computes the integrity hash, and patches it directly
+    # into the DLL. This matches the Linux/Apple approach and does not require
+    # running a binary, enabling cross-compilation without Wine.
+    set(CRYPTO_MAP_FILE "${CMAKE_CURRENT_BINARY_DIR}/fips_crypto.map")
+    build_libcrypto(NAME crypto MODULE_SOURCE $<TARGET_OBJECTS:fipsmodule> SET_OUTPUT_NAME)
+    target_link_options(crypto PRIVATE "/MAP:${CRYPTO_MAP_FILE}")
 
-      OBJECT
-
-      generated_fips_shared_support.c
-      ${PROJECT_SOURCE_DIR}/crypto/fipsmodule/cpucap/cpucap.c
+    add_custom_command(
+      TARGET crypto POST_BUILD
+      COMMAND ${GO_EXECUTABLE} run
+      ${AWSLC_SOURCE_DIR}/util/fipstools/inject_hash/inject_hash.go
+      -o $<TARGET_FILE:crypto> -in-object $<TARGET_FILE:crypto>
+      -map ${CRYPTO_MAP_FILE} -windows
+      WORKING_DIRECTORY ${AWSLC_SOURCE_DIR}
     )
-    add_dependencies(generated_fipsmodule boringssl_prefix_symbols)
-    target_include_directories(generated_fipsmodule PRIVATE ${PROJECT_SOURCE_DIR}/include)
-    target_include_directories(generated_fipsmodule BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
-
-    build_libcrypto(crypto $<TARGET_OBJECTS:generated_fipsmodule>)
   else()
     # On Apple and Linux platforms inject_hash.go can parse libcrypto and inject
     # the hash directly into the final library.
-    build_libcrypto(crypto $<TARGET_OBJECTS:fipsmodule>)
+    build_libcrypto(NAME crypto MODULE_SOURCE $<TARGET_OBJECTS:fipsmodule> SET_OUTPUT_NAME)
     if (APPLE)
       set(INJECT_HASH_APPLE_FLAG "-apple")
     endif()
@@ -665,13 +684,9 @@ if(FIPS_SHARED)
     add_custom_command(
       TARGET crypto POST_BUILD
       COMMAND ${GO_EXECUTABLE} run
-      ${PROJECT_SOURCE_DIR}/util/fipstools/inject_hash/inject_hash.go
+      ${AWSLC_SOURCE_DIR}/util/fipstools/inject_hash/inject_hash.go
       -o $<TARGET_FILE:crypto> -in-object $<TARGET_FILE:crypto> ${INJECT_HASH_APPLE_FLAG}
-      # The DEPENDS argument to a POST_BUILD rule appears to be ignored. Thus
-      # go_executable isn't used (as it doesn't get built), but we list this
-      # dependency anyway in case it starts working in some CMake version.
-      DEPENDS ../util/fipstools/inject_hash/inject_hash.go
-      WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+      WORKING_DIRECTORY ${AWSLC_SOURCE_DIR}
     )
 
     # On macOS 11 and higher on Apple Silicon, codesigning is mandatory for
@@ -693,24 +708,13 @@ if(FIPS_SHARED)
       add_custom_command(
         TARGET crypto POST_BUILD
         COMMAND codesign -s - $<TARGET_FILE:crypto>
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        WORKING_DIRECTORY ${AWSLC_SOURCE_DIR}
       )
     endif()
 
   endif()
 else()
-  build_libcrypto(crypto $<TARGET_OBJECTS:fipsmodule>)
-endif()
-
-# CMAKE_SYSTEM_NAME is "Generic" for embedded OSes:
-# https://cmake.org/cmake/help/book/mastering-cmake/chapter/Cross%20Compiling%20With%20CMake.html#toolchain-files
-#
-# For now we assume embedded OSes do not have threads. Additionally, the Threads
-# package does not work with Android, but Android does not require any extra
-# parameters to link pthreads.
-if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Generic|Android)$")
-  find_package(Threads REQUIRED)
-  target_link_libraries(crypto PUBLIC Threads::Threads)
+  build_libcrypto(NAME crypto MODULE_SOURCE $<TARGET_OBJECTS:fipsmodule> SET_OUTPUT_NAME)
 endif()
 
 # Every target depends on crypto, so we add libcxx as a dependency here to
@@ -732,8 +736,6 @@ if(BUILD_TESTING)
     add_executable(${executable_name} ${test_file})
     target_compile_definitions(${executable_name} PRIVATE BORINGSSL_IMPLEMENTATION)
     target_link_libraries(${executable_name} boringssl_gtest_main)
-    add_dependencies(${executable_name} boringssl_prefix_symbols)
-    target_include_directories(${executable_name} BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
     add_dependencies(all_tests ${executable_name})
     set_test_location(${executable_name})
   endmacro()
@@ -741,21 +743,26 @@ if(BUILD_TESTING)
   # Below tests are added as new executables to be executed in single process.
   # mem_test.cc tests memory overrides via defining strong symbols.
   add_test_executable(${MEM_TEST_EXEC} mem_test.cc)
+  target_add_awslc_include_paths(TARGET ${MEM_TEST_EXEC} SCOPE PRIVATE)
   # mem_set_test.cc tests memory overrides via |CRYPTO_set_mem_functions|.
   add_test_executable(${MEM_SET_TEST_EXEC} mem_set_test.cc)
+  target_add_awslc_include_paths(TARGET ${MEM_SET_TEST_EXEC} SCOPE PRIVATE)
+
+  # Test randomness generation
+  add_test_executable(${RANDOM_ISOLATED_EXEC} fipsmodule/rand/rand_isolated_test.cc)
+  add_test_executable(${TREE_DRBG_JITTER_ENTROPY_ISOLATED_EXEC} fipsmodule/rand/entropy/tree_drbg_jitter_entropy_isolated_test.cc)
 
   # urandom_test is a separate binary because it needs to be able to observe the
   # PRNG initialisation, which means that it can't have other tests running before
   # it does.
   add_executable(
     ${RANDOM_TEST_EXEC}
-    fipsmodule/rand/urandom_test.cc
+    rand_extra/urandom_test.cc
   )
   set_test_location(${RANDOM_TEST_EXEC})
 
-  add_dependencies(${RANDOM_TEST_EXEC} boringssl_prefix_symbols)
   target_link_libraries(${RANDOM_TEST_EXEC} test_support_lib boringssl_gtest crypto)
-  target_include_directories(${RANDOM_TEST_EXEC} BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
+  target_add_awslc_include_paths(TARGET ${RANDOM_TEST_EXEC} SCOPE PRIVATE)
 
   add_dependencies(all_tests ${RANDOM_TEST_EXEC})
 
@@ -765,28 +772,40 @@ if(BUILD_TESTING)
     abi_self_test.cc
     asn1/asn1_test.cc
     base64/base64_test.cc
+    bio/bio_md_test.cc
     bio/bio_test.cc
+    bio/bio_socket_test.cc
     blake2/blake2_test.cc
     buf/buf_test.cc
     bytestring/bytestring_test.cc
     chacha/chacha_test.cc
     cipher_extra/aead_test.cc
     cipher_extra/cipher_test.cc
+    cipher_extra/cts_test.cc
     compiler_test.cc
     conf/conf_test.cc
+    console/console_test.cc
     constant_time_test.cc
     crypto_test.cc
     ecdh_extra/ecdh_test.cc
+    decrepit/blowfish/blowfish_test.cc
+    decrepit/cast/cast_test.cc
+    decrepit/cfb/cfb_test.cc
+    decrepit/evp/evp_test.cc
+    decrepit/ripemd/ripemd_test.cc
     dh_extra/dh_test.cc
     digest_extra/digest_test.cc
-    dilithium/p_pqdsa_test.cc
     dsa/dsa_test.cc
     des/des_test.cc
     endian_test.cc
     err/err_test.cc
     evp_extra/evp_extra_test.cc
     evp_extra/evp_test.cc
+    evp_extra/p_pqdsa_test.cc
+    evp_extra/p_kem_test.cc
     evp_extra/scrypt_test.cc
+    evp_extra/mldsa_test.cc
+    fips_callback_test.cc
     fipsmodule/aes/aes_test.cc
     fipsmodule/bn/bn_test.cc
     fipsmodule/bn/bn_assert_test.cc
@@ -799,13 +818,14 @@ if(BUILD_TESTING)
     fipsmodule/evp/evp_ctx_test.cc
     fipsmodule/kdf/kdf_test.cc
     fipsmodule/md5/md5_test.cc
+    fipsmodule/ml_kem/ml_kem_test.cc
     fipsmodule/modes/gcm_test.cc
     fipsmodule/modes/xts_test.cc
     fipsmodule/pbkdf/pbkdf_test.cc
     fipsmodule/rand/ctrdrbg_test.cc
     fipsmodule/rand/cpu_jitter_test.cc
-    fipsmodule/rand/fork_detect_test.cc
-    fipsmodule/rand/snapsafe_detect_test.cc
+    fipsmodule/rand/rand_test.cc
+    fipsmodule/rand/entropy/entropy_source_test.cc
     fipsmodule/service_indicator/service_indicator_test.cc
     fipsmodule/sha/sha_test.cc
     fipsmodule/sha/sha3_test.cc
@@ -817,19 +837,20 @@ if(BUILD_TESTING)
     hmac_extra/hmac_test.cc
     hrss/hrss_test.cc
     impl_dispatch_test.cc
+    keccak/keccak256_test.cc
     lhash/lhash_test.cc
     obj/obj_test.cc
     ocsp/ocsp_test.cc
     pem/pem_test.cc
     pkcs7/bio/bio_cipher_test.cc
-    pkcs7/bio/bio_md_test.cc
     pkcs7/pkcs7_test.cc
     pkcs8/pkcs8_test.cc
     pkcs8/pkcs12_test.cc
     poly1305/poly1305_test.cc
     pool/pool_test.cc
+    rand_extra/ccrandomgeneratebytes_test.cc
     rand_extra/getentropy_test.cc
-    rand_extra/rand_test.cc
+    rand_extra/vm_ube_fallback_test.cc
     refcount_test.cc
     rsa_extra/rsa_test.cc
     rsa_extra/rsassa_pss_asn1_test.cc
@@ -839,24 +860,28 @@ if(BUILD_TESTING)
     spake25519/spake25519_test.cc
     test/file_util.cc
     test/file_test_gtest.cc
+    test/x509_util.cc
     thread_test.cc
     trust_token/trust_token_test.cc
+    ube/ube_test.cc
+    ube/fork_ube_detect_test.cc
+    ube/vm_ube_detect_test.cc
     x509/tab_test.cc
     x509/x509_test.cc
+    x509/x509_compat_test.cc
     x509/x509_time_test.cc
-    decrepit/blowfish/blowfish_test.cc
-    decrepit/cast/cast_test.cc
-    decrepit/cfb/cfb_test.cc
-    decrepit/evp/evp_test.cc
-    decrepit/ripemd/ripemd_test.cc
 
     $<TARGET_OBJECTS:crypto_test_data>
   )
   set_test_location(${CRYPTO_TEST_EXEC})
 
-  add_dependencies(${CRYPTO_TEST_EXEC} boringssl_prefix_symbols)
   target_link_libraries(${CRYPTO_TEST_EXEC} boringssl_gtest_main)
-  target_include_directories(${CRYPTO_TEST_EXEC} BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
+  target_add_awslc_include_paths(TARGET ${CRYPTO_TEST_EXEC} SCOPE PRIVATE)
+  target_compile_definitions(${CRYPTO_TEST_EXEC} PRIVATE AWS_LC_TEST_ENV)
+  # Ensure test has access to the SHA3 feature detection macro
+  if(MY_ASSEMBLER_SUPPORTS_NEON_SHA3_EXTENSION)
+    target_compile_definitions(${CRYPTO_TEST_EXEC} PRIVATE MY_ASSEMBLER_SUPPORTS_NEON_SHA3_EXTENSION)
+  endif()
   if(MSVC)
     target_link_libraries(${CRYPTO_TEST_EXEC} ws2_32)
   else()
@@ -870,16 +895,13 @@ if(BUILD_TESTING)
   add_dependencies(${DYNAMIC_LOADING_TEST_EXEC} crypto)
   set_test_location(${DYNAMIC_LOADING_TEST_EXEC})
 
-  add_dependencies(${DYNAMIC_LOADING_TEST_EXEC} boringssl_prefix_symbols)
-  target_include_directories(${DYNAMIC_LOADING_TEST_EXEC} BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
-
   set(DYNAMIC_LINKER_LIB "")
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE OR ANDROID)
     set(DYNAMIC_LINKER_LIB "dl")
   endif()
 
   if (BUILD_SHARED_LIBS AND NOT WIN32)
-    target_compile_options(${DYNAMIC_LOADING_TEST_EXEC} PUBLIC "-DLIBCRYPTO_PATH=$<TARGET_FILE:crypto>")
+    target_compile_options(${DYNAMIC_LOADING_TEST_EXEC} PUBLIC "-DLIBCRYPTO_PATH=\"$<TARGET_FILE:crypto>\"")
     # Do not link to boringssl_gtest_main or any library that might be linked to libcrypto.so.
     if(ANDROID)
       target_link_libraries(${DYNAMIC_LOADING_TEST_EXEC} PUBLIC boringssl_gtest ${DYNAMIC_LINKER_LIB})
@@ -890,26 +912,41 @@ if(BUILD_TESTING)
 
   add_dependencies(all_tests ${DYNAMIC_LOADING_TEST_EXEC})
 
-  message(STATUS "Generating test executable ${RWLOCK_STATIC_INIT_TEST_EXEC}.")
-  add_executable(${RWLOCK_STATIC_INIT_TEST_EXEC} rwlock_static_init.cc)
-  add_dependencies(${RWLOCK_STATIC_INIT_TEST_EXEC} crypto)
-  set_test_location(${RWLOCK_STATIC_INIT_TEST_EXEC})
+  # rwlock_static_init requires threading support (std::thread)
+  # Skip on Generic (WASI) which doesn't have pthreads
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Generic")
+    message(STATUS "Generating test executable ${RWLOCK_STATIC_INIT_TEST_EXEC}.")
+    add_executable(${RWLOCK_STATIC_INIT_TEST_EXEC} rwlock_static_init.cc)
+    add_dependencies(${RWLOCK_STATIC_INIT_TEST_EXEC} crypto)
+    set_test_location(${RWLOCK_STATIC_INIT_TEST_EXEC})
 
-  target_link_libraries(${RWLOCK_STATIC_INIT_TEST_EXEC} crypto)
-  target_include_directories(${RWLOCK_STATIC_INIT_TEST_EXEC} BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
-  if(MSVC)
-    target_link_libraries(${RWLOCK_STATIC_INIT_TEST_EXEC} ws2_32)
-  else()
-    target_compile_options(${RWLOCK_STATIC_INIT_TEST_EXEC} PUBLIC -Wno-deprecated-declarations)
+    target_link_libraries(${RWLOCK_STATIC_INIT_TEST_EXEC} crypto)
+    target_add_awslc_include_paths(TARGET ${RWLOCK_STATIC_INIT_TEST_EXEC} SCOPE PRIVATE)
+    if(MSVC)
+      target_link_libraries(${RWLOCK_STATIC_INIT_TEST_EXEC} ws2_32)
+    else()
+      target_compile_options(${RWLOCK_STATIC_INIT_TEST_EXEC} PUBLIC -Wno-deprecated-declarations)
+    endif()
+    add_dependencies(all_tests ${RWLOCK_STATIC_INIT_TEST_EXEC})
   endif()
-  add_dependencies(all_tests ${RWLOCK_STATIC_INIT_TEST_EXEC})
 
 endif()
 
-install(TARGETS crypto
-        EXPORT crypto-targets
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if(NOT CMAKE_VERSION VERSION_LESS "3.12")
+  install(TARGETS crypto
+          EXPORT crypto-targets
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            NAMELINK_COMPONENT Development
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+else()
+  install(TARGETS crypto
+          EXPORT crypto-targets
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 if(MSVC AND CMAKE_BUILD_TYPE_LOWER MATCHES "relwithdebinfo" AND FIPS)
   install (FILES $<TARGET_FILE_DIR:crypto>/crypto.pdb DESTINATION ${CMAKE_INSTALL_LIBDIR})

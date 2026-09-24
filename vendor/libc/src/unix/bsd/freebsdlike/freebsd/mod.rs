@@ -1,7 +1,12 @@
 use crate::prelude::*;
-use crate::{cmsghdr, off_t};
+use crate::{
+    cmsghdr,
+    off_t,
+};
 
 pub type fflags_t = u32;
+
+pub type Elf32_Lword = u64;
 
 pub type vm_prot_t = u_char;
 pub type kvaddr_t = u64;
@@ -11,6 +16,9 @@ pub type fixpt_t = __fixpt_t;
 pub type __lwpid_t = i32;
 pub type lwpid_t = __lwpid_t;
 pub type blksize_t = i32;
+pub type ksize_t = u64;
+pub type inp_gen_t = u64;
+pub type so_gen_t = u64;
 pub type clockid_t = c_int;
 pub type sem_t = _sem;
 pub type timer_t = *mut __c_anonymous__timer;
@@ -26,8 +34,6 @@ pub type cpulevel_t = c_int;
 pub type cpuwhich_t = c_int;
 
 pub type mqd_t = *mut c_void;
-pub type posix_spawnattr_t = *mut c_void;
-pub type posix_spawn_file_actions_t = *mut c_void;
 
 pub type pthread_spinlock_t = *mut __c_anonymous_pthread_spinlock;
 pub type pthread_barrierattr_t = *mut __c_anonymous_pthread_barrierattr;
@@ -52,7 +58,8 @@ pub type sctp_assoc_t = u32;
 
 pub type eventfd_t = u64;
 
-#[cfg_attr(feature = "extra_traits", derive(Debug, Hash, PartialEq, Eq))]
+#[derive(Debug)]
+#[cfg_attr(feature = "extra_traits", derive(Hash, PartialEq, Eq))]
 #[repr(u32)]
 pub enum devstat_support_flags {
     DEVSTAT_ALL_SUPPORTED = 0x00,
@@ -67,7 +74,8 @@ impl Clone for devstat_support_flags {
     }
 }
 
-#[cfg_attr(feature = "extra_traits", derive(Debug, Hash, PartialEq, Eq))]
+#[derive(Debug)]
+#[cfg_attr(feature = "extra_traits", derive(Hash, PartialEq, Eq))]
 #[repr(u32)]
 pub enum devstat_trans_flags {
     DEVSTAT_NO_DATA = 0x00,
@@ -83,7 +91,8 @@ impl Clone for devstat_trans_flags {
     }
 }
 
-#[cfg_attr(feature = "extra_traits", derive(Debug, Hash, PartialEq, Eq))]
+#[derive(Debug)]
+#[cfg_attr(feature = "extra_traits", derive(Hash, PartialEq, Eq))]
 #[repr(u32)]
 pub enum devstat_tag_type {
     DEVSTAT_TAG_SIMPLE = 0x00,
@@ -98,7 +107,8 @@ impl Clone for devstat_tag_type {
     }
 }
 
-#[cfg_attr(feature = "extra_traits", derive(Debug, Hash, PartialEq, Eq))]
+#[derive(Debug)]
+#[cfg_attr(feature = "extra_traits", derive(Hash, PartialEq, Eq))]
 #[repr(u32)]
 pub enum devstat_match_flags {
     DEVSTAT_MATCH_NONE = 0x00,
@@ -113,7 +123,8 @@ impl Clone for devstat_match_flags {
     }
 }
 
-#[cfg_attr(feature = "extra_traits", derive(Debug, Hash, PartialEq, Eq))]
+#[derive(Debug)]
+#[cfg_attr(feature = "extra_traits", derive(Hash, PartialEq, Eq))]
 #[repr(u32)]
 pub enum devstat_priority {
     DEVSTAT_PRIORITY_MIN = 0x000,
@@ -134,7 +145,8 @@ impl Clone for devstat_priority {
     }
 }
 
-#[cfg_attr(feature = "extra_traits", derive(Debug, Hash, PartialEq, Eq))]
+#[derive(Debug)]
+#[cfg_attr(feature = "extra_traits", derive(Hash, PartialEq, Eq))]
 #[repr(u32)]
 pub enum devstat_type_flags {
     DEVSTAT_TYPE_DIRECT = 0x000,
@@ -166,7 +178,8 @@ impl Clone for devstat_type_flags {
     }
 }
 
-#[cfg_attr(feature = "extra_traits", derive(Debug, Hash, PartialEq, Eq))]
+#[derive(Debug)]
+#[cfg_attr(feature = "extra_traits", derive(Hash, PartialEq, Eq))]
 #[repr(u32)]
 pub enum devstat_metric {
     DSM_NONE,
@@ -223,7 +236,8 @@ impl Clone for devstat_metric {
     }
 }
 
-#[cfg_attr(feature = "extra_traits", derive(Debug, Hash, PartialEq, Eq))]
+#[derive(Debug)]
+#[cfg_attr(feature = "extra_traits", derive(Hash, PartialEq, Eq))]
 #[repr(u32)]
 pub enum devstat_select_mode {
     DS_SELECT_ADD,
@@ -266,6 +280,12 @@ s! {
         pub ip6: *mut crate::in6_addr,
     }
 
+    pub struct ip_mreq_source {
+        pub imr_multiaddr: crate::in_addr,
+        pub imr_sourceaddr: crate::in_addr,
+        pub imr_interface: crate::in_addr,
+    }
+
     pub struct statvfs {
         pub f_bavail: crate::fsblkcnt_t,
         pub f_bfree: crate::fsblkcnt_t,
@@ -290,10 +310,26 @@ s! {
         pub sem_flg: c_short,
     }
 
+    pub struct input_event {
+        pub time: crate::timeval,
+        pub type_: crate::u_short,
+        pub code: crate::u_short,
+        pub value: i32,
+    }
+
+    pub struct input_absinfo {
+        pub value: i32,
+        pub minimum: i32,
+        pub maximum: i32,
+        pub fuzz: i32,
+        pub flat: i32,
+        pub resolution: i32,
+    }
+
     pub struct msqid_ds {
         pub msg_perm: crate::ipc_perm,
-        __unused1: *mut c_void,
-        __unused2: *mut c_void,
+        __unused1: Padding<*mut c_void>,
+        __unused2: Padding<*mut c_void>,
         pub msg_cbytes: crate::msglen_t,
         pub msg_qnum: crate::msgqnum_t,
         pub msg_qbytes: crate::msglen_t,
@@ -389,7 +425,7 @@ s! {
         m_ceilings: [u32; 2],
         m_rb_link: crate::uintptr_t,
         #[cfg(target_pointer_width = "32")]
-        m_pad: u32,
+        m_pad: Padding<u32>,
         m_spare: [u32; 2],
     }
 
@@ -404,7 +440,7 @@ s! {
         pub time_low: u32,
         pub time_mid: u16,
         pub time_hi_and_version: u16,
-        pub clock_seq_hi_and_reserved: u8,
+        clock_seq_hi_and_reserved: Padding<u8>,
         pub clock_seq_low: u8,
         pub node: [u8; _UUID_NODE_LEN],
     }
@@ -531,8 +567,8 @@ s! {
         pub ksw_used: u_int,
         pub ksw_total: u_int,
         pub ksw_flags: c_int,
-        pub ksw_reserved1: u_int,
-        pub ksw_reserved2: u_int,
+        ksw_reserved1: Padding<u_int>,
+        ksw_reserved2: Padding<u_int>,
     }
 
     pub struct nlist {
@@ -1091,7 +1127,7 @@ s! {
     pub struct shm_largepage_conf {
         pub psind: c_int,
         pub alloc_policy: c_int,
-        __pad: [c_int; 10],
+        __pad: Padding<[c_int; 10]>,
     }
 
     pub struct memory_type {
@@ -1343,9 +1379,54 @@ s! {
         pub strchange_instrms: u16,
         pub strchange_outstrms: u16,
     }
-}
 
-s_no_extra_traits! {
+    pub struct filedesc {
+        pub fd_files: *mut fdescenttbl,
+        pub fd_map: *mut c_ulong,
+        pub fd_freefile: c_int,
+        pub fd_refcnt: c_int,
+        pub fd_holdcnt: c_int,
+        fd_sx: sx,
+        fd_kqlist: kqlist,
+        pub fd_holdleaderscount: c_int,
+        pub fd_holdleaderswakeup: c_int,
+    }
+
+    pub struct fdescenttbl {
+        pub fdt_nfiles: c_int,
+        fdt_ofiles: [*mut c_void; 0],
+    }
+
+    // FIXME: Should be private.
+    #[doc(hidden)]
+    pub struct sx {
+        lock_object: lock_object,
+        sx_lock: crate::uintptr_t,
+    }
+
+    // FIXME: Should be private.
+    #[doc(hidden)]
+    pub struct lock_object {
+        lo_name: *const c_char,
+        lo_flags: c_uint,
+        lo_data: c_uint,
+        // This is normally `struct  witness`.
+        lo_witness: *mut c_void,
+    }
+
+    // FIXME: Should be private.
+    #[doc(hidden)]
+    pub struct kqlist {
+        tqh_first: *mut c_void,
+        tqh_last: *mut *mut c_void,
+    }
+
+    pub struct splice {
+        pub sp_fd: c_int,
+        pub sp_max: off_t,
+        pub sp_idle: crate::timeval,
+    }
+
     pub struct utmpx {
         pub ut_type: c_short,
         pub ut_tv: crate::timeval,
@@ -1355,11 +1436,6 @@ s_no_extra_traits! {
         pub ut_line: [c_char; 16],
         pub ut_host: [c_char; 128],
         pub __ut_spare: [c_char; 64],
-    }
-
-    pub union __c_anonymous_cr_pid {
-        __cr_unused: *mut c_void,
-        pub cr_pid: crate::pid_t,
     }
 
     pub struct xucred {
@@ -1386,19 +1462,7 @@ s_no_extra_traits! {
         pub mq_maxmsg: c_long,
         pub mq_msgsize: c_long,
         pub mq_curmsgs: c_long,
-        __reserved: [c_long; 4],
-    }
-
-    pub struct sigevent {
-        pub sigev_notify: c_int,
-        pub sigev_signo: c_int,
-        pub sigev_value: crate::sigval,
-        //The rest of the structure is actually a union.  We expose only
-        //sigev_notify_thread_id because it's the most useful union member.
-        pub sigev_notify_thread_id: crate::lwpid_t,
-        #[cfg(target_pointer_width = "64")]
-        __unused1: c_int,
-        __unused2: [c_long; 7],
+        __reserved: Padding<[c_long; 4]>,
     }
 
     pub struct ptsstat {
@@ -1409,23 +1473,15 @@ s_no_extra_traits! {
         pub devname: [c_char; SPECNAMELEN as usize + 1],
     }
 
-    pub union __c_anonymous_elf32_auxv_union {
-        pub a_val: c_int,
-    }
-
     pub struct Elf32_Auxinfo {
         pub a_type: c_int,
         pub a_un: __c_anonymous_elf32_auxv_union,
     }
 
-    pub union __c_anonymous_ifi_epoch {
-        pub tt: crate::time_t,
-        pub ph: u64,
-    }
-
-    pub union __c_anonymous_ifi_lastchange {
-        pub tv: crate::timeval,
-        pub ph: __c_anonymous_ph,
+    pub struct ifreq {
+        /// if name, e.g. "en0"
+        pub ifr_name: [c_char; crate::IFNAMSIZ],
+        pub ifr_ifru: __c_anonymous_ifr_ifru,
     }
 
     pub struct if_data {
@@ -1479,35 +1535,6 @@ s_no_extra_traits! {
         pub __ifi_epoch: __c_anonymous_ifi_epoch,
         /// time of last administrative change
         pub __ifi_lastchange: __c_anonymous_ifi_lastchange,
-    }
-
-    pub union __c_anonymous_ifr_ifru {
-        pub ifru_addr: crate::sockaddr,
-        pub ifru_dstaddr: crate::sockaddr,
-        pub ifru_broadaddr: crate::sockaddr,
-        pub ifru_buffer: ifreq_buffer,
-        pub ifru_flags: [c_short; 2],
-        pub ifru_index: c_short,
-        pub ifru_jid: c_int,
-        pub ifru_metric: c_int,
-        pub ifru_mtu: c_int,
-        pub ifru_phys: c_int,
-        pub ifru_media: c_int,
-        pub ifru_data: crate::caddr_t,
-        pub ifru_cap: [c_int; 2],
-        pub ifru_fib: c_uint,
-        pub ifru_vlan_pcp: c_uchar,
-    }
-
-    pub struct ifreq {
-        /// if name, e.g. "en0"
-        pub ifr_name: [c_char; crate::IFNAMSIZ],
-        pub ifr_ifru: __c_anonymous_ifr_ifru,
-    }
-
-    pub union __c_anonymous_ifc_ifcu {
-        pub ifcu_buf: crate::caddr_t,
-        pub ifcu_req: *mut ifreq,
     }
 
     pub struct ifstat {
@@ -1571,7 +1598,7 @@ s_no_extra_traits! {
     pub struct sctp_error_invalid_stream {
         pub cause: sctp_error_cause,
         pub stream_id: u16,
-        __reserved: u16,
+        __reserved: Padding<u16>,
     }
 
     #[repr(packed)]
@@ -1621,15 +1648,71 @@ s_no_extra_traits! {
         pub kf_fd: c_int,
         pub kf_ref_count: c_int,
         pub kf_flags: c_int,
-        _kf_pad0: c_int,
+        _kf_pad0: Padding<c_int>,
         pub kf_offset: i64,
-        _priv: [u8; 304], // FIXME: this is really a giant union
+        _priv: [u8; 304], // FIXME(freebsd): this is really a giant union
         pub kf_status: u16,
-        _kf_pad1: u16,
+        _kf_pad1: Padding<u16>,
         _kf_ispare0: c_int,
         pub kf_cap_rights: crate::cap_rights_t,
         _kf_cap_spare: u64,
         pub kf_path: [c_char; crate::PATH_MAX as usize],
+    }
+}
+
+s_no_extra_traits! {
+    pub union __c_anonymous_cr_pid {
+        __cr_unused: Padding<*mut c_void>,
+        pub cr_pid: crate::pid_t,
+    }
+
+    pub struct sigevent {
+        pub sigev_notify: c_int,
+        pub sigev_signo: c_int,
+        pub sigev_value: crate::sigval,
+        //The rest of the structure is actually a union.  We expose only
+        //sigev_notify_thread_id because it's the most useful union member.
+        pub sigev_notify_thread_id: crate::lwpid_t,
+        #[cfg(target_pointer_width = "64")]
+        __unused1: c_int,
+        __unused2: [c_long; 7],
+    }
+
+    pub union __c_anonymous_elf32_auxv_union {
+        pub a_val: c_int,
+    }
+
+    pub union __c_anonymous_ifi_epoch {
+        pub tt: crate::time_t,
+        pub ph: u64,
+    }
+
+    pub union __c_anonymous_ifi_lastchange {
+        pub tv: crate::timeval,
+        pub ph: __c_anonymous_ph,
+    }
+
+    pub union __c_anonymous_ifr_ifru {
+        pub ifru_addr: crate::sockaddr,
+        pub ifru_dstaddr: crate::sockaddr,
+        pub ifru_broadaddr: crate::sockaddr,
+        pub ifru_buffer: ifreq_buffer,
+        pub ifru_flags: [c_short; 2],
+        pub ifru_index: c_short,
+        pub ifru_jid: c_int,
+        pub ifru_metric: c_int,
+        pub ifru_mtu: c_int,
+        pub ifru_phys: c_int,
+        pub ifru_media: c_int,
+        pub ifru_data: crate::caddr_t,
+        pub ifru_cap: [c_int; 2],
+        pub ifru_fib: c_uint,
+        pub ifru_vlan_pcp: c_uchar,
+    }
+
+    pub union __c_anonymous_ifc_ifcu {
+        pub ifcu_buf: crate::caddr_t,
+        pub ifcu_req: *mut ifreq,
     }
 
     pub struct ucontext_t {
@@ -1640,58 +1723,79 @@ s_no_extra_traits! {
         pub uc_flags: c_int,
         __spare__: [c_int; 4],
     }
+
+    #[repr(align(8))]
+    pub struct xinpgen {
+        pub xig_len: ksize_t,
+        pub xig_count: u32,
+        _xig_spare32: u32,
+        pub xig_gen: inp_gen_t,
+        pub xig_sogen: so_gen_t,
+        _xig_spare64: [u64; 4],
+    }
+
+    pub struct in_addr_4in6 {
+        _ia46_pad32: Padding<[u32; 3]>,
+        pub ia46_addr4: crate::in_addr,
+    }
+
+    pub union in_dependaddr {
+        pub id46_addr: crate::in_addr_4in6,
+        pub id6_addr: crate::in6_addr,
+    }
+
+    pub struct in_endpoints {
+        pub ie_fport: u16,
+        pub ie_lport: u16,
+        pub ie_dependfaddr: crate::in_dependaddr,
+        pub ie_dependladdr: crate::in_dependaddr,
+        pub ie6_zoneid: u32,
+    }
+
+    pub struct in_conninfo {
+        pub inc_flags: u8,
+        pub inc_len: u8,
+        pub inc_fibnum: u16,
+        pub inc_ie: crate::in_endpoints,
+    }
+
+    pub struct xktls_session_onedir {
+        // Note: this field is called `gen` in upstream FreeBSD, but `gen` is
+        // reserved keyword in Rust since the 2024 Edition, hence `gennum`.
+        pub gennum: u64,
+        _rsrv1: [u64; 8],
+        _rsrv2: [u32; 8],
+        pub iv: [u8; 32],
+        pub cipher_algorithm: i32,
+        pub auth_algorithm: i32,
+        pub cipher_key_len: u16,
+        pub iv_len: u16,
+        pub auth_key_len: u16,
+        pub max_frame_len: u16,
+        pub tls_vmajor: u8,
+        pub tls_vminor: u8,
+        pub tls_hlen: u8,
+        pub tls_tlen: u8,
+        pub tls_bs: u8,
+        pub flags: u8,
+        pub drv_st_len: u16,
+        pub ifnet: [c_char; 16],
+    }
+
+    pub struct xktls_session {
+        pub tsz: u32,
+        pub fsz: u32,
+        pub inp_gencnt: u64,
+        pub so_pcb: kvaddr_t,
+        pub coninf: crate::in_conninfo,
+        pub rx_vlan_id: c_ushort,
+        pub rcv: crate::xktls_session_onedir,
+        pub snd: crate::xktls_session_onedir,
+    }
 }
 
 cfg_if! {
     if #[cfg(feature = "extra_traits")] {
-        impl PartialEq for utmpx {
-            fn eq(&self, other: &utmpx) -> bool {
-                self.ut_type == other.ut_type
-                    && self.ut_tv == other.ut_tv
-                    && self.ut_id == other.ut_id
-                    && self.ut_pid == other.ut_pid
-                    && self.ut_user == other.ut_user
-                    && self.ut_line == other.ut_line
-                    && self
-                        .ut_host
-                        .iter()
-                        .zip(other.ut_host.iter())
-                        .all(|(a, b)| a == b)
-                    && self
-                        .__ut_spare
-                        .iter()
-                        .zip(other.__ut_spare.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-        impl Eq for utmpx {}
-        impl fmt::Debug for utmpx {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("utmpx")
-                    .field("ut_type", &self.ut_type)
-                    .field("ut_tv", &self.ut_tv)
-                    .field("ut_id", &self.ut_id)
-                    .field("ut_pid", &self.ut_pid)
-                    .field("ut_user", &self.ut_user)
-                    .field("ut_line", &self.ut_line)
-                    // FIXME: .field("ut_host", &self.ut_host)
-                    // FIXME: .field("__ut_spare", &self.__ut_spare)
-                    .finish()
-            }
-        }
-        impl hash::Hash for utmpx {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.ut_type.hash(state);
-                self.ut_tv.hash(state);
-                self.ut_id.hash(state);
-                self.ut_pid.hash(state);
-                self.ut_user.hash(state);
-                self.ut_line.hash(state);
-                self.ut_host.hash(state);
-                self.__ut_spare.hash(state);
-            }
-        }
-
         impl PartialEq for __c_anonymous_cr_pid {
             fn eq(&self, other: &__c_anonymous_cr_pid) -> bool {
                 unsafe { self.cr_pid == other.cr_pid }
@@ -1704,109 +1808,6 @@ cfg_if! {
             }
         }
 
-        impl PartialEq for xucred {
-            fn eq(&self, other: &xucred) -> bool {
-                self.cr_version == other.cr_version
-                    && self.cr_uid == other.cr_uid
-                    && self.cr_ngroups == other.cr_ngroups
-                    && self.cr_groups == other.cr_groups
-                    && self.cr_pid__c_anonymous_union == other.cr_pid__c_anonymous_union
-            }
-        }
-        impl Eq for xucred {}
-        impl fmt::Debug for xucred {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.debug_struct("xucred")
-                    .field("cr_version", &self.cr_version)
-                    .field("cr_uid", &self.cr_uid)
-                    .field("cr_ngroups", &self.cr_ngroups)
-                    .field("cr_groups", &self.cr_groups)
-                    .field("cr_pid__c_anonymous_union", &self.cr_pid__c_anonymous_union)
-                    .finish()
-            }
-        }
-        impl hash::Hash for xucred {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.cr_version.hash(state);
-                self.cr_uid.hash(state);
-                self.cr_ngroups.hash(state);
-                self.cr_groups.hash(state);
-                self.cr_pid__c_anonymous_union.hash(state);
-            }
-        }
-
-        impl PartialEq for sockaddr_dl {
-            fn eq(&self, other: &sockaddr_dl) -> bool {
-                self.sdl_len == other.sdl_len
-                    && self.sdl_family == other.sdl_family
-                    && self.sdl_index == other.sdl_index
-                    && self.sdl_type == other.sdl_type
-                    && self.sdl_nlen == other.sdl_nlen
-                    && self.sdl_alen == other.sdl_alen
-                    && self.sdl_slen == other.sdl_slen
-                    && self
-                        .sdl_data
-                        .iter()
-                        .zip(other.sdl_data.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-        impl Eq for sockaddr_dl {}
-        impl fmt::Debug for sockaddr_dl {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sockaddr_dl")
-                    .field("sdl_len", &self.sdl_len)
-                    .field("sdl_family", &self.sdl_family)
-                    .field("sdl_index", &self.sdl_index)
-                    .field("sdl_type", &self.sdl_type)
-                    .field("sdl_nlen", &self.sdl_nlen)
-                    .field("sdl_alen", &self.sdl_alen)
-                    .field("sdl_slen", &self.sdl_slen)
-                    // FIXME: .field("sdl_data", &self.sdl_data)
-                    .finish()
-            }
-        }
-        impl hash::Hash for sockaddr_dl {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.sdl_len.hash(state);
-                self.sdl_family.hash(state);
-                self.sdl_index.hash(state);
-                self.sdl_type.hash(state);
-                self.sdl_nlen.hash(state);
-                self.sdl_alen.hash(state);
-                self.sdl_slen.hash(state);
-                self.sdl_data.hash(state);
-            }
-        }
-
-        impl PartialEq for mq_attr {
-            fn eq(&self, other: &mq_attr) -> bool {
-                self.mq_flags == other.mq_flags
-                    && self.mq_maxmsg == other.mq_maxmsg
-                    && self.mq_msgsize == other.mq_msgsize
-                    && self.mq_curmsgs == other.mq_curmsgs
-            }
-        }
-        impl Eq for mq_attr {}
-        impl fmt::Debug for mq_attr {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("mq_attr")
-                    .field("mq_flags", &self.mq_flags)
-                    .field("mq_maxmsg", &self.mq_maxmsg)
-                    .field("mq_msgsize", &self.mq_msgsize)
-                    .field("mq_curmsgs", &self.mq_curmsgs)
-                    .finish()
-            }
-        }
-        impl hash::Hash for mq_attr {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.mq_flags.hash(state);
-                self.mq_maxmsg.hash(state);
-                self.mq_msgsize.hash(state);
-                self.mq_curmsgs.hash(state);
-            }
-        }
-
         impl PartialEq for sigevent {
             fn eq(&self, other: &sigevent) -> bool {
                 self.sigev_notify == other.sigev_notify
@@ -1816,16 +1817,6 @@ cfg_if! {
             }
         }
         impl Eq for sigevent {}
-        impl fmt::Debug for sigevent {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sigevent")
-                    .field("sigev_notify", &self.sigev_notify)
-                    .field("sigev_signo", &self.sigev_signo)
-                    .field("sigev_value", &self.sigev_value)
-                    .field("sigev_notify_thread_id", &self.sigev_notify_thread_id)
-                    .finish()
-            }
-        }
         impl hash::Hash for sigevent {
             fn hash<H: hash::Hasher>(&self, state: &mut H) {
                 self.sigev_notify.hash(state);
@@ -1835,52 +1826,15 @@ cfg_if! {
             }
         }
 
-        impl PartialEq for ptsstat {
-            fn eq(&self, other: &ptsstat) -> bool {
-                let self_devname: &[c_char] = &self.devname;
-                let other_devname: &[c_char] = &other.devname;
-
-                self.dev == other.dev && self_devname == other_devname
-            }
-        }
-        impl Eq for ptsstat {}
-        impl fmt::Debug for ptsstat {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                let self_devname: &[c_char] = &self.devname;
-
-                f.debug_struct("ptsstat")
-                    .field("dev", &self.dev)
-                    .field("devname", &self_devname)
-                    .finish()
-            }
-        }
-        impl hash::Hash for ptsstat {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                let self_devname: &[c_char] = &self.devname;
-
-                self.dev.hash(state);
-                self_devname.hash(state);
-            }
-        }
-
         impl PartialEq for __c_anonymous_elf32_auxv_union {
             fn eq(&self, other: &__c_anonymous_elf32_auxv_union) -> bool {
                 unsafe { self.a_val == other.a_val }
             }
         }
         impl Eq for __c_anonymous_elf32_auxv_union {}
-        impl PartialEq for Elf32_Auxinfo {
-            fn eq(&self, other: &Elf32_Auxinfo) -> bool {
-                self.a_type == other.a_type && self.a_un == other.a_un
-            }
-        }
-        impl Eq for Elf32_Auxinfo {}
-        impl fmt::Debug for Elf32_Auxinfo {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("Elf32_Auxinfo")
-                    .field("a_type", &self.a_type)
-                    .field("a_un", &self.a_un)
-                    .finish()
+        impl hash::Hash for __c_anonymous_elf32_auxv_union {
+            fn hash<H: hash::Hasher>(&self, _state: &mut H) {
+                unimplemented!("traits");
             }
         }
 
@@ -1926,134 +1880,16 @@ cfg_if! {
             }
         }
 
-        impl PartialEq for ifreq {
-            fn eq(&self, other: &ifreq) -> bool {
-                self.ifr_name == other.ifr_name && self.ifr_ifru == other.ifr_ifru
-            }
-        }
-        impl Eq for ifreq {}
-        impl fmt::Debug for ifreq {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("ifreq")
-                    .field("ifr_name", &self.ifr_name)
-                    .field("ifr_ifru", &self.ifr_ifru)
-                    .finish()
-            }
-        }
-        impl hash::Hash for ifreq {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.ifr_name.hash(state);
-                self.ifr_ifru.hash(state);
-            }
-        }
-
-        impl Eq for __c_anonymous_ifc_ifcu {}
-
         impl PartialEq for __c_anonymous_ifc_ifcu {
             fn eq(&self, other: &__c_anonymous_ifc_ifcu) -> bool {
                 unsafe { self.ifcu_buf == other.ifcu_buf && self.ifcu_req == other.ifcu_req }
             }
         }
-
+        impl Eq for __c_anonymous_ifc_ifcu {}
         impl hash::Hash for __c_anonymous_ifc_ifcu {
             fn hash<H: hash::Hasher>(&self, state: &mut H) {
                 unsafe { self.ifcu_buf.hash(state) };
                 unsafe { self.ifcu_req.hash(state) };
-            }
-        }
-
-        impl PartialEq for ifstat {
-            fn eq(&self, other: &ifstat) -> bool {
-                let self_ascii: &[c_char] = &self.ascii;
-                let other_ascii: &[c_char] = &other.ascii;
-
-                self.ifs_name == other.ifs_name && self_ascii == other_ascii
-            }
-        }
-        impl Eq for ifstat {}
-        impl fmt::Debug for ifstat {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                let ascii: &[c_char] = &self.ascii;
-
-                f.debug_struct("ifstat")
-                    .field("ifs_name", &self.ifs_name)
-                    .field("ascii", &ascii)
-                    .finish()
-            }
-        }
-        impl hash::Hash for ifstat {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.ifs_name.hash(state);
-                self.ascii.hash(state);
-            }
-        }
-
-        impl PartialEq for ifrsskey {
-            fn eq(&self, other: &ifrsskey) -> bool {
-                let self_ifrk_key: &[u8] = &self.ifrk_key;
-                let other_ifrk_key: &[u8] = &other.ifrk_key;
-
-                self.ifrk_name == other.ifrk_name
-                    && self.ifrk_func == other.ifrk_func
-                    && self.ifrk_spare0 == other.ifrk_spare0
-                    && self.ifrk_keylen == other.ifrk_keylen
-                    && self_ifrk_key == other_ifrk_key
-            }
-        }
-        impl Eq for ifrsskey {}
-        impl fmt::Debug for ifrsskey {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                let ifrk_key: &[u8] = &self.ifrk_key;
-
-                f.debug_struct("ifrsskey")
-                    .field("ifrk_name", &self.ifrk_name)
-                    .field("ifrk_func", &self.ifrk_func)
-                    .field("ifrk_spare0", &self.ifrk_spare0)
-                    .field("ifrk_keylen", &self.ifrk_keylen)
-                    .field("ifrk_key", &ifrk_key)
-                    .finish()
-            }
-        }
-        impl hash::Hash for ifrsskey {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.ifrk_name.hash(state);
-                self.ifrk_func.hash(state);
-                self.ifrk_spare0.hash(state);
-                self.ifrk_keylen.hash(state);
-                self.ifrk_key.hash(state);
-            }
-        }
-
-        impl PartialEq for ifdownreason {
-            fn eq(&self, other: &ifdownreason) -> bool {
-                let self_ifdr_msg: &[c_char] = &self.ifdr_msg;
-                let other_ifdr_msg: &[c_char] = &other.ifdr_msg;
-
-                self.ifdr_name == other.ifdr_name
-                    && self.ifdr_reason == other.ifdr_reason
-                    && self.ifdr_vendor == other.ifdr_vendor
-                    && self_ifdr_msg == other_ifdr_msg
-            }
-        }
-        impl Eq for ifdownreason {}
-        impl fmt::Debug for ifdownreason {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                let ifdr_msg: &[c_char] = &self.ifdr_msg;
-
-                f.debug_struct("ifdownreason")
-                    .field("ifdr_name", &self.ifdr_name)
-                    .field("ifdr_reason", &self.ifdr_reason)
-                    .field("ifdr_vendor", &self.ifdr_vendor)
-                    .field("ifdr_msg", &ifdr_msg)
-                    .finish()
-            }
-        }
-        impl hash::Hash for ifdownreason {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.ifdr_name.hash(state);
-                self.ifdr_reason.hash(state);
-                self.ifdr_vendor.hash(state);
-                self.ifdr_msg.hash(state);
             }
         }
 
@@ -2086,460 +1922,10 @@ cfg_if! {
                 }
             }
         }
-
-        impl PartialEq for if_data {
-            fn eq(&self, other: &if_data) -> bool {
-                self.ifi_type == other.ifi_type
-                    && self.ifi_physical == other.ifi_physical
-                    && self.ifi_addrlen == other.ifi_addrlen
-                    && self.ifi_hdrlen == other.ifi_hdrlen
-                    && self.ifi_link_state == other.ifi_link_state
-                    && self.ifi_vhid == other.ifi_vhid
-                    && self.ifi_datalen == other.ifi_datalen
-                    && self.ifi_mtu == other.ifi_mtu
-                    && self.ifi_metric == other.ifi_metric
-                    && self.ifi_baudrate == other.ifi_baudrate
-                    && self.ifi_ipackets == other.ifi_ipackets
-                    && self.ifi_ierrors == other.ifi_ierrors
-                    && self.ifi_opackets == other.ifi_opackets
-                    && self.ifi_oerrors == other.ifi_oerrors
-                    && self.ifi_collisions == other.ifi_collisions
-                    && self.ifi_ibytes == other.ifi_ibytes
-                    && self.ifi_obytes == other.ifi_obytes
-                    && self.ifi_imcasts == other.ifi_imcasts
-                    && self.ifi_omcasts == other.ifi_omcasts
-                    && self.ifi_iqdrops == other.ifi_iqdrops
-                    && self.ifi_oqdrops == other.ifi_oqdrops
-                    && self.ifi_noproto == other.ifi_noproto
-                    && self.ifi_hwassist == other.ifi_hwassist
-                    && self.__ifi_epoch == other.__ifi_epoch
-                    && self.__ifi_lastchange == other.__ifi_lastchange
-            }
-        }
-        impl Eq for if_data {}
-        impl fmt::Debug for if_data {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("if_data")
-                    .field("ifi_type", &self.ifi_type)
-                    .field("ifi_physical", &self.ifi_physical)
-                    .field("ifi_addrlen", &self.ifi_addrlen)
-                    .field("ifi_hdrlen", &self.ifi_hdrlen)
-                    .field("ifi_link_state", &self.ifi_link_state)
-                    .field("ifi_vhid", &self.ifi_vhid)
-                    .field("ifi_datalen", &self.ifi_datalen)
-                    .field("ifi_mtu", &self.ifi_mtu)
-                    .field("ifi_metric", &self.ifi_metric)
-                    .field("ifi_baudrate", &self.ifi_baudrate)
-                    .field("ifi_ipackets", &self.ifi_ipackets)
-                    .field("ifi_ierrors", &self.ifi_ierrors)
-                    .field("ifi_opackets", &self.ifi_opackets)
-                    .field("ifi_oerrors", &self.ifi_oerrors)
-                    .field("ifi_collisions", &self.ifi_collisions)
-                    .field("ifi_ibytes", &self.ifi_ibytes)
-                    .field("ifi_obytes", &self.ifi_obytes)
-                    .field("ifi_imcasts", &self.ifi_imcasts)
-                    .field("ifi_omcasts", &self.ifi_omcasts)
-                    .field("ifi_iqdrops", &self.ifi_iqdrops)
-                    .field("ifi_oqdrops", &self.ifi_oqdrops)
-                    .field("ifi_noproto", &self.ifi_noproto)
-                    .field("ifi_hwassist", &self.ifi_hwassist)
-                    .field("__ifi_epoch", &self.__ifi_epoch)
-                    .field("__ifi_lastchange", &self.__ifi_lastchange)
-                    .finish()
-            }
-        }
-        impl hash::Hash for if_data {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.ifi_type.hash(state);
-                self.ifi_physical.hash(state);
-                self.ifi_addrlen.hash(state);
-                self.ifi_hdrlen.hash(state);
-                self.ifi_link_state.hash(state);
-                self.ifi_vhid.hash(state);
-                self.ifi_datalen.hash(state);
-                self.ifi_mtu.hash(state);
-                self.ifi_metric.hash(state);
-                self.ifi_baudrate.hash(state);
-                self.ifi_ipackets.hash(state);
-                self.ifi_ierrors.hash(state);
-                self.ifi_opackets.hash(state);
-                self.ifi_oerrors.hash(state);
-                self.ifi_collisions.hash(state);
-                self.ifi_ibytes.hash(state);
-                self.ifi_obytes.hash(state);
-                self.ifi_imcasts.hash(state);
-                self.ifi_omcasts.hash(state);
-                self.ifi_iqdrops.hash(state);
-                self.ifi_oqdrops.hash(state);
-                self.ifi_noproto.hash(state);
-                self.ifi_hwassist.hash(state);
-                self.__ifi_epoch.hash(state);
-                self.__ifi_lastchange.hash(state);
-            }
-        }
-
-        impl PartialEq for sctphdr {
-            fn eq(&self, other: &sctphdr) -> bool {
-                return { self.src_port } == { other.src_port }
-                    && { self.dest_port } == { other.dest_port }
-                    && { self.v_tag } == { other.v_tag }
-                    && { self.checksum } == { other.checksum };
-            }
-        }
-        impl Eq for sctphdr {}
-        impl fmt::Debug for sctphdr {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctphdr")
-                    .field("src_port", &{ self.src_port })
-                    .field("dest_port", &{ self.dest_port })
-                    .field("v_tag", &{ self.v_tag })
-                    .field("checksum", &{ self.checksum })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctphdr {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.src_port }.hash(state);
-                { self.dest_port }.hash(state);
-                { self.v_tag }.hash(state);
-                { self.checksum }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_chunkhdr {
-            fn eq(&self, other: &sctp_chunkhdr) -> bool {
-                return { self.chunk_type } == { other.chunk_type }
-                    && { self.chunk_flags } == { other.chunk_flags }
-                    && { self.chunk_length } == { other.chunk_length };
-            }
-        }
-        impl Eq for sctp_chunkhdr {}
-        impl fmt::Debug for sctp_chunkhdr {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_chunkhdr")
-                    .field("chunk_type", &{ self.chunk_type })
-                    .field("chunk_flags", &{ self.chunk_flags })
-                    .field("chunk_length", &{ self.chunk_length })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_chunkhdr {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.chunk_type }.hash(state);
-                { self.chunk_flags }.hash(state);
-                { self.chunk_length }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_paramhdr {
-            fn eq(&self, other: &sctp_paramhdr) -> bool {
-                return { self.param_type } == { other.param_type } && { self.param_length } == {
-                    other.param_length
-                };
-            }
-        }
-        impl Eq for sctp_paramhdr {}
-        impl fmt::Debug for sctp_paramhdr {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_paramhdr")
-                    .field("param_type", &{ self.param_type })
-                    .field("param_length", &{ self.param_length })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_paramhdr {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.param_type }.hash(state);
-                { self.param_length }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_gen_error_cause {
-            fn eq(&self, other: &sctp_gen_error_cause) -> bool {
-                return { self.code } == { other.code } && { self.length } == { other.length } && {
-                    self.info
-                }
-                .iter()
-                .zip({ other.info }.iter())
-                .all(|(a, b)| a == b);
-            }
-        }
-        impl Eq for sctp_gen_error_cause {}
-        impl fmt::Debug for sctp_gen_error_cause {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_gen_error_cause")
-                    .field("code", &{ self.code })
-                    .field("length", &{ self.length })
-                    // FIXME: .field("info", &{self.info})
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_gen_error_cause {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.code }.hash(state);
-                { self.length }.hash(state);
-                { self.info }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_cause {
-            fn eq(&self, other: &sctp_error_cause) -> bool {
-                return { self.code } == { other.code } && { self.length } == { other.length };
-            }
-        }
-        impl Eq for sctp_error_cause {}
-        impl fmt::Debug for sctp_error_cause {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_cause")
-                    .field("code", &{ self.code })
-                    .field("length", &{ self.length })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_cause {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.code }.hash(state);
-                { self.length }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_invalid_stream {
-            fn eq(&self, other: &sctp_error_invalid_stream) -> bool {
-                return { self.cause } == { other.cause } && { self.stream_id } == {
-                    other.stream_id
-                };
-            }
-        }
-        impl Eq for sctp_error_invalid_stream {}
-        impl fmt::Debug for sctp_error_invalid_stream {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_invalid_stream")
-                    .field("cause", &{ self.cause })
-                    .field("stream_id", &{ self.stream_id })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_invalid_stream {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.cause }.hash(state);
-                { self.stream_id }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_missing_param {
-            fn eq(&self, other: &sctp_error_missing_param) -> bool {
-                return { self.cause } == { other.cause }
-                    && { self.num_missing_params } == { other.num_missing_params }
-                    && { self.tpe }
-                        .iter()
-                        .zip({ other.tpe }.iter())
-                        .all(|(a, b)| a == b);
-            }
-        }
-        impl Eq for sctp_error_missing_param {}
-        impl fmt::Debug for sctp_error_missing_param {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_missing_param")
-                    .field("cause", &{ self.cause })
-                    .field("num_missing_params", &{ self.num_missing_params })
-                    // FIXME: .field("tpe", &{self.tpe})
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_missing_param {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.cause }.hash(state);
-                { self.num_missing_params }.hash(state);
-                { self.tpe }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_stale_cookie {
-            fn eq(&self, other: &sctp_error_stale_cookie) -> bool {
-                return { self.cause } == { other.cause } && { self.stale_time } == {
-                    other.stale_time
-                };
-            }
-        }
-        impl Eq for sctp_error_stale_cookie {}
-        impl fmt::Debug for sctp_error_stale_cookie {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_stale_cookie")
-                    .field("cause", &{ self.cause })
-                    .field("stale_time", &{ self.stale_time })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_stale_cookie {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.cause }.hash(state);
-                { self.stale_time }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_out_of_resource {
-            fn eq(&self, other: &sctp_error_out_of_resource) -> bool {
-                return { self.cause } == { other.cause };
-            }
-        }
-        impl Eq for sctp_error_out_of_resource {}
-        impl fmt::Debug for sctp_error_out_of_resource {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_out_of_resource")
-                    .field("cause", &{ self.cause })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_out_of_resource {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.cause }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_unresolv_addr {
-            fn eq(&self, other: &sctp_error_unresolv_addr) -> bool {
-                return { self.cause } == { other.cause };
-            }
-        }
-        impl Eq for sctp_error_unresolv_addr {}
-        impl fmt::Debug for sctp_error_unresolv_addr {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_unresolv_addr")
-                    .field("cause", &{ self.cause })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_unresolv_addr {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.cause }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_unrecognized_chunk {
-            fn eq(&self, other: &sctp_error_unrecognized_chunk) -> bool {
-                return { self.cause } == { other.cause } && { self.ch } == { other.ch };
-            }
-        }
-        impl Eq for sctp_error_unrecognized_chunk {}
-        impl fmt::Debug for sctp_error_unrecognized_chunk {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_unrecognized_chunk")
-                    .field("cause", &{ self.cause })
-                    .field("ch", &{ self.ch })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_unrecognized_chunk {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.cause }.hash(state);
-                { self.ch }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_no_user_data {
-            fn eq(&self, other: &sctp_error_no_user_data) -> bool {
-                return { self.cause } == { other.cause } && { self.tsn } == { other.tsn };
-            }
-        }
-        impl Eq for sctp_error_no_user_data {}
-        impl fmt::Debug for sctp_error_no_user_data {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_no_user_data")
-                    .field("cause", &{ self.cause })
-                    .field("tsn", &{ self.tsn })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_no_user_data {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.cause }.hash(state);
-                { self.tsn }.hash(state);
-            }
-        }
-
-        impl PartialEq for sctp_error_auth_invalid_hmac {
-            fn eq(&self, other: &sctp_error_auth_invalid_hmac) -> bool {
-                return { self.cause } == { other.cause } && { self.hmac_id } == { other.hmac_id };
-            }
-        }
-        impl Eq for sctp_error_auth_invalid_hmac {}
-        impl fmt::Debug for sctp_error_auth_invalid_hmac {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("sctp_error_invalid_hmac")
-                    .field("cause", &{ self.cause })
-                    .field("hmac_id", &{ self.hmac_id })
-                    .finish()
-            }
-        }
-        impl hash::Hash for sctp_error_auth_invalid_hmac {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                { self.cause }.hash(state);
-                { self.hmac_id }.hash(state);
-            }
-        }
-
-        impl PartialEq for kinfo_file {
-            fn eq(&self, other: &kinfo_file) -> bool {
-                self.kf_structsize == other.kf_structsize
-                    && self.kf_type == other.kf_type
-                    && self.kf_fd == other.kf_fd
-                    && self.kf_ref_count == other.kf_ref_count
-                    && self.kf_flags == other.kf_flags
-                    && self.kf_offset == other.kf_offset
-                    && self.kf_status == other.kf_status
-                    && self.kf_cap_rights == other.kf_cap_rights
-                    && self
-                        .kf_path
-                        .iter()
-                        .zip(other.kf_path.iter())
-                        .all(|(a, b)| a == b)
-            }
-        }
-        impl Eq for kinfo_file {}
-        impl fmt::Debug for kinfo_file {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("kinfo_file")
-                    .field("kf_structsize", &self.kf_structsize)
-                    .field("kf_type", &self.kf_type)
-                    .field("kf_fd", &self.kf_fd)
-                    .field("kf_ref_count", &self.kf_ref_count)
-                    .field("kf_flags", &self.kf_flags)
-                    .field("kf_offset", &self.kf_offset)
-                    .field("kf_status", &self.kf_status)
-                    .field("kf_cap_rights", &self.kf_cap_rights)
-                    .field("kf_path", &&self.kf_path[..])
-                    .finish()
-            }
-        }
-        impl hash::Hash for kinfo_file {
-            fn hash<H: hash::Hasher>(&self, state: &mut H) {
-                self.kf_structsize.hash(state);
-                self.kf_type.hash(state);
-                self.kf_fd.hash(state);
-                self.kf_ref_count.hash(state);
-                self.kf_flags.hash(state);
-                self.kf_offset.hash(state);
-                self.kf_status.hash(state);
-                self.kf_cap_rights.hash(state);
-                self.kf_path.hash(state);
-            }
-        }
-
-        impl fmt::Debug for ucontext_t {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.debug_struct("ucontext_t")
-                    .field("uc_sigmask", &self.uc_sigmask)
-                    .field("uc_mcontext", &self.uc_mcontext)
-                    .field("uc_link", &self.uc_link)
-                    .field("uc_stack", &self.uc_stack)
-                    .field("uc_flags", &self.uc_flags)
-                    .finish()
-            }
-        }
     }
 }
 
-#[cfg_attr(feature = "extra_traits", derive(Debug))]
+#[derive(Debug)]
 #[repr(u32)]
 pub enum dot3Vendors {
     dot3VendorAMD = 1,
@@ -2779,6 +2165,47 @@ pub const POSIX_FADV_WILLNEED: c_int = 3;
 pub const POSIX_FADV_DONTNEED: c_int = 4;
 pub const POSIX_FADV_NOREUSE: c_int = 5;
 
+pub const REG_BASIC: c_int = 0o0000;
+pub const REG_EXTENDED: c_int = 0o0001;
+pub const REG_ICASE: c_int = 0o0002;
+pub const REG_NOSUB: c_int = 0o0004;
+pub const REG_NEWLINE: c_int = 0o0010;
+pub const REG_NOSPEC: c_int = 0o0020;
+pub const REG_PEND: c_int = 0o0040;
+pub const REG_DUMP: c_int = 0o0200;
+
+pub const REG_NOMATCH: c_int = 1;
+pub const REG_BADPAT: c_int = 2;
+pub const REG_ECOLLATE: c_int = 3;
+pub const REG_ECTYPE: c_int = 4;
+pub const REG_EESCAPE: c_int = 5;
+pub const REG_ESUBREG: c_int = 6;
+pub const REG_EBRACK: c_int = 7;
+pub const REG_EPAREN: c_int = 8;
+pub const REG_EBRACE: c_int = 9;
+pub const REG_BADBR: c_int = 10;
+pub const REG_ERANGE: c_int = 11;
+pub const REG_ESPACE: c_int = 12;
+pub const REG_BADRPT: c_int = 13;
+pub const REG_EMPTY: c_int = 14;
+pub const REG_ASSERT: c_int = 15;
+pub const REG_INVARG: c_int = 16;
+pub const REG_ILLSEQ: c_int = 17;
+pub const REG_ATOI: c_int = 255;
+pub const REG_ITOA: c_int = 0o0400;
+
+pub const REG_NOTBOL: c_int = 0o00001;
+pub const REG_NOTEOL: c_int = 0o00002;
+pub const REG_STARTEND: c_int = 0o00004;
+pub const REG_TRACE: c_int = 0o00400;
+pub const REG_LARGE: c_int = 0o01000;
+pub const REG_BACKR: c_int = 0o02000;
+
+// For getrandom()
+pub const GRND_NONBLOCK: c_uint = 0x1;
+pub const GRND_RANDOM: c_uint = 0x2;
+pub const GRND_INSECURE: c_uint = 0x4;
+
 pub const POLLINIGNEOF: c_short = 0x2000;
 pub const POLLRDHUP: c_short = 0x4000;
 
@@ -2889,7 +2316,7 @@ pub const CTLTYPE_S16: c_int = 0xd;
 pub const CTLTYPE_S32: c_int = 0xe;
 pub const CTLTYPE_U32: c_int = 0xf;
 
-pub const CTLFLAG_RD: c_int = 0x80000000;
+pub const CTLFLAG_RD: c_int = u32_cast_int(0x80000000);
 pub const CTLFLAG_WR: c_int = 0x40000000;
 pub const CTLFLAG_RW: c_int = CTLFLAG_RD | CTLFLAG_WR;
 pub const CTLFLAG_DORMANT: c_int = 0x20000000;
@@ -3020,14 +2447,39 @@ pub const HW_MACHINE_ARCH: c_int = 11;
 pub const HW_REALMEM: c_int = 12;
 
 pub const USER_CS_PATH: c_int = 1;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const USER_BC_BASE_MAX: c_int = 2;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const USER_BC_DIM_MAX: c_int = 3;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const USER_BC_SCALE_MAX: c_int = 4;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const USER_BC_STRING_MAX: c_int = 5;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const USER_COLL_WEIGHTS_MAX: c_int = 6;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const USER_EXPR_NEST_MAX: c_int = 7;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const USER_LINE_MAX: c_int = 8;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const USER_RE_DUP_MAX: c_int = 9;
+
 pub const USER_POSIX2_VERSION: c_int = 10;
 pub const USER_POSIX2_C_BIND: c_int = 11;
 pub const USER_POSIX2_C_DEV: c_int = 12;
@@ -3102,8 +2554,6 @@ pub const JAIL_CREATE: c_int = 0x01;
 pub const JAIL_UPDATE: c_int = 0x02;
 pub const JAIL_ATTACH: c_int = 0x04;
 pub const JAIL_DYING: c_int = 0x08;
-pub const JAIL_SET_MASK: c_int = 0x0f;
-pub const JAIL_GET_MASK: c_int = 0x08;
 pub const JAIL_SYS_DISABLE: c_int = 0;
 pub const JAIL_SYS_NEW: c_int = 1;
 pub const JAIL_SYS_INHERIT: c_int = 2;
@@ -3138,13 +2588,17 @@ pub const SO_PROTOCOL: c_int = 0x1016;
 pub const SO_PROTOTYPE: c_int = SO_PROTOCOL;
 pub const SO_TS_CLOCK: c_int = 0x1017;
 pub const SO_DOMAIN: c_int = 0x1019;
-pub const SO_VENDOR: c_int = 0x80000000;
+pub const SO_SPLICE: c_int = 0x1023;
+pub const SO_VENDOR: c_int = u32_cast_int(0x80000000);
 
 pub const SO_TS_REALTIME_MICRO: c_int = 0;
 pub const SO_TS_BINTIME: c_int = 1;
 pub const SO_TS_REALTIME: c_int = 2;
 pub const SO_TS_MONOTONIC: c_int = 3;
 pub const SO_TS_DEFAULT: c_int = SO_TS_REALTIME_MICRO;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const SO_TS_CLOCK_MAX: c_int = SO_TS_MONOTONIC;
 
 pub const LOCAL_CREDS: c_int = 2;
@@ -3231,6 +2685,11 @@ pub const PROC_NO_NEW_PRIVS_CTL: c_int = 19;
 pub const PROC_NO_NEW_PRIVS_STATUS: c_int = 20;
 pub const PROC_WXMAP_CTL: c_int = 21;
 pub const PROC_WXMAP_STATUS: c_int = 22;
+pub const PROC_LOGSIGEXIT_CTL: c_int = 23;
+pub const PROC_LOGSIGEXIT_STATUS: c_int = 24;
+pub const PROC_LOGSIGEXIT_CTL_NOFORCE: c_int = 1;
+pub const PROC_LOGSIGEXIT_CTL_FORCE_ENABLE: c_int = 2;
+pub const PROC_LOGSIGEXIT_CTL_FORCE_DISABLE: c_int = 3;
 pub const PROC_PROCCTL_MD_MIN: c_int = 0x10000000;
 
 pub const PPROT_SET: c_int = 1;
@@ -3248,12 +2707,12 @@ pub const PROC_TRAPCAP_CTL_DISABLE: c_int = 2;
 pub const PROC_ASLR_FORCE_ENABLE: c_int = 1;
 pub const PROC_ASLR_FORCE_DISABLE: c_int = 2;
 pub const PROC_ASLR_NOFORCE: c_int = 3;
-pub const PROC_ASLR_ACTIVE: c_int = 0x80000000;
+pub const PROC_ASLR_ACTIVE: c_int = u32_cast_int(0x80000000);
 
 pub const PROC_PROTMAX_FORCE_ENABLE: c_int = 1;
 pub const PROC_PROTMAX_FORCE_DISABLE: c_int = 2;
 pub const PROC_PROTMAX_NOFORCE: c_int = 3;
-pub const PROC_PROTMAX_ACTIVE: c_int = 0x80000000;
+pub const PROC_PROTMAX_ACTIVE: c_int = u32_cast_int(0x80000000);
 
 pub const PROC_STACKGAP_ENABLE: c_int = 0x0001;
 pub const PROC_STACKGAP_DISABLE: c_int = 0x0002;
@@ -3265,7 +2724,7 @@ pub const PROC_NO_NEW_PRIVS_DISABLE: c_int = 2;
 
 pub const PROC_WX_MAPPINGS_PERMIT: c_int = 0x0001;
 pub const PROC_WX_MAPPINGS_DISALLOW_EXEC: c_int = 0x0002;
-pub const PROC_WXORX_ENFORCE: c_int = 0x80000000;
+pub const PROC_WXORX_ENFORCE: c_int = u32_cast_int(0x80000000);
 
 pub const AF_SLOW: c_int = 33;
 pub const AF_SCLUSTER: c_int = 34;
@@ -3409,7 +2868,7 @@ pub const IFCAP_VXLAN_HWCSUM: c_int = 0x20000000;
 /// can do IFCAP_TSO on VXLANs
 pub const IFCAP_VXLAN_HWTSO: c_int = 0x40000000;
 /// can do TLS with rate limiting
-pub const IFCAP_TXTLS_RTLMT: c_int = 0x80000000;
+pub const IFCAP_TXTLS_RTLMT: c_int = u32_cast_int(0x80000000);
 
 pub const IFCAP_HWCSUM_IPV6: c_int = IFCAP_RXCSUM_IPV6 | IFCAP_TXCSUM_IPV6;
 pub const IFCAP_HWCSUM: c_int = IFCAP_RXCSUM | IFCAP_TXCSUM;
@@ -3425,6 +2884,8 @@ pub const IFNET_SLOWHZ: c_int = 1;
 pub const IFAN_ARRIVAL: c_int = 0;
 pub const IFAN_DEPARTURE: c_int = 1;
 
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const IFSTATMAX: c_int = 800;
 
 pub const RSS_FUNC_NONE: c_int = 0;
@@ -3757,11 +3218,16 @@ pub const TCP_PERF_INFO: c_int = 78;
 pub const TCP_LRD: c_int = 79;
 pub const TCP_KEEPINIT: c_int = 128;
 pub const TCP_FASTOPEN: c_int = 1025;
+#[deprecated(since = "0.2.171", note = "removed in FreeBSD 15")]
 pub const TCP_PCAP_OUT: c_int = 2048;
+#[deprecated(since = "0.2.171", note = "removed in FreeBSD 15")]
 pub const TCP_PCAP_IN: c_int = 4096;
 pub const TCP_FUNCTION_BLK: c_int = 8192;
 pub const TCP_FUNCTION_ALIAS: c_int = 8193;
 pub const TCP_FASTOPEN_PSK_LEN: c_int = 16;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const TCP_FUNCTION_NAME_LEN_MAX: c_int = 32;
 
 pub const TCP_REUSPORT_LB_NUMA: c_int = 1026;
@@ -3787,6 +3253,26 @@ pub const TCP_BBR_USEDEL_RATE: c_int = 1079;
 pub const TCP_BBR_MIN_RTO: c_int = 1080;
 pub const TCP_BBR_MAX_RTO: c_int = 1081;
 pub const TCP_BBR_ALGORITHM: c_int = 1083;
+pub const TCP_BBR_PACE_PER_SEC: c_int = 1086;
+pub const TCP_BBR_PACE_DEL_TAR: c_int = 1087;
+pub const TCP_BBR_PACE_SEG_MAX: c_int = 1088;
+pub const TCP_BBR_PACE_SEG_MIN: c_int = 1089;
+pub const TCP_BBR_PACE_CROSS: c_int = 1090;
+pub const TCP_BBR_TMR_PACE_OH: c_int = 1096;
+pub const TCP_BBR_RACK_RTT_USE: c_int = 1098;
+pub const TCP_BBR_RETRAN_WTSO: c_int = 1099;
+pub const TCP_BBR_PROBE_RTT_GAIN: c_int = 1101;
+pub const TCP_BBR_PROBE_RTT_LEN: c_int = 1102;
+pub const TCP_BBR_SEND_IWND_IN_TSO: c_int = 1103;
+pub const TCP_BBR_USE_RACK_RR: c_int = 1104;
+pub const TCP_BBR_HDWR_PACE: c_int = 1105;
+pub const TCP_BBR_UTTER_MAX_TSO: c_int = 1106;
+pub const TCP_BBR_EXTRA_STATE: c_int = 1107;
+pub const TCP_BBR_FLOOR_MIN_TSO: c_int = 1108;
+pub const TCP_BBR_MIN_TOPACEOUT: c_int = 1109;
+pub const TCP_BBR_TSTMP_RAISES: c_int = 1110;
+pub const TCP_BBR_POLICER_DETECT: c_int = 1111;
+pub const TCP_BBR_RACK_INIT_RATE: c_int = 1112;
 
 pub const IP_BINDANY: c_int = 24;
 pub const IP_BINDMULTI: c_int = 25;
@@ -3796,6 +3282,10 @@ pub const IP_RECVORIGDSTADDR: c_int = IP_ORIGDSTADDR;
 
 pub const IP_DONTFRAG: c_int = 67;
 pub const IP_RECVTOS: c_int = 68;
+pub const IP_ADD_SOURCE_MEMBERSHIP: c_int = 70;
+pub const IP_DROP_SOURCE_MEMBERSHIP: c_int = 71;
+pub const IP_BLOCK_SOURCE: c_int = 72;
+pub const IP_UNBLOCK_SOURCE: c_int = 73;
 
 pub const IPV6_BINDANY: c_int = 64;
 pub const IPV6_ORIGDSTADDR: c_int = 72;
@@ -3930,6 +3420,8 @@ pub const AT_HWCAP: c_int = 25;
 pub const AT_HWCAP2: c_int = 26;
 pub const AT_USRSTACKBASE: c_int = 35;
 pub const AT_USRSTACKLIM: c_int = 36;
+pub const AT_HWCAP3: c_int = 38;
+pub const AT_HWCAP4: c_int = 39;
 
 pub const TABDLY: crate::tcflag_t = 0x00000004;
 pub const TAB0: crate::tcflag_t = 0x00000000;
@@ -3950,14 +3442,6 @@ pub const PD_ALLOWED_AT_FORK: c_int = PD_DAEMON | PD_CLOEXEC;
 pub const RTP_PRIO_REALTIME: c_ushort = 2;
 pub const RTP_PRIO_NORMAL: c_ushort = 3;
 pub const RTP_PRIO_IDLE: c_ushort = 4;
-
-// DIFF(main): changed to `c_short` in f62eb023ab
-pub const POSIX_SPAWN_RESETIDS: c_int = 0x01;
-pub const POSIX_SPAWN_SETPGROUP: c_int = 0x02;
-pub const POSIX_SPAWN_SETSCHEDPARAM: c_int = 0x04;
-pub const POSIX_SPAWN_SETSCHEDULER: c_int = 0x08;
-pub const POSIX_SPAWN_SETSIGDEF: c_int = 0x10;
-pub const POSIX_SPAWN_SETSIGMASK: c_int = 0x20;
 
 // Flags for chflags(2)
 pub const UF_SYSTEM: c_ulong = 0x00000080;
@@ -4005,7 +3489,7 @@ pub const RFTHREAD: c_int = 8192;
 pub const RFSIGSHARE: c_int = 16384;
 pub const RFLINUXTHPN: c_int = 65536;
 pub const RFTSIGZMB: c_int = 524288;
-pub const RFSPAWN: c_int = 2147483648;
+pub const RFSPAWN: c_int = u32_cast_int(2147483648);
 
 // For eventfd
 pub const EFD_SEMAPHORE: c_int = 0x1;
@@ -4134,71 +3618,111 @@ pub const KKST_STATE_SWAPPED: c_int = 1;
 pub const KKST_STATE_RUNNING: c_int = 2;
 
 // Constants about priority.
+
 pub const PRI_MIN: c_int = 0;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PRI_MAX: c_int = 255;
+
 pub const PRI_MIN_ITHD: c_int = PRI_MIN;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PRI_MAX_ITHD: c_int = PRI_MIN_REALTIME - 1;
+
 pub const PI_REALTIME: c_int = PRI_MIN_ITHD + 0;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PI_AV: c_int = PRI_MIN_ITHD + 4;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PI_NET: c_int = PRI_MIN_ITHD + 8;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PI_DISK: c_int = PRI_MIN_ITHD + 12;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PI_TTY: c_int = PRI_MIN_ITHD + 16;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PI_DULL: c_int = PRI_MIN_ITHD + 20;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PI_SOFT: c_int = PRI_MIN_ITHD + 24;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PRI_MIN_REALTIME: c_int = 48;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PRI_MAX_REALTIME: c_int = PRI_MIN_KERN - 1;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PRI_MIN_KERN: c_int = 80;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PRI_MAX_KERN: c_int = PRI_MIN_TIMESHARE - 1;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PSWP: c_int = PRI_MIN_KERN + 0;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PVM: c_int = PRI_MIN_KERN + 4;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PINOD: c_int = PRI_MIN_KERN + 8;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PRIBIO: c_int = PRI_MIN_KERN + 12;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PVFS: c_int = PRI_MIN_KERN + 16;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PZERO: c_int = PRI_MIN_KERN + 20;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PSOCK: c_int = PRI_MIN_KERN + 24;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PWAIT: c_int = PRI_MIN_KERN + 28;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PLOCK: c_int = PRI_MIN_KERN + 32;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PPAUSE: c_int = PRI_MIN_KERN + 36;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PRI_MIN_TIMESHARE: c_int = 120;
+
 pub const PRI_MAX_TIMESHARE: c_int = PRI_MIN_IDLE - 1;
-#[deprecated(since = "0.2.133", note = "Not stable across OS versions")]
-#[allow(deprecated)]
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const PUSER: c_int = PRI_MIN_TIMESHARE;
+
 pub const PRI_MIN_IDLE: c_int = 224;
 pub const PRI_MAX_IDLE: c_int = PRI_MAX;
 
@@ -4214,6 +3738,7 @@ cfg_if! {
         pub const ARG_MAX: c_int = 2 * 256 * 1024;
     }
 }
+
 pub const CHILD_MAX: c_int = 40;
 /// max command name remembered
 pub const MAXCOMLEN: usize = 19;
@@ -4237,10 +3762,16 @@ pub const MAXHOSTNAMELEN: c_int = 256;
 pub const MAX_CANON: c_int = 255;
 /// max bytes in terminal input
 pub const MAX_INPUT: c_int = 255;
-/// max bytes in a file name
+/// Max bytes in a file name.
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const NAME_MAX: c_int = 255;
 pub const MAXSYMLINKS: c_int = 32;
-/// max supplemental group id's
+/// Max supplemental group IDs.
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const NGROUPS_MAX: c_int = 1023;
 /// max open files per process
 pub const OPEN_MAX: c_int = 64;
@@ -4254,23 +3785,58 @@ pub const _POSIX_PIPE_BUF: c_int = 512;
 pub const _POSIX_SSIZE_MAX: c_int = 32767;
 pub const _POSIX_STREAM_MAX: c_int = 8;
 
-/// max ibase/obase values in bc(1)
+/// Max ibase/obase values in bc(1).
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const BC_BASE_MAX: c_int = 99;
-/// max array elements in bc(1)
+
+/// Max array elements in bc(1).
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const BC_DIM_MAX: c_int = 2048;
-/// max scale value in bc(1)
+
+/// Max scale value in bc(1).
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const BC_SCALE_MAX: c_int = 99;
-/// max const string length in bc(1)
+
+/// Max const string length in bc(1).
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const BC_STRING_MAX: c_int = 1000;
-/// max character class name size
+
+/// Max character class name size.
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const CHARCLASS_NAME_MAX: c_int = 14;
-/// max weights for order keyword
+
+/// Max weights for order keyword.
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const COLL_WEIGHTS_MAX: c_int = 10;
-/// max expressions nested in expr(1)
+
+/// Max expressions nested in expr(1).
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const EXPR_NEST_MAX: c_int = 32;
-/// max bytes in an input line
+
+/// Max bytes in an input line.
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const LINE_MAX: c_int = 2048;
-/// max RE's in interval notation
+
+/// Max RE's in interval notation.
+///
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const RE_DUP_MAX: c_int = 255;
 
 pub const _POSIX2_BC_BASE_MAX: c_int = 99;
@@ -4376,7 +3942,10 @@ pub const TDI_IWAIT: c_int = 0x0010;
 pub const P_ADVLOCK: c_int = 0x00000001;
 pub const P_CONTROLT: c_int = 0x00000002;
 pub const P_KPROC: c_int = 0x00000004;
+#[deprecated(since = "1.0", note = "Replaced in FreeBSD 15 by P_IDLEPROC")]
 pub const P_UNUSED3: c_int = 0x00000008;
+#[cfg(freebsd15)]
+pub const P_IDLEPROC: c_int = 0x00000008;
 pub const P_PPWAIT: c_int = 0x00000010;
 pub const P_PROFIL: c_int = 0x00000020;
 pub const P_STOPPROF: c_int = 0x00000040;
@@ -4404,7 +3973,7 @@ pub const P_STATCHILD: c_int = 0x08000000;
 pub const P_INMEM: c_int = 0x10000000;
 pub const P_SWAPPINGOUT: c_int = 0x20000000;
 pub const P_SWAPPINGIN: c_int = 0x40000000;
-pub const P_PPTRACE: c_int = 0x80000000;
+pub const P_PPTRACE: c_int = u32_cast_int(0x80000000);
 pub const P_STOPPED: c_int = P_STOPPED_SIG | P_STOPPED_SINGLE | P_STOPPED_TRACE;
 
 pub const P2_INHERIT_PROTECTED: c_int = 0x00000001;
@@ -4428,11 +3997,11 @@ pub const SZOMB: c_char = 5;
 pub const SWAIT: c_char = 6;
 pub const SLOCK: c_char = 7;
 
-pub const P_MAGIC: c_int = 0xbeefface;
+pub const P_MAGIC: c_int = u32_cast_int(0xbeefface);
 
 pub const TDP_SIGFASTBLOCK: c_int = 0x00000100;
 pub const TDP_UIOHELD: c_int = 0x10000000;
-pub const TDP_SIGFASTPENDING: c_int = 0x80000000;
+pub const TDP_SIGFASTPENDING: c_int = u32_cast_int(0x80000000);
 pub const TDP2_COMPAT32RB: c_int = 0x00000002;
 pub const P2_PROTMAX_ENABLE: c_int = 0x00000200;
 pub const P2_PROTMAX_DISABLE: c_int = 0x00000400;
@@ -4675,6 +4244,8 @@ pub const RTF_FIXEDMTU: c_int = 0x80000;
 
 pub const RTM_VERSION: c_int = 5;
 
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const RTAX_MAX: c_int = 8;
 
 // sys/signal.h
@@ -4722,7 +4293,11 @@ pub const SCTP_PR_SCTP_TTL: c_int = 0x0001;
 pub const SCTP_PR_SCTP_PRIO: c_int = 0x0002;
 pub const SCTP_PR_SCTP_BUF: c_int = SCTP_PR_SCTP_PRIO;
 pub const SCTP_PR_SCTP_RTX: c_int = 0x0003;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const SCTP_PR_SCTP_MAX: c_int = SCTP_PR_SCTP_RTX;
+
 pub const SCTP_PR_SCTP_ALL: c_int = 0x000f;
 
 pub const SCTP_INIT: c_int = 0x0001;
@@ -4804,6 +4379,9 @@ pub const SCTP_ASSOC_SUPPORTS_ASCONF: c_int = 0x03;
 pub const SCTP_ASSOC_SUPPORTS_MULTIBUF: c_int = 0x04;
 pub const SCTP_ASSOC_SUPPORTS_RE_CONFIG: c_int = 0x05;
 pub const SCTP_ASSOC_SUPPORTS_INTERLEAVING: c_int = 0x06;
+
+/// Constants may change across releases. See the [usage guidelines](crate#usage-guidelines)
+/// for details.
 pub const SCTP_ASSOC_SUPPORTS_MAX: c_int = 0x06;
 
 pub const SCTP_ADDR_AVAILABLE: c_int = 0x0001;
@@ -4847,6 +4425,10 @@ pub const RB_POWERCYCLE: c_int = 0x400000;
 pub const RB_PROBE: c_int = 0x10000000;
 pub const RB_MULTIPLE: c_int = 0x20000000;
 
+// netinet/in_pcb.h
+pub const INC_ISIPV6: c_uchar = 0x01;
+pub const INC_IPV6MINMTU: c_uchar = 0x02;
+
 // sys/time.h
 pub const CLOCK_BOOTTIME: crate::clockid_t = crate::CLOCK_UPTIME;
 pub const CLOCK_REALTIME_COARSE: crate::clockid_t = crate::CLOCK_REALTIME_FAST;
@@ -4869,100 +4451,93 @@ pub const KCMP_FILES: c_int = 102;
 pub const KCMP_SIGHAND: c_int = 103;
 pub const KCMP_VM: c_int = 104;
 
+pub const SOL_LOCAL: c_int = 0;
+
 pub const fn MAP_ALIGNED(a: c_int) -> c_int {
     a << 24
 }
 
-const_fn! {
-    {const} fn _ALIGN(p: usize) -> usize {
-        (p + _ALIGNBYTES) & !_ALIGNBYTES
-    }
+const fn _ALIGN(p: usize) -> usize {
+    (p + _ALIGNBYTES) & !_ALIGNBYTES
 }
 
 f! {
-    pub fn CMSG_DATA(cmsg: *const cmsghdr) -> *mut c_uchar {
-        (cmsg as *mut c_uchar).offset(_ALIGN(mem::size_of::<cmsghdr>()) as isize)
+    pub unsafe fn CMSG_DATA(cmsg: *const cmsghdr) -> *mut c_uchar {
+        (cmsg as *mut c_uchar).add(_ALIGN(size_of::<cmsghdr>()))
     }
 
-    pub {const} fn CMSG_LEN(length: c_uint) -> c_uint {
-        _ALIGN(mem::size_of::<cmsghdr>()) as c_uint + length
+    pub const unsafe fn CMSG_LEN(length: c_uint) -> c_uint {
+        _ALIGN(size_of::<cmsghdr>()) as c_uint + length
     }
 
-    pub fn CMSG_NXTHDR(mhdr: *const crate::msghdr, cmsg: *const cmsghdr) -> *mut cmsghdr {
+    pub unsafe fn CMSG_NXTHDR(mhdr: *const crate::msghdr, cmsg: *const cmsghdr) -> *mut cmsghdr {
         if cmsg.is_null() {
             return crate::CMSG_FIRSTHDR(mhdr);
-        };
-        let next =
-            cmsg as usize + _ALIGN((*cmsg).cmsg_len as usize) + _ALIGN(mem::size_of::<cmsghdr>());
+        }
+        let next = cmsg as usize + _ALIGN((*cmsg).cmsg_len as usize) + _ALIGN(size_of::<cmsghdr>());
         let max = (*mhdr).msg_control as usize + (*mhdr).msg_controllen as usize;
         if next > max {
-            0 as *mut cmsghdr
+            ptr::null_mut()
         } else {
             (cmsg as usize + _ALIGN((*cmsg).cmsg_len as usize)) as *mut cmsghdr
         }
     }
 
-    pub {const} fn CMSG_SPACE(length: c_uint) -> c_uint {
-        (_ALIGN(mem::size_of::<cmsghdr>()) + _ALIGN(length as usize)) as c_uint
+    pub const unsafe fn CMSG_SPACE(length: c_uint) -> c_uint {
+        (_ALIGN(size_of::<cmsghdr>()) + _ALIGN(length as usize)) as c_uint
     }
 
-    pub fn MALLOCX_ALIGN(lg: c_uint) -> c_int {
+    pub unsafe fn MALLOCX_ALIGN(lg: c_uint) -> c_int {
         ffsl(lg as c_long - 1)
     }
 
-    pub {const} fn MALLOCX_TCACHE(tc: c_int) -> c_int {
+    pub const unsafe fn MALLOCX_TCACHE(tc: c_int) -> c_int {
         (tc + 2) << 8 as c_int
     }
 
-    pub {const} fn MALLOCX_ARENA(a: c_int) -> c_int {
+    pub const unsafe fn MALLOCX_ARENA(a: c_int) -> c_int {
         (a + 1) << 20 as c_int
     }
 
-    pub fn SOCKCREDSIZE(ngrps: usize) -> usize {
+    pub unsafe fn SOCKCREDSIZE(ngrps: usize) -> usize {
         let ngrps = if ngrps > 0 { ngrps - 1 } else { 0 };
-        mem::size_of::<sockcred>() + mem::size_of::<crate::gid_t>() * ngrps
+        size_of::<sockcred>() + size_of::<crate::gid_t>() * ngrps
     }
 
-    pub fn uname(buf: *mut crate::utsname) -> c_int {
-        __xuname(256, buf as *mut c_void)
+    pub unsafe fn uname(buf: *mut crate::utsname) -> c_int {
+        __xuname(256, buf.cast())
     }
 
-    pub fn CPU_ZERO(cpuset: &mut cpuset_t) -> () {
-        for slot in cpuset.__bits.iter_mut() {
-            *slot = 0;
-        }
+    pub unsafe fn CPU_ZERO(cpuset: &mut cpuset_t) -> () {
+        cpuset.__bits.fill(0);
     }
 
-    pub fn CPU_FILL(cpuset: &mut cpuset_t) -> () {
-        for slot in cpuset.__bits.iter_mut() {
-            *slot = !0;
-        }
+    pub unsafe fn CPU_FILL(cpuset: &mut cpuset_t) -> () {
+        cpuset.__bits.fill(!0);
     }
 
-    pub fn CPU_SET(cpu: usize, cpuset: &mut cpuset_t) -> () {
-        let bitset_bits = 8 * mem::size_of::<c_long>();
+    pub unsafe fn CPU_SET(cpu: usize, cpuset: &mut cpuset_t) -> () {
+        let bitset_bits = 8 * size_of::<c_long>();
         let (idx, offset) = (cpu / bitset_bits, cpu % bitset_bits);
         cpuset.__bits[idx] |= 1 << offset;
-        ()
     }
 
-    pub fn CPU_CLR(cpu: usize, cpuset: &mut cpuset_t) -> () {
-        let bitset_bits = 8 * mem::size_of::<c_long>();
+    pub unsafe fn CPU_CLR(cpu: usize, cpuset: &mut cpuset_t) -> () {
+        let bitset_bits = 8 * size_of::<c_long>();
         let (idx, offset) = (cpu / bitset_bits, cpu % bitset_bits);
         cpuset.__bits[idx] &= !(1 << offset);
-        ()
     }
 
-    pub fn CPU_ISSET(cpu: usize, cpuset: &cpuset_t) -> bool {
-        let bitset_bits = 8 * mem::size_of::<c_long>();
+    pub unsafe fn CPU_ISSET(cpu: usize, cpuset: &cpuset_t) -> bool {
+        let bitset_bits = 8 * size_of::<c_long>();
         let (idx, offset) = (cpu / bitset_bits, cpu % bitset_bits);
         0 != cpuset.__bits[idx] & (1 << offset)
     }
 
-    pub fn CPU_COUNT(cpuset: &cpuset_t) -> c_int {
+    pub unsafe fn CPU_COUNT(cpuset: &cpuset_t) -> c_int {
         let mut s: u32 = 0;
-        let cpuset_size = mem::size_of::<cpuset_t>();
-        let bitset_size = mem::size_of::<c_long>();
+        let cpuset_size = size_of::<cpuset_t>();
+        let bitset_size = size_of::<c_long>();
 
         for i in cpuset.__bits[..(cpuset_size / bitset_size)].iter() {
             s += i.count_ones();
@@ -4970,27 +4545,27 @@ f! {
         s as c_int
     }
 
-    pub fn SOCKCRED2SIZE(ngrps: usize) -> usize {
+    pub unsafe fn SOCKCRED2SIZE(ngrps: usize) -> usize {
         let ngrps = if ngrps > 0 { ngrps - 1 } else { 0 };
-        mem::size_of::<sockcred2>() + mem::size_of::<crate::gid_t>() * ngrps
+        size_of::<sockcred2>() + size_of::<crate::gid_t>() * ngrps
     }
 
-    pub fn PROT_MAX(x: c_int) -> c_int {
+    pub unsafe fn PROT_MAX(x: c_int) -> c_int {
         x << 16
     }
 
-    pub fn PROT_MAX_EXTRACT(x: c_int) -> c_int {
+    pub unsafe fn PROT_MAX_EXTRACT(x: c_int) -> c_int {
         (x >> 16) & (crate::PROT_READ | crate::PROT_WRITE | crate::PROT_EXEC)
     }
 }
 
 safe_f! {
-    pub {const} fn WIFSIGNALED(status: c_int) -> bool {
+    pub const safe fn WIFSIGNALED(status: c_int) -> bool {
         (status & 0o177) != 0o177 && (status & 0o177) != 0 && status != 0x13
     }
 
-    pub {const} fn INVALID_SINFO_FLAG(x: c_int) -> bool {
-        (x) & 0xfffffff0
+    pub const safe fn INVALID_SINFO_FLAG(x: c_int) -> bool {
+        (x) & u32_cast_int(0xfffffff0)
             & !(SCTP_EOF
                 | SCTP_ABORT
                 | SCTP_UNORDERED
@@ -5001,32 +4576,40 @@ safe_f! {
             != 0
     }
 
-    pub {const} fn PR_SCTP_POLICY(x: c_int) -> c_int {
+    pub const safe fn PR_SCTP_POLICY(x: c_int) -> c_int {
         x & 0x0f
     }
 
-    pub {const} fn PR_SCTP_ENABLED(x: c_int) -> bool {
+    pub const safe fn PR_SCTP_ENABLED(x: c_int) -> bool {
         PR_SCTP_POLICY(x) != SCTP_PR_SCTP_NONE && PR_SCTP_POLICY(x) != SCTP_PR_SCTP_ALL
     }
 
-    pub {const} fn PR_SCTP_TTL_ENABLED(x: c_int) -> bool {
+    pub const safe fn PR_SCTP_TTL_ENABLED(x: c_int) -> bool {
         PR_SCTP_POLICY(x) == SCTP_PR_SCTP_TTL
     }
 
-    pub {const} fn PR_SCTP_BUF_ENABLED(x: c_int) -> bool {
+    pub const safe fn PR_SCTP_BUF_ENABLED(x: c_int) -> bool {
         PR_SCTP_POLICY(x) == SCTP_PR_SCTP_BUF
     }
 
-    pub {const} fn PR_SCTP_RTX_ENABLED(x: c_int) -> bool {
+    pub const safe fn PR_SCTP_RTX_ENABLED(x: c_int) -> bool {
         PR_SCTP_POLICY(x) == SCTP_PR_SCTP_RTX
     }
 
-    pub {const} fn PR_SCTP_INVALID_POLICY(x: c_int) -> bool {
+    pub const safe fn PR_SCTP_INVALID_POLICY(x: c_int) -> bool {
         PR_SCTP_POLICY(x) > SCTP_PR_SCTP_MAX
     }
 
-    pub {const} fn PR_SCTP_VALID_POLICY(x: c_int) -> bool {
+    pub const safe fn PR_SCTP_VALID_POLICY(x: c_int) -> bool {
         PR_SCTP_POLICY(x) <= SCTP_PR_SCTP_MAX
+    }
+
+    pub const safe fn PPROT_OP(o: c_int) -> c_int {
+        o & 0xf
+    }
+
+    pub const safe fn PPROT_FLAGS(o: c_int) -> c_int {
+        o & !0xf
     }
 }
 
@@ -5169,9 +4752,6 @@ extern "C" {
         sevp: *mut sigevent,
     ) -> c_int;
 
-    pub fn mkostemp(template: *mut c_char, flags: c_int) -> c_int;
-    pub fn mkostemps(template: *mut c_char, suffixlen: c_int, flags: c_int) -> c_int;
-
     pub fn getutxuser(user: *const c_char) -> *mut utmpx;
     pub fn setutxdb(_type: c_int, file: *const c_char) -> c_int;
 
@@ -5204,80 +4784,6 @@ extern "C" {
     pub fn pdkill(fd: c_int, signum: c_int) -> c_int;
 
     pub fn rtprio_thread(function: c_int, lwpid: crate::lwpid_t, rtp: *mut super::rtprio) -> c_int;
-
-    pub fn posix_spawn(
-        pid: *mut crate::pid_t,
-        path: *const c_char,
-        file_actions: *const crate::posix_spawn_file_actions_t,
-        attrp: *const crate::posix_spawnattr_t,
-        argv: *const *mut c_char,
-        envp: *const *mut c_char,
-    ) -> c_int;
-    pub fn posix_spawnp(
-        pid: *mut crate::pid_t,
-        file: *const c_char,
-        file_actions: *const crate::posix_spawn_file_actions_t,
-        attrp: *const crate::posix_spawnattr_t,
-        argv: *const *mut c_char,
-        envp: *const *mut c_char,
-    ) -> c_int;
-    pub fn posix_spawnattr_init(attr: *mut posix_spawnattr_t) -> c_int;
-    pub fn posix_spawnattr_destroy(attr: *mut posix_spawnattr_t) -> c_int;
-    pub fn posix_spawnattr_getsigdefault(
-        attr: *const posix_spawnattr_t,
-        default: *mut crate::sigset_t,
-    ) -> c_int;
-    pub fn posix_spawnattr_setsigdefault(
-        attr: *mut posix_spawnattr_t,
-        default: *const crate::sigset_t,
-    ) -> c_int;
-    pub fn posix_spawnattr_getsigmask(
-        attr: *const posix_spawnattr_t,
-        default: *mut crate::sigset_t,
-    ) -> c_int;
-    pub fn posix_spawnattr_setsigmask(
-        attr: *mut posix_spawnattr_t,
-        default: *const crate::sigset_t,
-    ) -> c_int;
-    pub fn posix_spawnattr_getflags(attr: *const posix_spawnattr_t, flags: *mut c_short) -> c_int;
-    pub fn posix_spawnattr_setflags(attr: *mut posix_spawnattr_t, flags: c_short) -> c_int;
-    pub fn posix_spawnattr_getpgroup(
-        attr: *const posix_spawnattr_t,
-        flags: *mut crate::pid_t,
-    ) -> c_int;
-    pub fn posix_spawnattr_setpgroup(attr: *mut posix_spawnattr_t, flags: crate::pid_t) -> c_int;
-    pub fn posix_spawnattr_getschedpolicy(
-        attr: *const posix_spawnattr_t,
-        flags: *mut c_int,
-    ) -> c_int;
-    pub fn posix_spawnattr_setschedpolicy(attr: *mut posix_spawnattr_t, flags: c_int) -> c_int;
-    pub fn posix_spawnattr_getschedparam(
-        attr: *const posix_spawnattr_t,
-        param: *mut crate::sched_param,
-    ) -> c_int;
-    pub fn posix_spawnattr_setschedparam(
-        attr: *mut posix_spawnattr_t,
-        param: *const crate::sched_param,
-    ) -> c_int;
-
-    pub fn posix_spawn_file_actions_init(actions: *mut posix_spawn_file_actions_t) -> c_int;
-    pub fn posix_spawn_file_actions_destroy(actions: *mut posix_spawn_file_actions_t) -> c_int;
-    pub fn posix_spawn_file_actions_addopen(
-        actions: *mut posix_spawn_file_actions_t,
-        fd: c_int,
-        path: *const c_char,
-        oflag: c_int,
-        mode: crate::mode_t,
-    ) -> c_int;
-    pub fn posix_spawn_file_actions_addclose(
-        actions: *mut posix_spawn_file_actions_t,
-        fd: c_int,
-    ) -> c_int;
-    pub fn posix_spawn_file_actions_adddup2(
-        actions: *mut posix_spawn_file_actions_t,
-        fd: c_int,
-        newfd: c_int,
-    ) -> c_int;
 
     pub fn uuidgen(store: *mut uuid, count: c_int) -> c_int;
 
@@ -5325,6 +4831,12 @@ extern "C" {
     pub fn pthread_spin_lock(lock: *mut pthread_spinlock_t) -> c_int;
     pub fn pthread_spin_trylock(lock: *mut pthread_spinlock_t) -> c_int;
     pub fn pthread_spin_unlock(lock: *mut pthread_spinlock_t) -> c_int;
+
+    pub fn pthread_timedjoin_np(
+        thread: crate::pthread_t,
+        retval: *mut *mut c_void,
+        abstime: *const crate::timespec,
+    ) -> c_int;
 
     #[cfg_attr(all(target_os = "freebsd", freebsd11), link_name = "statfs@FBSD_1.0")]
     pub fn statfs(path: *const c_char, buf: *mut statfs) -> c_int;
@@ -5477,7 +4989,7 @@ extern "C" {
     pub fn memfd_create(name: *const c_char, flags: c_uint) -> c_int;
     pub fn setaudit(auditinfo: *const auditinfo_t) -> c_int;
 
-    pub fn eventfd(init: c_uint, flags: c_int) -> c_int;
+    pub fn eventfd(initval: c_uint, flags: c_int) -> c_int;
     pub fn eventfd_read(fd: c_int, value: *mut eventfd_t) -> c_int;
     pub fn eventfd_write(fd: c_int, value: eventfd_t) -> c_int;
 
@@ -5571,6 +5083,11 @@ extern "C" {
         idx1: c_ulong,
         idx2: c_ulong,
     ) -> c_int;
+    pub fn dlvsym(
+        handle: *mut c_void,
+        symbol: *const c_char,
+        version: *const c_char,
+    ) -> *mut c_void;
 }
 
 #[link(name = "memstat")]
@@ -5673,7 +5190,7 @@ extern "C" {
     pub fn pidfile_close(path: *mut crate::pidfh) -> c_int;
     pub fn pidfile_remove(path: *mut crate::pidfh) -> c_int;
     pub fn pidfile_fileno(path: *const crate::pidfh) -> c_int;
-    // FIXME: pidfile_signal in due time (both manpage present and updated image snapshot)
+    // FIXME(freebsd): pidfile_signal in due time (both manpage present and updated image snapshot)
 }
 
 #[link(name = "procstat")]

@@ -1,16 +1,5 @@
 // Copyright (c) 2017, Google Inc.
-//
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
-//
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
-// SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
-// OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
-// CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+// SPDX-License-Identifier: ISC
 
 #include <openssl/cipher.h>
 
@@ -105,66 +94,66 @@ static int aes_cfb128_cipher(EVP_CIPHER_CTX *ctx, uint8_t *out,
 }
 
 static const EVP_CIPHER aes_128_cfb1 = {
-    NID_aes_128_cfb1,  1 /* block_size */,  16 /* key_size */,
-    16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb1_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    NID_aes_128_cfb1, 1 /* block_size */,  16 /* key_size */,
+    16 /* iv_len */,  sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
+    aes_cfb_init_key, aes_cfb1_cipher,     NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 static const EVP_CIPHER aes_128_cfb8 = {
-    NID_aes_128_cfb8,  1 /* block_size */,  16 /* key_size */,
-    16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb8_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    NID_aes_128_cfb8, 1 /* block_size */,  16 /* key_size */,
+    16 /* iv_len */,  sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
+    aes_cfb_init_key, aes_cfb8_cipher,     NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 static const EVP_CIPHER aes_128_cfb128 = {
-    NID_aes_128_cfb128,  1 /* block_size */,  16 /* key_size */,
-    16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb128_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    NID_aes_128_cfb128, 1 /* block_size */,  16 /* key_size */,
+    16 /* iv_len */,    sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
+    aes_cfb_init_key,   aes_cfb128_cipher,   NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 static const EVP_CIPHER aes_192_cfb1 = {
-    NID_aes_192_cfb1,  1 /* block_size */,  24 /* key_size */,
-    16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb1_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    NID_aes_192_cfb1, 1 /* block_size */,  24 /* key_size */,
+    16 /* iv_len */,  sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
+    aes_cfb_init_key, aes_cfb1_cipher,     NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 static const EVP_CIPHER aes_192_cfb8 = {
-    NID_aes_192_cfb8,  1 /* block_size */,  24 /* key_size */,
-    16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb8_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    NID_aes_192_cfb8, 1 /* block_size */,  24 /* key_size */,
+    16 /* iv_len */,  sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
+    aes_cfb_init_key, aes_cfb8_cipher,     NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 static const EVP_CIPHER aes_192_cfb128 = {
-    NID_aes_192_cfb128,  1 /* block_size */,  24 /* key_size */,
-    16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb128_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    NID_aes_192_cfb128, 1 /* block_size */,  24 /* key_size */,
+    16 /* iv_len */,    sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
+    aes_cfb_init_key,   aes_cfb128_cipher,   NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 static const EVP_CIPHER aes_256_cfb1 = {
-    NID_aes_256_cfb1,  1 /* block_size */,  32 /* key_size */,
-    16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb1_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    NID_aes_256_cfb1, 1 /* block_size */,  32 /* key_size */,
+    16 /* iv_len */,  sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
+    aes_cfb_init_key, aes_cfb1_cipher,     NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 static const EVP_CIPHER aes_256_cfb8 = {
     NID_aes_256_cfb8,  1 /* block_size */,  32 /* key_size */,
     16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb8_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    aes_cfb_init_key,    aes_cfb8_cipher, NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 static const EVP_CIPHER aes_256_cfb128 = {
     NID_aes_256_cfb128,  1 /* block_size */,  32 /* key_size */,
     16 /* iv_len */,     sizeof(EVP_CFB_CTX), EVP_CIPH_CFB_MODE,
-    NULL /* app_data */, aes_cfb_init_key,    aes_cfb128_cipher,
-    NULL /* cleanup */,  NULL /* ctrl */,
+    aes_cfb_init_key,    aes_cfb128_cipher, NULL /* cleanup */,
+    NULL /* ctrl */,
 };
 
 const EVP_CIPHER *EVP_aes_128_cfb1(void) { return &aes_128_cfb1; }

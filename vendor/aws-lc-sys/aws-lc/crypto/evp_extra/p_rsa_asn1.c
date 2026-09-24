@@ -1,57 +1,6 @@
-/* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
- * project 2006.
- */
-/* ====================================================================
- * Copyright (c) 2006 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com). */
+// Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project 2006.
+// Copyright (c) 2006 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/evp.h>
 
@@ -85,7 +34,7 @@ static int rsa_pub_encode(CBB *out, const EVP_PKEY *key) {
   return 1;
 }
 
-static int rsa_pub_decode(EVP_PKEY *out, CBS *params, CBS *key) {
+static int rsa_pub_decode(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key) {
   // The IETF specification defines that the parameters must be
   // NULL. See RFC 3279, section 2.3.1.
   // There is also an ITU-T X.509 specification that is rarely seen,
@@ -105,7 +54,7 @@ static int rsa_pub_decode(EVP_PKEY *out, CBS *params, CBS *key) {
   return 1;
 }
 
-static int rsa_pss_pub_decode(EVP_PKEY *out, CBS *params, CBS *key) {
+static int rsa_pss_pub_decode(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key) {
   RSASSA_PSS_PARAMS *pss = NULL;
   if (!RSASSA_PSS_parse_params(params, &pss)) {
     OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
@@ -152,13 +101,13 @@ static int rsa_priv_encode(CBB *out, const EVP_PKEY *key) {
   return 1;
 }
 
-static int rsa_priv_decode(EVP_PKEY *out, CBS *params, CBS *key, CBS *pubkey) {
+static int rsa_priv_decode(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key, CBS *pubkey) {
   if(pubkey) {
     OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
     return 0;
   }
 
-  // Per RFC 3447, A.1, the parameters have type NULL.
+  // Per RFC 8017, A.1, the parameters have type NULL.
   CBS null;
   if (!CBS_get_asn1(params, &null, CBS_ASN1_NULL) ||
       CBS_len(&null) != 0 ||
@@ -178,7 +127,7 @@ static int rsa_priv_decode(EVP_PKEY *out, CBS *params, CBS *key, CBS *pubkey) {
   return 1;
 }
 
-static int rsa_pss_priv_decode(EVP_PKEY *out, CBS *params, CBS *key, CBS *pubkey) {
+static int rsa_pss_priv_decode(EVP_PKEY *out, CBS *oid, CBS *params, CBS *key, CBS *pubkey) {
   RSASSA_PSS_PARAMS *pss = NULL;
   if (!RSASSA_PSS_parse_params(params, &pss)) {
     OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
@@ -236,6 +185,7 @@ const EVP_PKEY_ASN1_METHOD rsa_asn1_meth = {
   NULL /* set_pub_raw */,
   NULL /* get_priv_raw */,
   NULL /* get_pub_raw */,
+  NULL /* get_priv_seed */,
 
   rsa_opaque,
 
@@ -267,6 +217,7 @@ const EVP_PKEY_ASN1_METHOD rsa_pss_asn1_meth = {
   NULL /* set_pub_raw */,
   NULL /* get_priv_raw */,
   NULL /* get_pub_raw */,
+  NULL /* get_priv_seed */,
 
   rsa_opaque,
 

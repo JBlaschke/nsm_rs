@@ -70,8 +70,8 @@ bitflags::bitflags! {
 
 impl Default for Flags {
     #[inline(always)]
-    fn default() -> Flags {
-        Flags::DEFAULTS
+    fn default() -> Self {
+        Self::DEFAULTS
     }
 }
 
@@ -116,11 +116,11 @@ pub struct AuthorizationItemSet<'a> {
     phantom: PhantomData<&'a sys::AuthorizationItemSet>,
 }
 
-impl<'a> Drop for AuthorizationItemSet<'a> {
+impl Drop for AuthorizationItemSet<'_> {
     #[inline]
     fn drop(&mut self) {
         unsafe {
-            sys::AuthorizationFreeItemSet(self.inner as *mut sys::AuthorizationItemSet);
+            sys::AuthorizationFreeItemSet(self.inner.cast_mut());
         }
     }
 }
@@ -146,7 +146,7 @@ pub struct AuthorizationItemSetStorage {
 impl Default for AuthorizationItemSetStorage {
     #[inline]
     fn default() -> Self {
-        AuthorizationItemSetStorage {
+        Self {
             names: Vec::new(),
             values: Vec::new(),
             items: Vec::new(),
@@ -171,7 +171,7 @@ impl AuthorizationItemSetBuilder {
     /// owned vectors of `AuthorizationItem`s.
     #[inline(always)]
     #[must_use]
-    pub fn new() -> AuthorizationItemSetBuilder {
+    pub fn new() -> Self {
         Default::default()
     }
 
@@ -237,7 +237,7 @@ impl AuthorizationItemSetBuilder {
 
         self.storage.set = sys::AuthorizationItemSet {
             count: self.storage.items.len() as u32,
-            items: self.storage.items.as_ptr() as *mut sys::AuthorizationItem,
+            items: self.storage.items.as_ptr().cast_mut(),
         };
 
         self.storage
@@ -278,7 +278,7 @@ impl TryFrom<AuthorizationExternalForm> for Authorization {
             return Err(Error::from_code(status));
         }
 
-        let auth = Authorization {
+        let auth = Self {
             handle: unsafe { handle.assume_init() },
             free_flags: Flags::default(),
         };
@@ -307,6 +307,7 @@ impl Authorization {
     /// macOS 10.4 and later, you can also pass a user name and password in
     /// order to authorize a user without user interaction.
     #[allow(clippy::unnecessary_cast)]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(
         // FIXME: this should have been by reference
         rights: Option<AuthorizationItemSetStorage>,
@@ -314,11 +315,11 @@ impl Authorization {
         flags: Flags,
     ) -> Result<Self> {
         let rights_ptr = rights.as_ref().map_or(std::ptr::null(), |r| {
-            addr_of!(r.set) as *const sys::AuthorizationItemSet
+            addr_of!(r.set).cast::<sys::AuthorizationItemSet>()
         });
 
         let env_ptr = environment.as_ref().map_or(std::ptr::null(), |e| {
-            addr_of!(e.set) as *const sys::AuthorizationItemSet
+            addr_of!(e.set).cast::<sys::AuthorizationItemSet>()
         });
 
         let mut handle = MaybeUninit::<sys::AuthorizationRef>::uninit();
@@ -331,7 +332,7 @@ impl Authorization {
             return Err(Error::from_code(status));
         }
 
-        Ok(Authorization {
+        Ok(Self {
             handle: unsafe { handle.assume_init() },
             free_flags: Default::default(),
         })
@@ -562,7 +563,7 @@ impl Authorization {
     #[cfg(all(target_os = "macos", feature = "job-bless"))]
     pub fn job_bless(&self, label: &str) -> Result<(), CFError> {
         #[link(name = "ServiceManagement", kind = "framework")]
-        extern "C" {
+        unsafe extern "C" {
             static kSMDomainSystemLaunchd: CFStringRef;
 
             fn SMJobBless(
@@ -602,7 +603,7 @@ impl Authorization {
 
         let c_cmd = cstring_or_err!(command)?;
 
-        let mut c_args = arguments.iter().map(|a| a.as_ptr() as _).collect::<Vec<_>>();
+        let mut c_args = arguments.iter().map(|a| a.as_ptr().cast_mut()).collect::<Vec<_>>();
         c_args.push(std::ptr::null_mut());
 
         let mut pipe: *mut libc::FILE = std::ptr::null_mut();

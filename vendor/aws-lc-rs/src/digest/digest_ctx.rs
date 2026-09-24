@@ -1,9 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR ISC
 
+use crate::aws_lc::{
+    EVP_DigestInit_ex, EVP_MD_CTX_cleanup, EVP_MD_CTX_copy, EVP_MD_CTX_init, EVP_MD_CTX,
+};
 use crate::digest::{match_digest_type, Algorithm};
 use crate::error::Unspecified;
-use aws_lc::{EVP_DigestInit_ex, EVP_MD_CTX_cleanup, EVP_MD_CTX_copy, EVP_MD_CTX_init, EVP_MD_CTX};
 use core::mem::MaybeUninit;
 use core::ptr::null_mut;
 
@@ -14,9 +16,9 @@ impl DigestContext {
         let evp_md_type = match_digest_type(&algorithm.id);
         let mut dc = Self::new_uninit();
         unsafe {
-            if 1 != EVP_DigestInit_ex(dc.as_mut_ptr(), *evp_md_type, null_mut()) {
+            if 1 != EVP_DigestInit_ex(dc.as_mut_ptr(), evp_md_type.as_const_ptr(), null_mut()) {
                 return Err(Unspecified);
-            };
+            }
             Ok(dc)
         }
     }
@@ -63,7 +65,7 @@ impl DigestContext {
             // https://github.com/aws/aws-lc/blob/98ccf4a316401112943bed604562102ad52efac6/include/openssl/digest.h#L280
             if 1 != EVP_MD_CTX_copy(dc.as_mut_ptr(), self.as_ptr()) {
                 return Err("EVP_MD_CTX_copy failed");
-            };
+            }
             Ok(Self(dc.assume_init()))
         }
     }

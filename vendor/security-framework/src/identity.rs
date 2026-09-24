@@ -2,6 +2,7 @@
 
 use core_foundation::base::{TCFType, ToVoid};
 use core_foundation::dictionary::CFMutableDictionary;
+use core_foundation::{declare_TCFType, impl_TCFType};
 use security_framework_sys::base::SecIdentityRef;
 use security_framework_sys::identity::{
     SecIdentityCopyCertificate, SecIdentityCopyPrivateKey, SecIdentityGetTypeID,

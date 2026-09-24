@@ -1,16 +1,5 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2014, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #ifndef OPENSSL_HEADER_RAND_H
 #define OPENSSL_HEADER_RAND_H
@@ -25,6 +14,8 @@ extern "C" {
 // Random number generation.
 
 
+#define RAND_PRED_RESISTANCE_LEN (32)
+
 // RAND_bytes writes |len| bytes of random data to |buf| and returns one. In the
 // event that sufficient random data can not be obtained, |abort| is called.
 OPENSSL_EXPORT int RAND_bytes(uint8_t *buf, size_t len);
@@ -33,37 +24,27 @@ OPENSSL_EXPORT int RAND_bytes(uint8_t *buf, size_t len);
 // Consumers should call |RAND_bytes| directly.
 OPENSSL_EXPORT int RAND_priv_bytes(uint8_t *buf, size_t len);
 
+// RAND_public_bytes writes |len| bytes of random data to |buf| and returns one.
+// In the event that sufficient random data can not be obtained, |abort| is
+// called. |RAND_public_bytes| and |RAND_bytes| do not use the same state to
+// generate output.
+OPENSSL_EXPORT int RAND_public_bytes(uint8_t *out, size_t out_len);
+
+// RAND_bytes_with_user_prediction_resistance is functionally equivalent to
+// |RAND_bytes| but also provides a way for the caller to inject prediction
+// resistance material using the argument |user_pred_resistance|.
+// |user_pred_resistance| must not be NULL and |user_pred_resistance| must be
+// filled with |RAND_PRED_RESISTANCE_LEN| bytes.
+OPENSSL_EXPORT int RAND_bytes_with_user_prediction_resistance(uint8_t *out,
+  size_t out_len, const uint8_t user_pred_resistance[RAND_PRED_RESISTANCE_LEN]);
 
 // Obscure functions.
-
-#if !defined(OPENSSL_WINDOWS)
-// RAND_enable_fork_unsafe_buffering enables efficient buffered reading of
-// /dev/urandom. It adds an overhead of a few KB of memory per thread. It must
-// be called before the first call to |RAND_bytes|.
-//
-// |fd| must be -1. We no longer support setting the file descriptor with this
-// function.
-//
-// It has an unusual name because the buffer is unsafe across calls to |fork|.
-// Hence, this function should never be called by libraries.
-OPENSSL_EXPORT void RAND_enable_fork_unsafe_buffering(int fd);
-#endif
 
 #if defined(BORINGSSL_UNSAFE_DETERMINISTIC_MODE)
 // RAND_reset_for_fuzzing resets the fuzzer-only deterministic RNG. This
 // function is only defined in the fuzzer-only build configuration.
 OPENSSL_EXPORT void RAND_reset_for_fuzzing(void);
 #endif
-
-// RAND_get_system_entropy_for_custom_prng writes |len| bytes of random data
-// from a system entropy source to |buf|. The maximum length of entropy which
-// may be requested is 256 bytes. If more than 256 bytes of data is requested,
-// or if sufficient random data can not be obtained, |abort| is called.
-// |RAND_bytes| should normally be used instead of this function. This function
-// should only be used for seed values or where |malloc| should not be called
-// from BoringSSL. This function is not FIPS compliant.
-OPENSSL_EXPORT void RAND_get_system_entropy_for_custom_prng(uint8_t *buf,
-                                                            size_t len);
 
 
 // Deprecated functions

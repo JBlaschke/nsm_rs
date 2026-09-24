@@ -46,7 +46,8 @@ pub trait AsyncRead {
     ///
     /// On success, returns `Poll::Ready(Ok(()))` and places data in the
     /// unfilled portion of `buf`. If no data was read (`buf.filled().len()` is
-    /// unchanged), it implies that EOF has been reached.
+    /// unchanged), it implies that EOF has been reached, or the output buffer
+    /// had zero capacity (i.e. `buf.remaining()` == 0).
     ///
     /// If no data is available for reading, the method returns `Poll::Pending`
     /// and arranges for the current task (via `cx.waker()`) to receive a
@@ -80,7 +81,7 @@ impl<T: ?Sized + AsyncRead + Unpin> AsyncRead for &mut T {
 
 impl<P> AsyncRead for Pin<P>
 where
-    P: DerefMut + Unpin,
+    P: DerefMut,
     P::Target: AsyncRead,
 {
     fn poll_read(
@@ -88,11 +89,12 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        self.get_mut().as_mut().poll_read(cx, buf)
+        crate::util::pin_as_deref_mut(self).poll_read(cx, buf)
     }
 }
 
 impl AsyncRead for &[u8] {
+    #[inline]
     fn poll_read(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -107,6 +109,7 @@ impl AsyncRead for &[u8] {
 }
 
 impl<T: AsRef<[u8]> + Unpin> AsyncRead for io::Cursor<T> {
+    #[inline]
     fn poll_read(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,

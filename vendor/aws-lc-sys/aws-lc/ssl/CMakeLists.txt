@@ -47,33 +47,60 @@ target_compile_definitions(ssl PRIVATE BORINGSSL_IMPLEMENTATION)
 
 target_link_libraries(ssl crypto)
 
-target_include_directories(ssl BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
+target_add_awslc_include_paths(TARGET ssl SCOPE PUBLIC)
 
-target_include_directories(ssl PUBLIC
-  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
+set_target_properties(ssl PROPERTIES
+    OUTPUT_NAME "${SSL_LIB_NAME}")
+
+if(SET_LIB_SONAME)
+  set_target_properties(ssl PROPERTIES
+      VERSION "${SOFTWARE_VERSION}"
+      SOVERSION "${ABI_VERSION}")
+endif()
+
+# Apply symbol versioning for shared libraries. The version script is a
+# checked-in source file, so if versioning is enabled it must be present;
+# apply_version_script() fatal-errors if it is missing rather than silently
+# producing an unversioned library.
+if(ENABLE_SYMBOL_VERSIONING)
+  apply_version_script(
+    TARGET ssl
+    VERSION_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/libssl.map"
+    NAMESPACE "${SYMBOL_VERSION_NAMESPACE}"
+  )
+endif()
 
 if(BUILD_TESTING)
-  # ocsp_integration_test.cc does integration tests with the Amazon Trust
-  # Services OCSP responder. This is ran as its own test executable because
-  # internal sandbox builds cannot properly connect with the host.
-  # Since the integration test relies on libssl functionalities to retrieve
-  # the certification chain from a host, this integration test dimension is
-  # built with libssl and libcrypto.
-  add_executable(
-    ${INTEGRATION_TEST_EXEC}
+  # Tests that connect to a live, remote host. Kept as its own executable, and
+  # deliberately out of util/all_tests.json, so the default test run stays
+  # hermetic; environments without outbound access (e.g. internal sandbox
+  # builds) simply do not run it. Built against libssl and libcrypto because
+  # these tests use libssl to retrieve a certificate chain from a host.
+  # Skip on Generic systems (e.g., WASI) which don't have BSD sockets.
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Generic")
+    add_executable(
+      ${INTEGRATION_TEST_EXEC}
 
-    ../crypto/ocsp/ocsp_integration_test.cc
-    ../tool/transport_common.cc
-    ../tool/fd.cc
+      ../crypto/ocsp/ocsp_integration_test.cc
+      ../tool-openssl/s_client_integration_test.cc
 
-    $<TARGET_OBJECTS:crypto_test_data>
-  )
-  target_link_libraries(${INTEGRATION_TEST_EXEC}
-          boringssl_gtest_main ssl )
-  target_include_directories(${INTEGRATION_TEST_EXEC} BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
-  add_dependencies(all_tests ${INTEGRATION_TEST_EXEC})
-  set_test_location(${INTEGRATION_TEST_EXEC})
+      # Link closure for SClientTool.
+      ../tool-openssl/ordered_args.cc
+      ../tool-openssl/s_client.cc
+      ../tool/args.cc
+      ../tool/client.cc
+      ../tool/fd.cc
+      ../tool/file.cc
+      ../tool/transport_common.cc
+
+      $<TARGET_OBJECTS:crypto_test_data>
+    )
+    target_link_libraries(${INTEGRATION_TEST_EXEC}
+            boringssl_gtest_main ssl )
+    target_add_awslc_include_paths(TARGET ${INTEGRATION_TEST_EXEC} SCOPE PRIVATE)
+    add_dependencies(all_tests ${INTEGRATION_TEST_EXEC})
+    set_test_location(${INTEGRATION_TEST_EXEC})
+  endif()
 
   add_executable(
     ${SSL_TEST_EXEC}
@@ -81,13 +108,24 @@ if(BUILD_TESTING)
     ../crypto/test/file_util.cc
     span_test.cc
     ssl_test.cc
+    ssl_client_hello_test.cc
     ssl_c_test.c
+    ssl_key_share_test.cc
+    ssl_alps_test.cc
+    ssl_common_test.cc
+    ssl_misc_test.cc
+    ssl_version_test.cc
+    ssl_ech_test.cc
+    ssl_quic_test.cc
+    ssl_hybrid_handshake_test.cc
+    ssl_encoding_test.cc
+    ssl_ciphers_test.cc
+    ssl_handshake_test.cc
   )
 
   target_link_libraries(${SSL_TEST_EXEC} boringssl_gtest_main ssl)
+  target_add_awslc_include_paths(TARGET ${SSL_TEST_EXEC} SCOPE PRIVATE)
   set_test_location(${SSL_TEST_EXEC})
-
-  target_include_directories(${SSL_TEST_EXEC} BEFORE PRIVATE ${PROJECT_BINARY_DIR}/symbol_prefix_include)
 
   if(WIN32)
     target_link_libraries(${SSL_TEST_EXEC} ws2_32)
@@ -96,11 +134,21 @@ if(BUILD_TESTING)
   add_subdirectory(test)
 endif()
 
-install(TARGETS ssl
-        EXPORT ssl-targets
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
+if(NOT CMAKE_VERSION VERSION_LESS "3.12")
+  install(TARGETS ssl
+          EXPORT ssl-targets
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            NAMELINK_COMPONENT Development
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+else()
+  install(TARGETS ssl
+          EXPORT ssl-targets
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 if(MSVC AND CMAKE_BUILD_TYPE_LOWER MATCHES "relwithdebinfo" AND FIPS)
   install(FILES $<TARGET_FILE_DIR:ssl>/ssl.pdb DESTINATION ${CMAKE_INSTALL_LIBDIR})

@@ -1,71 +1,15 @@
-/* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
- * project 2006.
- */
-/* ====================================================================
- * Copyright (c) 2006,2007 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com). */
+// Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL project 2006.
+// Copyright (c) 2006,2007 The OpenSSL Project.  All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 #include <openssl/evp.h>
 
 #include <openssl/err.h>
 
+#include "../pqdsa/internal.h"
 #include "../delocate.h"
 #include "../digest/internal.h"
 #include "internal.h"
-
-#if defined(NDEBUG)
-#define CHECK(x) (void) (x)
-#else
-#define CHECK(x) assert(x)
-#endif
 
 enum evp_sign_verify_t {
   evp_sign,
@@ -78,13 +22,25 @@ DEFINE_LOCAL_DATA(struct evp_md_pctx_ops, EVP_MD_pctx_ops) {
 }
 
 static int uses_prehash(EVP_MD_CTX *ctx, enum evp_sign_verify_t op) {
-  return (op == evp_sign) ? (ctx->pctx->pmeth->sign != NULL)
-                          : (ctx->pctx->pmeth->verify != NULL);
+  // Pre-hash modes of ML-DSA that uses an external mu calculation differs from
+  // other signing algorithms, so we specifically check for NIDs of type NID_MLDSAXX.
+  if (ctx->pctx->pkey->type == EVP_PKEY_PQDSA &&
+      ctx->pctx->pkey->pkey.pqdsa_key != NULL) {
+    int nid = ctx->pctx->pkey->pkey.pqdsa_key->pqdsa->nid;
+
+    if (nid == NID_MLDSA44 || nid == NID_MLDSA65 || nid == NID_MLDSA87) {
+      return 0;
+    }
+  }
+
+    return (op == evp_sign) ? (ctx->pctx->pmeth->sign != NULL)
+                            : (ctx->pctx->pmeth->verify != NULL);
 }
 
-static void hmac_update(EVP_MD_CTX *ctx, const void *data, size_t count) {
+static int hmac_update(EVP_MD_CTX *ctx, const void *data, size_t count) {
   HMAC_PKEY_CTX *hctx = ctx->pctx->data;
-  CHECK(HMAC_Update(&hctx->ctx, data, count));
+  // HMAC_Update returns 1 on success and 0 on failure.
+  return HMAC_Update(&hctx->ctx, data, count);
 }
 
 static int HMAC_DigestFinal_ex(EVP_MD_CTX *ctx, uint8_t *out_sig,
@@ -288,7 +244,7 @@ int EVP_DigestSign(EVP_MD_CTX *ctx, uint8_t *out_sig, size_t *out_sig_len,
   }
 
   // This is executed when |uses_prehash| is not true, which is the case for
-  // Ed25519 and Dilithium.
+  // Ed25519 and ML-DSA when in pure mode.
   ret = ctx->pctx->pmeth->sign_message(ctx->pctx, out_sig, out_sig_len, data,
                                        data_len);
 end:
@@ -322,7 +278,7 @@ int EVP_DigestVerify(EVP_MD_CTX *ctx, const uint8_t *sig, size_t sig_len,
   }
 
   // This is executed when |uses_prehash| is not true, which is the case for
-  // Ed25519 and Dilithium.
+  // Ed25519 and ML-DSA when in pure mode.
   ret = ctx->pctx->pmeth->verify_message(ctx->pctx, sig, sig_len, data, len);
 
 end:
@@ -350,4 +306,16 @@ void EVP_MD_CTX_set_pkey_ctx(EVP_MD_CTX *ctx, EVP_PKEY_CTX *pctx) {
     // if |pctx| is null, we remove the flag.
     ctx->flags &= ~EVP_MD_CTX_FLAG_KEEP_PKEY_CTX;
   }
+}
+
+EVP_PKEY_CTX *EVP_MD_CTX_get_pkey_ctx(const EVP_MD_CTX *ctx) {
+  SET_DIT_AUTO_RESET;
+  if(ctx == NULL) {
+    return NULL;
+  }
+  return ctx->pctx;
+}
+
+EVP_PKEY_CTX *EVP_MD_CTX_pkey_ctx(const EVP_MD_CTX *ctx) {
+  return EVP_MD_CTX_get_pkey_ctx(ctx);
 }

@@ -12,10 +12,10 @@ Rustls is used in production at many organizations and projects. We aim to maint
 reasonable API surface stability but the API may evolve as we make changes to accommodate
 new features or performance improvements.
 
-We have a [roadmap](ROADMAP.md) for our future plans. We also have [benchmarks](BENCHMARKING.md) to
+We have a [roadmap](https://github.com/rustls/rustls/blob/rel-0.23/ROADMAP.md) for our future plans. We also have [benchmarks](https://github.com/rustls/rustls/blob/rel-0.23/BENCHMARKING.md) to
 prevent performance regressions and to let you evaluate rustls on your target hardware.
 
-If you'd like to help out, please see [CONTRIBUTING.md](CONTRIBUTING.md).
+If you'd like to help out, please see [CONTRIBUTING.md](https://github.com/rustls/rustls/blob/rel-0.23/CONTRIBUTING.md).
 
 [![Build Status](https://github.com/rustls/rustls/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/rustls/rustls/actions/workflows/build.yml?query=branch%3Amain)
 [![Coverage Status (codecov.io)](https://codecov.io/gh/rustls/rustls/branch/main/graph/badge.svg)](https://codecov.io/gh/rustls/rustls/)
@@ -55,10 +55,10 @@ can replace all cryptography dependencies of rustls.  This is a route to being p
 to a wider set of architectures and environments, or compliance requirements.  See the
 [`crypto::CryptoProvider`] documentation for more details.
 
-Specifying `default-features = false` when depending on rustls will remove the
+Specifying `default-features = false` when depending on rustls will remove the implicit
 dependency on aws-lc-rs.
 
-Rustls requires Rust 1.63 or later. It has an optional dependency on zlib-rs which requires 1.75 or later.
+Rustls requires Rust 1.71 or later. It has an optional dependency on zlib-rs which requires 1.75 or later.
 
 [ring-target-platforms]: https://github.com/briansmith/ring/blob/2e8363b433fa3b3962c877d9ed2e9145612f3160/include/ring-core/target.h#L18-L64
 [`crypto::CryptoProvider`]: https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html
@@ -78,10 +78,10 @@ builder types. See the [`crypto::CryptoProvider`] documentation for more details
 
 #### Built-in providers
 
-Rustls ships with two built-in providers controlled with associated feature flags:
+Rustls ships with two built-in providers controlled by associated crate features:
 
-* [`aws-lc-rs`] - enabled by default, available with the `aws_lc_rs` feature flag enabled.
-* [`ring`] - available with the `ring` feature flag enabled.
+* [`aws-lc-rs`] - enabled by default, available with the `aws_lc_rs` crate feature enabled.
+* [`ring`] - available with the `ring` crate feature enabled.
 
 See the documentation for [`crypto::CryptoProvider`] for details on how providers are
 selected.
@@ -90,17 +90,18 @@ selected.
 
 The community has also started developing third-party providers for Rustls:
 
-* [`rustls-mbedtls-provider`] - a provider that uses [`mbedtls`] for cryptography.
-* [`rustls-openssl`] - a provider that uses [OpenSSL] for cryptography.
-* [`rustls-post-quantum`]: an experimental provider that adds support for post-quantum
-key exchange to the default aws-lc-rs provider.
 * [`boring-rustls-provider`] - a work-in-progress provider that uses [`boringssl`] for
 cryptography.
+* [`rustls-graviola`] - a provider that uses [`graviola`] for cryptography.
+* [`rustls-mbedtls-provider`] - a provider that uses [`mbedtls`] for cryptography.
+* [`rustls-openssl`] - a provider that uses [OpenSSL] for cryptography.
 * [`rustls-rustcrypto`] - an experimental provider that uses the crypto primitives
 from [`RustCrypto`] for cryptography.
 * [`rustls-symcrypt`] - a provider that uses Microsoft's [SymCrypt] library.
 * [`rustls-wolfcrypt-provider`] - a work-in-progress provider that uses [`wolfCrypt`] for cryptography.
 
+[`rustls-graviola`]: https://crates.io/crates/rustls-graviola
+[`graviola`]: https://github.com/ctz/graviola
 [`rustls-mbedtls-provider`]: https://github.com/fortanix/rustls-mbedtls-provider
 [`mbedtls`]: https://github.com/Mbed-TLS/mbedtls
 [`rustls-openssl`]: https://github.com/tofay/rustls-openssl
@@ -111,20 +112,18 @@ from [`RustCrypto`] for cryptography.
 [`boringssl`]: https://github.com/google/boringssl
 [`rustls-rustcrypto`]: https://github.com/RustCrypto/rustls-rustcrypto
 [`RustCrypto`]: https://github.com/RustCrypto
-[`rustls-post-quantum`]: https://crates.io/crates/rustls-post-quantum
 [`rustls-wolfcrypt-provider`]: https://github.com/wolfSSL/rustls-wolfcrypt-provider
 [`wolfCrypt`]: https://www.wolfssl.com/products/wolfcrypt
 
 #### Custom provider
 
-We also provide a simple example of writing your own provider in the [`custom-provider`]
-example. This example implements a minimal provider using parts of the [`RustCrypto`]
-ecosystem.
+We also provide a simple example of writing your own provider in the [custom provider example].
+This example implements a minimal provider using parts of the [`RustCrypto`] ecosystem.
 
 See the [Making a custom CryptoProvider] section of the documentation for more information
 on this topic.
 
-[`custom-provider`]: https://github.com/rustls/rustls/tree/main/provider-example/
+[custom provider example]: https://github.com/rustls/rustls/tree/main/provider-example/
 [`RustCrypto`]: https://github.com/RustCrypto
 [Making a custom CryptoProvider]: https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html#making-a-custom-cryptoprovider
 
@@ -184,7 +183,7 @@ depth=2 CN = ponytown RSA CA
 verify error:num=19:self signed certificate in certificate chain
 hello world
 ^C
-$ echo hello world | cargo run --bin tlsclient-mio -- --cafile test-ca/rsa-2048/ca.cert -p 8443 localhost
+$ echo hello world | cargo run --bin tlsclient-mio -- --cafile test-ca/rsa-2048/ca.cert --port 8443 localhost
 hello world
 ^C
 ```
@@ -207,7 +206,7 @@ of these licenses, at your option.
 
 - Joe Birr-Pixton ([@ctz], Project Founder - full-time funded by [Prossimo])
 - Dirkjan Ochtman ([@djc], Co-maintainer)
-- Daniel McCarney ([@cpu], Co-maintainer - half-time funded by [Prossimo])
+- Daniel McCarney ([@cpu], Co-maintainer)
 - Josh Aas ([@bdaehlie], Project Management)
 
 [@ctz]: https://github.com/ctz

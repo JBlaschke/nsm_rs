@@ -1,16 +1,5 @@
-/* Copyright (c) 2018, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright (c) 2018, Google Inc.
+// SPDX-License-Identifier: ISC
 
 #ifndef OPENSSL_HEADER_CRYPTO_CPU_ARM_LINUX_H
 #define OPENSSL_HEADER_CRYPTO_CPU_ARM_LINUX_H
@@ -28,14 +17,37 @@ extern "C" {
 // The cpuinfo parser lives in a header file so it may be accessible from
 // cross-platform fuzzers without adding code to those platforms normally.
 
-#define HWCAP_NEON (1 << 12)
+#if defined(HWCAP_NEON) && HWCAP_NEON != (1 << 12)
+  #error "HWCAP_NEON is defined but has wrong value (expected (1 << 12))"
+#elif !defined(HWCAP_NEON)
+  #define HWCAP_NEON (1 << 12)
+#endif
 
 // See /usr/include/asm/hwcap.h on an ARM installation for the source of
 // these values.
-#define HWCAP2_AES (1 << 0)
-#define HWCAP2_PMULL (1 << 1)
-#define HWCAP2_SHA1 (1 << 2)
-#define HWCAP2_SHA2 (1 << 3)
+#if defined(HWCAP2_AES) && HWCAP2_AES != (1 << 0)
+  #error "HWCAP2_AES is defined but has wrong value (expected (1 << 0))"
+#elif !defined(HWCAP2_AES)
+  #define HWCAP2_AES (1 << 0)
+#endif
+
+#if defined(HWCAP2_PMULL) && HWCAP2_PMULL != (1 << 1)
+  #error "HWCAP2_PMULL is defined but has wrong value (expected (1 << 1))"
+#elif !defined(HWCAP2_PMULL)
+  #define HWCAP2_PMULL (1 << 1)
+#endif
+
+#if defined(HWCAP2_SHA1) && HWCAP2_SHA1 != (1 << 2)
+  #error "HWCAP2_SHA1 is defined but has wrong value (expected (1 << 2))"
+#elif !defined(HWCAP2_SHA1)
+  #define HWCAP2_SHA1 (1 << 2)
+#endif
+
+#if defined(HWCAP2_SHA2) && HWCAP2_SHA2 != (1 << 3)
+  #error "HWCAP2_SHA2 is defined but has wrong value (expected (1 << 3))"
+#elif !defined(HWCAP2_SHA2)
+  #define HWCAP2_SHA2 (1 << 3)
+#endif
 
 typedef struct {
   const char *data;

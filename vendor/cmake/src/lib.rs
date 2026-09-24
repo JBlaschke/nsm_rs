@@ -275,8 +275,11 @@ impl Config {
     /// Registers a dependency for this compilation on the native library built
     /// by Cargo previously.
     ///
-    /// This registration will modify the `CMAKE_PREFIX_PATH` environment
-    /// variable for the build system generation step.
+    /// This registration will update the `CMAKE_PREFIX_PATH` environment
+    /// variable for the [`build`][Self::build] system generation step.  The
+    /// path will be updated to include the content of the environment
+    /// variable `DEP_XXX_ROOT`, where `XXX` is replaced with the uppercased
+    /// value of `dep` (if that variable exists).
     pub fn register_dep(&mut self, dep: &str) -> &mut Config {
         self.deps.push(dep.to_string());
         self
@@ -384,6 +387,7 @@ impl Config {
     ///
     /// This does not otherwise affect any CXX flags, i.e. it does not set
     /// -std=c++11 or -stdlib=libc++.
+    #[deprecated = "no longer does anything, C++ is determined based on `cc::Build`, and the macOS issue has been fixed upstream"]
     pub fn uses_cxx11(&mut self) -> &mut Config {
         self.uses_cxx11 = true;
         self
@@ -437,13 +441,7 @@ impl Config {
     pub fn build(&mut self) -> PathBuf {
         let target = match self.target.clone() {
             Some(t) => t,
-            None => {
-                let mut t = getenv_unwrap("TARGET");
-                if t.ends_with("-darwin") && self.uses_cxx11 {
-                    t += "11"
-                }
-                t
-            }
+            None => getenv_unwrap("TARGET"),
         };
         let host = self.host.clone().unwrap_or_else(|| getenv_unwrap("HOST"));
 
@@ -556,9 +554,11 @@ impl Config {
             .out_dir
             .clone()
             .unwrap_or_else(|| PathBuf::from(getenv_unwrap("OUT_DIR")));
-        let build = dst.join("build");
-        self.maybe_clear(&build);
-        let _ = fs::create_dir_all(&build);
+
+        let build_dir = fix_build_dir(&dst.join("build"));
+
+        self.maybe_clear(&build_dir);
+        let _ = fs::create_dir_all(&build_dir);
 
         // Add all our dependencies to our cmake paths
         let mut cmake_prefix_path = Vec::new();
@@ -584,7 +584,12 @@ impl Config {
             cmd.arg("--debug-output");
         }
 
-        cmd.arg(&self.path).current_dir(&build);
+        cmd.arg(&self.path).current_dir(&build_dir);
+
+        if version >= Version::new(3, 13) {
+            cmd.arg("-B").arg(&build_dir);
+        }
+
         let mut is_ninja = false;
         if let Some(ref generator) = generator {
             is_ninja = generator.to_string_lossy().contains("Ninja");
@@ -818,7 +823,7 @@ impl Config {
             cmd.env(k, v);
         }
 
-        if self.always_configure || !build.join("CMakeCache.txt").exists() {
+        if self.always_configure || !build_dir.join("CMakeCache.txt").exists() {
             cmd.args(&self.configure_args);
             run(cmd.env("CMAKE_PREFIX_PATH", cmake_prefix_path), "cmake");
         } else {
@@ -827,7 +832,7 @@ impl Config {
 
         // And build!
         let mut cmd = self.cmake_build_command(&target);
-        cmd.current_dir(&build);
+        cmd.current_dir(&build_dir);
 
         for (k, v) in c_compiler.env().iter().chain(&self.env) {
             cmd.env(k, v);
@@ -835,18 +840,24 @@ impl Config {
 
         // If the generated project is Makefile based we should carefully transfer corresponding CARGO_MAKEFLAGS
         let mut use_jobserver = false;
-        if fs::metadata(build.join("Makefile")).is_ok() {
+        if fs::metadata(build_dir.join("Makefile")).is_ok() {
             match env::var_os("CARGO_MAKEFLAGS") {
-                // Only do this on non-windows and non-bsd
-                // On Windows, we could be invoking make instead of
-                // mingw32-make which doesn't work with our jobserver
-                // bsdmake also does not work with our job server
+                // Only do this on non-windows, non-bsd, and non-macos (unless a named pipe
+                // jobserver is available)
+                // * On Windows, we could be invoking make instead of
+                //   mingw32-make which doesn't work with our jobserver
+                // * bsdmake also does not work with our job server
+                // * On macOS, CMake blocks propagation of the jobserver's file descriptors to make
+                //   However, if the jobserver is based on a named pipe, this will be available to
+                //   the build.
                 Some(ref makeflags)
                     if !(cfg!(windows)
                         || cfg!(target_os = "openbsd")
                         || cfg!(target_os = "netbsd")
                         || cfg!(target_os = "freebsd")
-                        || cfg!(target_os = "dragonfly")) =>
+                        || cfg!(target_os = "dragonfly")
+                        || (cfg!(target_os = "macos")
+                            && !uses_named_pipe_jobserver(makeflags))) =>
                 {
                     use_jobserver = true;
                     cmd.env("MAKEFLAGS", makeflags);
@@ -855,7 +866,7 @@ impl Config {
             }
         }
 
-        cmd.arg("--build").arg(&build);
+        cmd.arg("--build").arg(&build_dir);
 
         if !self.no_build_target {
             let target = self
@@ -886,8 +897,9 @@ impl Config {
         dst
     }
 
-    fn cmake_executable(&mut self) -> OsString {
+    fn cmake_executable(&mut self, target: &str) -> OsString {
         self.getenv_target_os("CMAKE")
+            .or_else(|| find_cmake_executable(target))
             .unwrap_or_else(|| OsString::from("cmake"))
     }
 
@@ -901,10 +913,10 @@ impl Config {
                 .getenv_target_os("EMCMAKE")
                 .unwrap_or_else(|| OsString::from("emcmake"));
             let mut cmd = Command::new(emcmake);
-            cmd.arg(self.cmake_executable());
+            cmd.arg(self.cmake_executable(target));
             cmd
         } else {
-            Command::new(self.cmake_executable())
+            Command::new(self.cmake_executable(target))
         }
     }
 
@@ -914,10 +926,10 @@ impl Config {
                 .getenv_target_os("EMMAKE")
                 .unwrap_or_else(|| OsString::from("emmake"));
             let mut cmd = Command::new(emmake);
-            cmd.arg(self.cmake_executable());
+            cmd.arg(self.cmake_executable(target));
             cmd
         } else {
-            Command::new(self.cmake_executable())
+            Command::new(self.cmake_executable(target))
         }
     }
 
@@ -951,6 +963,7 @@ impl Config {
         use cc::windows_registry::{find_vs_version, VsVers};
 
         let base = match find_vs_version() {
+            Ok(VsVers::Vs18) => "Visual Studio 18 2026",
             Ok(VsVers::Vs17) => "Visual Studio 17 2022",
             Ok(VsVers::Vs16) => "Visual Studio 16 2019",
             Ok(VsVers::Vs15) => "Visual Studio 15 2017",
@@ -991,7 +1004,11 @@ impl Config {
         // CMake will apparently store canonicalized paths which normally
         // isn't relevant to us but we canonicalize it here to ensure
         // we're both checking the same thing.
-        let path = fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone());
+        let path = self
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| self.path.to_owned());
+
         let mut f = match File::open(dir.join("CMakeCache.txt")) {
             Ok(f) => f,
             Err(..) => return,
@@ -1072,7 +1089,7 @@ impl Default for Version {
 }
 
 fn run(cmd: &mut Command, program: &str) {
-    println!("running: {:?}", cmd);
+    eprintln!("running: {:?}", cmd);
     let status = match cmd.status() {
         Ok(status) => status,
         Err(ref e) if e.kind() == ErrorKind::NotFound => {
@@ -1115,8 +1132,99 @@ fn fail(s: &str) -> ! {
     panic!("\n{}\n\nbuild script failed, must exit now", s)
 }
 
+/// Returns whether the given MAKEFLAGS indicate that there is an available
+/// jobserver that uses a named pipe (fifo)
+fn uses_named_pipe_jobserver(makeflags: &OsStr) -> bool {
+    makeflags
+        .to_string_lossy()
+        // auth option as defined in
+        // https://www.gnu.org/software/make/manual/html_node/POSIX-Jobserver.html#POSIX-Jobserver
+        .contains("--jobserver-auth=fifo:")
+}
+
+#[cfg(not(windows))]
+fn fix_build_dir(path: &Path) -> PathBuf {
+    path.into()
+}
+
+// Change relative paths to absolute to workaround #200 where
+// some flavors of CMake on Windows otherwise fail with
+// `error MSB1009: Project file does not exist`
+#[cfg(windows)]
+fn fix_build_dir(path: &Path) -> PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::ptr::null_mut;
+    if path.is_absolute() {
+        return path.into();
+    }
+    #[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
+    #[cfg_attr(
+        target_arch = "x86",
+        link(
+            name = "kernel32",
+            kind = "raw-dylib",
+            import_name_type = "undecorated"
+        )
+    )]
+    extern "system" {
+        fn GetFullPathNameW(
+            lpfilename: *const u16,
+            nbufferlength: u32,
+            lpbuffer: *mut u16,
+            lpfilepart: *mut *mut u16,
+        ) -> u32;
+    }
+
+    // FIXME(ChrisDenton): once MSRV is >=1.79 use `std::path::absolute` instead of this.
+    let path_utf16: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    unsafe {
+        // Calling `GetFullPathNameW` with a buffer of length zero will return the necessary buffer size.
+        let expected_len = GetFullPathNameW(path_utf16.as_ptr(), 0, null_mut(), null_mut());
+        let mut buffer = vec![0; expected_len as usize];
+        let len = GetFullPathNameW(
+            path_utf16.as_ptr(),
+            expected_len,
+            buffer.as_mut_ptr(),
+            null_mut(),
+        ) as usize;
+        if len == 0 || len > buffer.len() {
+            // Failed to get the absolute path. Fallback to using the original path.
+            return path.into();
+        }
+        // If successful then `len` will be the length of the path that was written to the buffer.
+        buffer.truncate(len);
+        OsString::from_wide(&buffer).into()
+    }
+}
+
+#[cfg(windows)]
+fn find_cmake_executable(target: &str) -> Option<OsString> {
+    use cc::windows_registry::find_tool;
+
+    // Try to find cmake.exe bundled with MSVC, but only if there isn't another one in path
+    let cmake_in_path = env::split_paths(&env::var_os("PATH").unwrap_or(OsString::new()))
+        .any(|p| p.join("cmake.exe").exists());
+    if cmake_in_path {
+        None
+    } else {
+        find_tool(target, "devenv").and_then(|t| {
+            t.path()
+                .join("..\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe")
+                .canonicalize()
+                .ok()
+                .map(OsString::from)
+        })
+    }
+}
+
+#[cfg(not(windows))]
+fn find_cmake_executable(_target: &str) -> Option<OsString> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
+    use super::uses_named_pipe_jobserver;
     use super::Version;
 
     #[test]
@@ -1131,5 +1239,15 @@ CMake suite maintained and supported by Kitware (kitware.com/cmake).
         assert!(Version::new(3, 22) < Version::new(3, 23));
 
         let _v = Version::from_command("cmake".as_ref()).unwrap();
+    }
+
+    #[test]
+    fn test_uses_fifo_jobserver() {
+        assert!(uses_named_pipe_jobserver(
+            "-j --jobserver-auth=fifo:/foo".as_ref()
+        ));
+        assert!(!uses_named_pipe_jobserver(
+            "-j --jobserver-auth=8:9".as_ref()
+        ));
     }
 }

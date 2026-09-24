@@ -1,3 +1,79 @@
+# 1.2.3
+
+* Running under Wine should work again
+  (https://github.com/tokio-rs/mio/pull/1974).
+* Fixed an issue with the UDS listener not reregistering readiness correctly
+  when using the `poll(2)` implementation
+  (https://github.com/tokio-rs/mio/pull/1998).
+* NetBSD, OpenBSD and DragonflyBSD are switched to using `EVFILT_USER` based
+  `Waker`, one that was already used on FreeBSD and macOS
+  (https://github.com/tokio-rs/mio/pull/1993).
+
+# 1.2.2
+
+* Add support for Solaris using event ports
+  (https://github.com/tokio-rs/mio/pull/1962).
+* Add experiment support for NuttX using `poll(2)`
+  (https://github.com/tokio-rs/mio/pull/1966).
+
+# 1.2.1
+
+* Add support for horizonOS/n3ds
+  (https://github.com/tokio-rs/mio/pull/1951).
+* On Windows set `WSA_FLAG_NO_HANDLE_INHERIT` for socket creation
+  (https://github.com/tokio-rs/mio/pull/1946).
+* Fixed a race condition in Windows' `NamedPipe::connect`
+  (https://github.com/tokio-rs/mio/pull/1954).
+* Fixed a casting issue when polling with a timeout larger than ~24.8 days on Linux
+  (https://github.com/tokio-rs/mio/pull/1948).
+
+# 1.2.0
+
+* Support was added for WASM Preview 2
+  (https://github.com/tokio-rs/mio/pull/1931).
+* Implement `AsFd` for `Registry`
+  (https://github.com/tokio-rs/mio/pull/1936).
+* The backlog size for listeners were changed to match std lib
+  (https://github.com/tokio-rs/mio/pull/1934).
+
+# 1.1.1
+
+* Handle `ERROR_MORE_DATA` when scheduling reads for Window named pipes
+  (https://github.com/tokio-rs/mio/pull/1921).
+* Fix compilation error on NetBSD due to changes in types in the libc crate
+  (https://github.com/tokio-rs/mio/pull/1923).
+
+# 1.1.0
+
+MSRV was increased to 1.71 to support windows-sys v0.61.
+
+* Changed the backlog passed to listen to match the standard library, this
+  should effect most users but see the pr for details
+  (https://github.com/tokio-rs/mio/pull/1896).
+* Fixed an issue where `TcpStream::peek` returned `WouldBlock` the events would
+  stop working correctly
+  (https://github.com/tokio-rs/mio/pull/1895).
+* Added support for cygwin
+  (https://github.com/tokio-rs/mio/pull/1871).
+* Make `Event` `Send` and `Sync` on platforms using kqueue
+  (https://github.com/tokio-rs/mio/pull/1906).
+* Fixed an issue where it would reach `unreachable!` code in `NamedPipe`
+  (https://github.com/tokio-rs/mio/pull/1903).
+* Updated windows-sys to 0.60 and 0.61
+  (https://github.com/tokio-rs/mio/pull/1891
+  and https://github.com/tokio-rs/mio/pull/1901).
+
+# 1.0.4
+
+* Update windows-sys to 0.59
+  (https://github.com/tokio-rs/mio/pull/1857).
+* Fix build failure of uds tests on Android
+  (https://github.com/tokio-rs/mio/pull/1847).
+* Fix set nonblocking socket on AIX
+  (https://github.com/tokio-rs/mio/pull/1867).
+* Emit a better error when using mio on WASM
+  (https://github.com/tokio-rs/mio/pull/1856).
+
 # 1.0.3
 
 * Implement more I/O safety traits
@@ -25,7 +101,7 @@
 * Fixed an issue where accepting on a UDS socket without sometime pass an address
   with a NULL byte to SocketAddr::from_pathname
   (https://github.com/tokio-rs/mio/pull/1817).
-* Internal cleanups that should make the `cfg` sitations easier to follow
+* Internal cleanups that should make the `cfg` situations easier to follow
   (https://github.com/tokio-rs/mio/pull/1812,
   https://github.com/tokio-rs/mio/pull/1813).
 
@@ -550,7 +626,7 @@ information.
 - Work around Linux kernel < 2.6.37 bug on 32-bits making timeouts longer then
   ~30 minutes effectively infinite
   (https://github.com/tokio-rs/mio/commit/e7cba59950e9c9fa6194e29b5b1e72029e3df455).
-- Update miow and net2 depedencies to get rid of invalid memory layout assumption
+- Update miow and net2 dependencies to get rid of invalid memory layout assumption
   (https://github.com/tokio-rs/mio/commit/13f02ac0a86d7c0c0001e5ff8960a0b4340d075c).
 
 # 0.6.22 (May 01, 2020)

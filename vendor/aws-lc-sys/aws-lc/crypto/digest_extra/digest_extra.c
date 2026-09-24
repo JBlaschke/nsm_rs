@@ -1,71 +1,22 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
- *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.] */
+// Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
-#include <openssl/digest.h>
 
 #include <string.h>
 
+#include <openssl/base.h>
 #include <openssl/blake2.h>
 #include <openssl/bytestring.h>
+#include <openssl/digest.h>
+#include <openssl/md4.h>
 #include <openssl/obj.h>
 #include <openssl/nid.h>
 
 #include "../asn1/internal.h"
 #include "../internal.h"
 #include "../fipsmodule/digest/internal.h"
+#include "../fipsmodule/sha/internal.h"
+#include "../keccak/internal.h"
 
 
 struct nid_to_digest {
@@ -92,6 +43,11 @@ static const struct nid_to_digest nid_to_digest_mapping[] = {
     {NID_sha3_512, EVP_sha3_512, SN_sha3_512, LN_sha3_512},
     {NID_shake128, EVP_shake128, SN_shake128, LN_shake128},
     {NID_shake256, EVP_shake256, SN_shake256, LN_shake256},
+    // Keccak-256 has no NID/OID (the Ethereum-style 0x01-padding variant is
+    // not standardised), so its names are not in nid.h. Registered by name
+    // only via string literals; "KECCAK-256" matches OpenSSL 3.2+'s provider
+    // name for cross-library lookups, with a lowercase alias for convenience.
+    {NID_undef, EVP_keccak256, "KECCAK-256", "keccak-256"},
     {NID_md5_sha1, EVP_md5_sha1, SN_md5_sha1, LN_md5_sha1},
     // As a remnant of signing |EVP_MD|s, OpenSSL returned the corresponding
     // hash function when given a signature OID. To avoid unintended lax parsing
@@ -164,6 +120,10 @@ static const EVP_MD *cbs_to_md(const CBS *cbs) {
 }
 
 const EVP_MD *EVP_get_digestbyobj(const ASN1_OBJECT *obj) {
+  if(obj == NULL) {
+    return NULL;
+  }
+
   // Handle objects with no corresponding OID. Note we don't use |OBJ_obj2nid|
   // here to avoid pulling in the OID table.
   if (obj->nid != NID_undef) {
@@ -230,6 +190,7 @@ int EVP_marshal_digest_algorithm(CBB *cbb, const EVP_MD *md) {
     return 0;
   }
 
+  // TODO(crbug.com/boringssl/710): Is this correct? See RFC 4055, section 2.1.
   if (!CBB_add_asn1(&algorithm, &null, CBS_ASN1_NULL) ||
       !CBB_flush(cbb)) {
     return 0;
@@ -251,10 +212,42 @@ const EVP_MD *EVP_get_digestbyname(const char *name) {
   return NULL;
 }
 
+static void md4_init(EVP_MD_CTX *ctx) {
+  AWSLC_ASSERT(MD4_Init(ctx->md_data));
+}
+
+static int md4_update(EVP_MD_CTX *ctx, const void *data, size_t count) {
+  // MD4_Update always returns 1. Internally called function
+  // |crypto_md32_update| is void. For test consistency and future
+  // compatibility, the return value is propagated and returned
+  return MD4_Update(ctx->md_data, data, count);
+}
+
+static void md4_final(EVP_MD_CTX *ctx, uint8_t *out) {
+  AWSLC_ASSERT(MD4_Final(out, ctx->md_data));
+}
+
+static const EVP_MD evp_md_md4 = {
+  NID_md4,
+  MD4_DIGEST_LENGTH,
+  0,
+  md4_init,
+  md4_update,
+  md4_final,
+  64,
+  sizeof(MD4_CTX),
+  NULL, // finalXOF
+  NULL  // squeezeXOF
+};
+
+const EVP_MD *EVP_md4(void) { return &evp_md_md4; }
+
 static void blake2b256_init(EVP_MD_CTX *ctx) { BLAKE2B256_Init(ctx->md_data); }
 
-static void blake2b256_update(EVP_MD_CTX *ctx, const void *data, size_t len) {
+static int blake2b256_update(EVP_MD_CTX *ctx, const void *data, size_t len) {
+  // BLAKE2B256_Update is a void function
   BLAKE2B256_Update(ctx->md_data, data, len);
+  return 1;
 }
 
 static void blake2b256_final(EVP_MD_CTX *ctx, uint8_t *md) {
@@ -270,14 +263,49 @@ static const EVP_MD evp_md_blake2b256 = {
   blake2b256_final,
   BLAKE2B_CBLOCK,
   sizeof(BLAKE2B_CTX),
-  /*finalXOf*/ NULL,
+  /*finalXOf*/   NULL,
+  /*squeezeXOf*/ NULL
 };
 
 const EVP_MD *EVP_blake2b256(void) { return &evp_md_blake2b256; }
 
+// Keccak-256 (Ethereum-style, 0x01 padding). NOT FIPS-approved, no OID.
+static void keccak256_init(EVP_MD_CTX *ctx) {
+  AWSLC_ASSERT(Keccak256_Init(ctx->md_data));
+}
+
+static int keccak256_update(EVP_MD_CTX *ctx, const void *data, size_t len) {
+  return Keccak256_Update(ctx->md_data, data, len);
+}
+
+static void keccak256_final(EVP_MD_CTX *ctx, uint8_t *md) {
+  AWSLC_ASSERT(Keccak256_Final(md, ctx->md_data));
+}
+
+// |EVP_MD_FLAG_DIGALGID_ABSENT| matches OpenSSL 3.2+'s
+// |PROV_DIGEST_FLAG_ALGID_ABSENT| on KECCAK-{224,256,384,512}. With
+// |NID_undef| this is effectively unreachable in current AWS-LC code paths
+// (|EVP_marshal_digest_algorithm| rejects digests without a known OID before
+// inspecting flags), but we set it for parity with OpenSSL and to remain
+// correct if any downstream caller starts honouring the flag.
+static const EVP_MD evp_md_keccak256 = {
+  NID_undef,
+  KECCAK256_DIGEST_LENGTH,
+  EVP_MD_FLAG_DIGALGID_ABSENT,
+  keccak256_init,
+  keccak256_update,
+  keccak256_final,
+  KECCAK256_CBLOCK,
+  sizeof(KECCAK1600_CTX),
+  /*finalXOF=*/   NULL,
+  /*squeezeXOF=*/ NULL
+};
+
+const EVP_MD *EVP_keccak256(void) { return &evp_md_keccak256; }
+
 static void null_init(EVP_MD_CTX *ctx) {}
 
-static void null_update(EVP_MD_CTX *ctx, const void *data, size_t count) {}
+static int null_update(EVP_MD_CTX *ctx, const void *data, size_t count) { return 1;}
 
 static void null_final(EVP_MD_CTX *ctx, unsigned char *md) {}
 
@@ -290,7 +318,8 @@ static const EVP_MD evp_md_null = {
   null_final,
   0,
   sizeof(EVP_MD_CTX),
-  NULL,
+  /*finalXOf*/   NULL,
+  /*squeezeXOf*/ NULL
 };
 
 const EVP_MD *EVP_md_null(void) { return &evp_md_null; }
