@@ -50,6 +50,8 @@ version: 1 (the first versioned format).
 
 ### Added
 
+- A license: the BSD 3-Clause License (`LICENSE`, `license` field in
+  `Cargo.toml`). The repository had none before.
 - A library crate (`nsm`) with the binary as a thin front-end; every operation
   is a typed function in `nsm::ops`.
 - Four transports from one implementation: TCP, TCP+TLS (`tls://`, new),

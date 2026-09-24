@@ -8,8 +8,8 @@ repository = "https://github.com/JBlaschke/nsm_rs"
 readme = "README.md"
 keywords = ["hpc", "service-mesh", "broker", "networking"]
 categories = ["network-programming", "command-line-utilities"]
-# Built and deployed from this repository, never published to crates.io (and
-# a LICENSE is still to be chosen, see docs/PLAN.md section 2).
+license = "BSD-3-Clause"
+# Built and deployed from this repository, not published to crates.io.
 publish = false
 
 [lib]

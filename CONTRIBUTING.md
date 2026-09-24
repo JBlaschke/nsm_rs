@@ -113,3 +113,9 @@ Dependencies are vendored (decision D1 in [`docs/PLAN.md`](docs/PLAN.md)).
 - The markdown guides in `docs/` and the README are rendered to HTML by
   `scripts/render-docs.sh` (pandoc) and published together with the rustdoc
   by the Pages workflow. Run the script locally to check a change renders.
+
+## License
+
+NSM is licensed under the BSD 3-Clause License ([`LICENSE`](LICENSE)). By
+contributing you agree that your contributions are licensed under the same
+terms.

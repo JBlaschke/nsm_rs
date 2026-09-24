@@ -45,7 +45,7 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           name="nsm-${version}-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/nsm" README.md CHANGELOG.md "dist/$name/"
+          cp "target/${{ matrix.target }}/release/nsm" README.md CHANGELOG.md LICENSE "dist/$name/"
           cp -R docs "dist/$name/docs"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")

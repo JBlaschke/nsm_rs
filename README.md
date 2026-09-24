@@ -379,5 +379,8 @@ API documentation (`cargo doc`) and these pages are published by CI to
 set to "GitHub Actions" for the deploy step to take effect). Tagging `vX.Y.Z`
 runs the release workflow: static musl binaries (`ring`), glibc and macOS
 binaries (`aws-lc-rs`), a vendored source tarball for air-gapped builds, and
-the container image on GHCR. No license has been chosen for this repository
-yet; see the plan.
+the container image on GHCR.
+
+## License
+
+NSM is distributed under the BSD 3-Clause License; see [`LICENSE`](./LICENSE).

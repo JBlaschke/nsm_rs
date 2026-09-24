@@ -35,9 +35,6 @@ allow = [
     "CC0-1.0",
     "Unlicense",
 ]
-# `nsm` itself carries no license field yet (`publish = false`; choosing a
-# LICENSE is on the maintainer's list in docs/PLAN.md section 2).
-private = { ignore = true }
 
 [bans]
 multiple-versions = "warn"
