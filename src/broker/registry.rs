@@ -433,6 +433,20 @@ impl Registry {
         }
     }
 
+    /// Registrations (services plus clients) whose advertised bind host is
+    /// `host`; used for the per-host admission cap.
+    pub fn count_for_host(&self, host: &str) -> usize {
+        self.services
+            .values()
+            .filter(|s| s.record.bind_addr.host == host)
+            .count()
+            + self
+                .clients
+                .values()
+                .filter(|c| c.record.bind_addr.host == host)
+                .count()
+    }
+
     // ----- liveness ---------------------------------------------------------
 
     /// Record that the party answered (a heartbeat succeeded or a ping

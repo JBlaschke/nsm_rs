@@ -7,7 +7,7 @@ use tracing::info;
 
 use super::handler::BrokerHandler;
 use super::monitor::Broker;
-use crate::config::{Limits, Timing, TlsPaths};
+use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::Addr;
 use crate::transport::{self, Client, Server};
 use crate::Result;
@@ -24,6 +24,8 @@ pub struct ListenOpts {
     pub timing: Timing,
     /// Size and count limits.
     pub limits: Limits,
+    /// Admission policy.
+    pub policy: BrokerPolicy,
 }
 
 /// A running broker.
@@ -74,6 +76,7 @@ pub async fn listen(opts: ListenOpts, shutdown: CancellationToken) -> Result<Bro
         client,
         opts.timing.clone(),
         opts.limits.clone(),
+        opts.policy.clone(),
         shutdown.child_token(),
     );
     broker.start_sweeper();

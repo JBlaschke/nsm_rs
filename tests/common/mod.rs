@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use nsm::broker::listen::{listen, BrokerHandle, ListenOpts};
 use nsm::broker::monitor::{Broker, PartySummary};
-use nsm::config::{Limits, Timing, TlsPaths};
+use nsm::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use nsm::net::{Addr, Transport};
 use nsm::ops::NetOpts;
 use nsm::party::{ClaimOpts, PartyOpts, PublishOpts, Session};
@@ -67,6 +67,7 @@ pub fn test_certs() -> (TempDir, TlsPaths) {
             cert: Some(cert),
             key: Some(key),
             root_ca: Some(ca),
+            system_roots: false,
         },
     )
 }
@@ -117,6 +118,10 @@ pub struct Cluster {
 
 impl Cluster {
     pub async fn start(transport: Transport) -> Cluster {
+        Self::start_with(transport, BrokerPolicy::default()).await
+    }
+
+    pub async fn start_with(transport: Transport, policy: BrokerPolicy) -> Cluster {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_env("NSM_LOG_LEVEL")
@@ -143,6 +148,7 @@ impl Cluster {
                 tls: net.tls.clone(),
                 timing: net.timing.clone(),
                 limits: net.limits.clone(),
+                policy,
             },
             shutdown.clone(),
         )

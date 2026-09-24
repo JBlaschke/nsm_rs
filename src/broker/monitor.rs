@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::registry::{Party, Registry, Removed};
-use crate::config::{Limits, Timing};
+use crate::config::{BrokerPolicy, Limits, Timing};
 use crate::net::Addr;
 use crate::protocol::{Key, Message, PartyId};
 use crate::transport::Client;
@@ -31,6 +31,7 @@ pub struct Broker {
     registry: Mutex<Registry>,
     client: Arc<Client>,
     timing: Timing,
+    policy: BrokerPolicy,
     tasks: Mutex<HashMap<PartyId, AbortHandle>>,
     shutdown: CancellationToken,
 }
@@ -60,12 +61,14 @@ impl Broker {
         client: Arc<Client>,
         timing: Timing,
         limits: Limits,
+        policy: BrokerPolicy,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         Arc::new(Broker {
             registry: Mutex::new(Registry::new(limits)),
             client,
             timing,
+            policy,
             tasks: Mutex::new(HashMap::new()),
             shutdown,
         })
@@ -74,6 +77,11 @@ impl Broker {
     /// Intervals and thresholds in force.
     pub fn timing(&self) -> &Timing {
         &self.timing
+    }
+
+    /// Admission policy in force.
+    pub fn policy(&self) -> &BrokerPolicy {
+        &self.policy
     }
 
     /// The token that stops the broker's tasks.

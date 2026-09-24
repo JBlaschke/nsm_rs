@@ -11,7 +11,7 @@ use std::net::IpAddr;
 use tokio_util::sync::CancellationToken;
 
 use crate::broker::listen::{listen as start_broker, BrokerHandle, ListenOpts};
-use crate::config::{Limits, Timing, TlsPaths};
+use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{interfaces, Addr, IpVersion, LocalAddr, Selector, Transport};
 use crate::party::{ClaimOpts, PartyOpts, PublishOpts, Session};
 use crate::protocol::{Key, Message, ServiceHandle};
@@ -66,6 +66,8 @@ pub struct ListenRequest {
     pub selector: Selector,
     /// Network settings.
     pub net: NetOpts,
+    /// Admission policy.
+    pub policy: BrokerPolicy,
 }
 
 /// Bind the broker's listener and start its monitor; the returned handle
@@ -78,6 +80,7 @@ pub async fn listen(req: ListenRequest, shutdown: CancellationToken) -> Result<B
             tls: req.net.tls,
             timing: req.net.timing,
             limits: req.net.limits,
+            policy: req.policy,
         },
         shutdown,
     )

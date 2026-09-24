@@ -5,6 +5,7 @@ mod common;
 
 use std::time::Duration;
 
+use nsm::config::BrokerPolicy;
 use nsm::net::Transport;
 use nsm::protocol::PartyId;
 use nsm::{ops, Error};
@@ -232,6 +233,29 @@ async fn garbage_does_not_take_the_broker_down() {
         }
         let service = c.publish(2, 9000).await;
         assert_eq!(service.id(), PartyId(1));
+        c.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn per_host_registration_cap_is_enforced() {
+    with_deadline(async {
+        let c = Cluster::start_with(
+            Transport::Tcp,
+            BrokerPolicy {
+                max_registrations_per_host: 2,
+                ..BrokerPolicy::default()
+            },
+        )
+        .await;
+        let _s1 = c.publish(1, 9001).await;
+        let _s2 = c.publish(1, 9002).await;
+        let err = c.try_claim(1).await.unwrap_err();
+        assert!(
+            matches!(err, Error::Rejected(ref r) if r.contains("too many")),
+            "{err}"
+        );
         c.stop().await;
     })
     .await;
