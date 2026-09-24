@@ -55,4 +55,7 @@ pub mod rest;
 pub mod tls;
 pub mod transport;
 
+#[cfg(test)]
+pub(crate) mod testing;
+
 pub use error::{Error, Result};

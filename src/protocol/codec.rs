@@ -413,4 +413,134 @@ mod tests {
         assert_eq!(buf.len(), 100);
         assert!(matches!(codec.decode_eof(&mut buf), Err(Error::Closed)));
     }
+
+    // ---- randomized properties (deterministic seeds; see crate::testing) ----
+
+    fn random_message(rng: &mut crate::testing::Rng) -> Message {
+        use crate::protocol::ServiceHandle;
+        let token = rng.token();
+        let handle = ServiceHandle {
+            id: PartyId(rng.next_u64()),
+            host: rng.host(),
+            service_port: rng.next_u64() as u16,
+        };
+        match rng.below(13) {
+            0 => Message::Publish {
+                key: rng.next_u64(),
+                service_port: rng.next_u64() as u16,
+                bind_addr: rng.addr(),
+                ping: rng.chance(2),
+            },
+            1 => Message::Claim {
+                key: rng.next_u64(),
+                bind_addr: rng.addr(),
+                ping: rng.chance(2),
+            },
+            2 => Message::Ping {
+                id: PartyId(rng.next_u64()),
+                token,
+            },
+            3 => Message::Send {
+                text: rng.text(300),
+            },
+            4 => Message::Deliver {
+                from: PartyId(rng.next_u64()),
+                token,
+                to: PartyId(rng.next_u64()),
+                text: rng.text(300),
+            },
+            5 => Message::Heartbeat {
+                token,
+                inbox: rng.chance(2).then(|| rng.text(300)),
+                service: rng.chance(2).then_some(handle),
+            },
+            6 => Message::Collect,
+            7 => Message::Registered {
+                id: PartyId(rng.next_u64()),
+                token,
+            },
+            8 => Message::Paired {
+                id: PartyId(rng.next_u64()),
+                token,
+                service: handle,
+            },
+            9 => Message::HeartbeatAck {
+                id: PartyId(rng.next_u64()),
+            },
+            10 => Message::Delivered,
+            11 => Message::Collected {
+                text: rng.chance(2).then(|| rng.text(300)),
+                service: rng.chance(2).then_some(handle),
+            },
+            _ => Message::nack(rng.text(100)),
+        }
+    }
+
+    #[test]
+    fn random_messages_survive_framing_in_random_chunks() {
+        let mut rng = crate::testing::Rng::new(42);
+        let mut codec = MessageCodec::default();
+        for i in 0..400 {
+            let msgs: Vec<Message> = (0..rng.range(1, 6))
+                .map(|_| random_message(&mut rng))
+                .collect();
+            let mut wire = BytesMut::new();
+            for m in &msgs {
+                codec.encode(m, &mut wire).unwrap();
+            }
+            let wire = wire.freeze();
+            let (mut buf, mut decoded, mut pos) = (BytesMut::new(), Vec::new(), 0);
+            while pos < wire.len() {
+                let take = rng.range(1, 64).min(wire.len() - pos);
+                buf.extend_from_slice(&wire[pos..pos + take]);
+                pos += take;
+                while let Some(m) = codec.decode(&mut buf).unwrap() {
+                    decoded.push(m);
+                }
+            }
+            assert!(
+                codec.decode_eof(&mut buf).unwrap().is_none(),
+                "iteration {i}"
+            );
+            assert!(buf.is_empty(), "iteration {i}: {} bytes left", buf.len());
+            assert_eq!(decoded, msgs, "iteration {i}");
+        }
+    }
+
+    #[test]
+    fn random_bytes_never_panic_the_decoder() {
+        let mut rng = crate::testing::Rng::new(9);
+        let mut codec = MessageCodec::new(256);
+        let (mut waiting, mut too_large, mut malformed) = (0, 0, 0);
+        for i in 0..6000 {
+            let mut buf = BytesMut::from(&rng.bytes(48)[..]);
+            // Half the time make the prefix plausible so the body path runs.
+            if buf.len() >= LENGTH_PREFIX_BYTES && rng.chance(2) {
+                let len = rng.below(300) as u32;
+                buf[..LENGTH_PREFIX_BYTES].copy_from_slice(&len.to_be_bytes());
+            }
+            match codec.decode(&mut buf) {
+                Ok(None) => waiting += 1,
+                Ok(Some(msg)) => panic!("iteration {i}: random bytes decoded to {msg:?}"),
+                Err(Error::FrameTooLarge { size, limit }) => {
+                    assert!(size > limit, "iteration {i}");
+                    too_large += 1;
+                }
+                Err(Error::Json(_)) => malformed += 1,
+                Err(other) => panic!("iteration {i}: unexpected error {other:?}"),
+            }
+            // At end of input a partial frame is `Closed`, never a panic.
+            match codec.decode_eof(&mut buf) {
+                Ok(None) => assert!(buf.is_empty(), "iteration {i}"),
+                Ok(Some(msg)) => panic!("iteration {i}: {msg:?}"),
+                Err(Error::Closed) => assert!(!buf.is_empty(), "iteration {i}"),
+                Err(Error::FrameTooLarge { .. } | Error::Json(_)) => {}
+                Err(other) => panic!("iteration {i}: unexpected error {other:?}"),
+            }
+        }
+        assert!(
+            waiting > 0 && too_large > 0 && malformed > 0,
+            "{waiting} {too_large} {malformed}"
+        );
+    }
 }

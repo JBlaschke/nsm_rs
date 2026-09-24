@@ -249,3 +249,331 @@ async fn sweeper_loop(broker: Arc<Broker>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+    use crate::config::TlsPaths;
+    use crate::net::Transport;
+    use crate::protocol::{RegToken, ServiceHandle};
+    use crate::transport::{serve, Handler, PeerInfo, Server};
+    use crate::Result;
+
+    /// How a scripted party answers the broker's heartbeats.
+    #[derive(Debug, Clone, Copy)]
+    enum Respond {
+        /// The normal acknowledgement.
+        Ack,
+        /// Acknowledges with somebody else's id (logged, still an ack).
+        ForeignId,
+        /// Two refusals, then acknowledgements: failures must reset.
+        FailTwiceThenAck,
+        /// Refuses every heartbeat.
+        Nack,
+        /// Answers with an unrelated message.
+        Wrong,
+        /// Never answers within the heartbeat timeout.
+        Hang,
+    }
+
+    struct Scripted {
+        mode: Respond,
+        calls: AtomicUsize,
+    }
+
+    impl Handler for Scripted {
+        async fn handle(&self, msg: Message, _peer: PeerInfo) -> Result<Message> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            assert!(matches!(msg, Message::Heartbeat { .. }), "{msg:?}");
+            Ok(match self.mode {
+                Respond::Ack => Message::HeartbeatAck { id: PartyId(0) },
+                Respond::ForeignId => Message::HeartbeatAck { id: PartyId(4242) },
+                Respond::FailTwiceThenAck if n < 2 => Message::nack("warming up"),
+                Respond::FailTwiceThenAck => Message::HeartbeatAck { id: PartyId(0) },
+                Respond::Nack => Message::nack("not today"),
+                Respond::Wrong => Message::Delivered,
+                Respond::Hang => {
+                    sleep(Duration::from_secs(10)).await;
+                    Message::Delivered
+                }
+            })
+        }
+    }
+
+    async fn party(mode: Respond) -> (Server, Arc<Scripted>) {
+        let handler = Arc::new(Scripted {
+            mode,
+            calls: AtomicUsize::new(0),
+        });
+        let server = serve(
+            &Addr::new(Transport::Tcp, "127.0.0.1", 0),
+            Arc::clone(&handler),
+            &TlsPaths::default(),
+            &Limits::default(),
+            &Timing::fast(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        (server, handler)
+    }
+
+    fn broker() -> Arc<Broker> {
+        crate::tls::install_default_provider();
+        let client = Arc::new(Client::new(
+            TlsPaths::default(),
+            Timing::fast(),
+            Limits::default(),
+        ));
+        Broker::new(
+            client,
+            Timing::fast(),
+            Limits::default(),
+            BrokerPolicy::default(),
+            CancellationToken::new(),
+        )
+    }
+
+    fn token(n: u8) -> RegToken {
+        RegToken::from_bytes([n; 16])
+    }
+
+    fn publish(b: &Broker, key: Key, bind: &Addr, ping: bool) -> PartyId {
+        b.with_registry(|r| {
+            r.publish(
+                key,
+                Addr::tcp(bind.host.clone(), 9000),
+                bind.clone(),
+                ping,
+                token(1),
+                Instant::now(),
+            )
+        })
+        .unwrap()
+    }
+
+    fn claim(b: &Broker, key: Key, bind: &Addr) -> (PartyId, ServiceHandle) {
+        b.with_registry(|r| r.claim(key, bind.clone(), true, token(2), Instant::now()))
+            .unwrap()
+    }
+
+    fn present(b: &Broker, id: PartyId) -> bool {
+        b.with_registry(|r| r.get(id).is_some())
+    }
+
+    fn row(b: &Broker, id: PartyId) -> Option<PartySummary> {
+        b.snapshot().into_iter().find(|p| p.id == id)
+    }
+
+    async fn wait_for(mut pred: impl FnMut() -> bool, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !pred() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn unused_port() -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    }
+
+    #[tokio::test]
+    async fn heartbeat_replies_decide_who_stays() {
+        let table = [
+            (Respond::Ack, true),
+            (Respond::ForeignId, true),
+            (Respond::FailTwiceThenAck, true),
+            (Respond::Nack, false),
+            (Respond::Wrong, false),
+            (Respond::Hang, false),
+        ];
+        let t = Timing::fast();
+        let window = (t.heartbeat_interval + t.heartbeat_timeout) * (t.fail_threshold + 2);
+        for (mode, stays) in table {
+            let (server, handler) = party(mode).await;
+            let b = broker();
+            let id = publish(&b, 1, &server.bound(), false);
+            b.watch(id);
+            if stays {
+                sleep(window).await;
+                assert!(present(&b, id), "{mode:?}: party was removed");
+                let calls = handler.calls.load(Ordering::SeqCst);
+                assert!(calls >= 3, "{mode:?}: only {calls} heartbeats");
+                assert_eq!(row(&b, id).map(|p| p.failures), Some(0), "{mode:?}");
+            } else {
+                wait_for(|| !present(&b, id), &format!("{mode:?} removal")).await;
+                let calls = handler.calls.load(Ordering::SeqCst);
+                let threshold = t.fail_threshold as usize;
+                assert!(
+                    (threshold..=threshold + 1).contains(&calls),
+                    "{mode:?}: {calls} heartbeats before removal"
+                );
+                assert!(lock(&b.tasks).is_empty(), "{mode:?}: task not cleaned up");
+            }
+            b.shutdown_token().cancel();
+            server.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn unreachable_party_is_removed_after_the_threshold() {
+        let b = broker();
+        let id = publish(&b, 1, &Addr::tcp("127.0.0.1", unused_port()), false);
+        b.watch(id);
+        wait_for(|| !present(&b, id), "removal of an unreachable party").await;
+        assert!(lock(&b.tasks).is_empty());
+        b.shutdown_token().cancel();
+    }
+
+    #[tokio::test]
+    async fn watch_ignores_ping_parties_and_unknown_ids() {
+        let b = broker();
+        let pinger = publish(&b, 1, &Addr::tcp("10.0.0.1", 1), true);
+        b.watch(pinger);
+        b.watch(PartyId(77));
+        assert!(lock(&b.tasks).is_empty());
+        let two_sided = publish(&b, 2, &Addr::tcp("127.0.0.1", unused_port()), false);
+        b.watch(two_sided);
+        assert_eq!(lock(&b.tasks).len(), 1);
+        // Re-watching replaces the task instead of doubling the heartbeats.
+        b.watch(two_sided);
+        assert_eq!(lock(&b.tasks).len(), 1);
+        b.shutdown_token().cancel();
+    }
+
+    #[tokio::test]
+    async fn drop_party_repairs_orphans_when_a_service_is_free() {
+        let b = broker();
+        // Ping-mode parties: no heartbeat tasks, so the registry alone decides.
+        let first = publish(&b, 1, &Addr::tcp("10.0.0.1", 1), true);
+        let second = publish(&b, 1, &Addr::tcp("10.0.0.2", 1), true);
+        let (client, handle) = claim(&b, 1, &Addr::tcp("10.0.0.3", 1));
+        let (taken, spare) = if handle.id == first {
+            (first, second)
+        } else {
+            (second, first)
+        };
+
+        // The claimed service vanishes: its client moves to the spare one.
+        match b.drop_party(taken, "test") {
+            Removed::Service { orphaned_clients } => assert_eq!(orphaned_clients, vec![client]),
+            other => panic!("{other:?}"),
+        }
+        assert!(!present(&b, taken));
+        assert_eq!(row(&b, client).unwrap().paired_with, Some(spare));
+        assert_eq!(row(&b, spare).unwrap().paired_with, Some(client));
+
+        // The spare vanishes too: nothing is left for the client, so it goes.
+        match b.drop_party(spare, "test") {
+            Removed::Service { orphaned_clients } => assert_eq!(orphaned_clients, vec![client]),
+            other => panic!("{other:?}"),
+        }
+        assert!(b.with_registry(|r| r.is_empty()));
+        assert!(matches!(b.drop_party(client, "test"), Removed::Unknown));
+    }
+
+    #[tokio::test]
+    async fn drop_party_removes_orphans_when_every_other_service_is_taken() {
+        let b = broker();
+        let s1 = publish(&b, 1, &Addr::tcp("10.0.0.1", 1), true);
+        let s2 = publish(&b, 1, &Addr::tcp("10.0.0.2", 1), true);
+        let (c1, h1) = claim(&b, 1, &Addr::tcp("10.0.0.3", 1));
+        let (c2, h2) = claim(&b, 1, &Addr::tcp("10.0.0.4", 1));
+        assert_ne!(h1.id, h2.id);
+        let orphan = if h1.id == s1 { c1 } else { c2 };
+        match b.drop_party(s1, "test") {
+            Removed::Service { orphaned_clients } => assert_eq!(orphaned_clients, vec![orphan]),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            !present(&b, orphan),
+            "no free service, so the orphan is removed"
+        );
+        assert!(present(&b, s2));
+        assert_eq!(b.snapshot().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_client_frees_its_service() {
+        let b = broker();
+        let s = publish(&b, 1, &Addr::tcp("10.0.0.1", 1), true);
+        let (c, handle) = claim(&b, 1, &Addr::tcp("10.0.0.3", 1));
+        assert_eq!(handle.id, s);
+        assert_eq!(row(&b, s).unwrap().paired_with, Some(c));
+        match b.drop_party(c, "test") {
+            Removed::Client { freed_service } => assert_eq!(freed_service, Some(s)),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(row(&b, s).unwrap().paired_with, None);
+        // The freed service can be claimed again.
+        let (again, handle) = claim(&b, 1, &Addr::tcp("10.0.0.5", 1));
+        assert_eq!(handle.id, s);
+        assert_eq!(row(&b, s).unwrap().paired_with, Some(again));
+        assert!(matches!(
+            b.drop_party(PartyId(999), "test"),
+            Removed::Unknown
+        ));
+    }
+
+    #[tokio::test]
+    async fn sweeper_removes_silent_ping_parties_only() {
+        let b = broker();
+        b.start_sweeper();
+        let silent = publish(&b, 1, &Addr::tcp("10.0.0.1", 1), true);
+        let chatty = publish(&b, 2, &Addr::tcp("10.0.0.2", 1), true);
+        let unwatched_two_sided = publish(&b, 3, &Addr::tcp("10.0.0.3", 1), false);
+        let keep = Arc::clone(&b);
+        let pinger = tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_millis(20)).await;
+                let _ = keep.with_registry(|r| r.mark_alive(chatty, Instant::now()));
+            }
+        });
+        wait_for(|| !present(&b, silent), "the silent party to be swept").await;
+        assert!(present(&b, chatty));
+        assert!(present(&b, unwatched_two_sided));
+        pinger.abort();
+        b.shutdown_token().cancel();
+    }
+
+    #[test]
+    fn snapshot_rows_describe_both_kinds() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let b = broker();
+        let s = publish(
+            &b,
+            5,
+            &Addr::new(Transport::Https, "svc.example", 4433),
+            true,
+        );
+        let (c, _) = claim(&b, 5, &Addr::tcp("10.0.0.9", 7000));
+        let snap = b.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert_eq!(
+            snap[0],
+            PartySummary {
+                id: s,
+                kind: "service",
+                key: 5,
+                bind_addr: Addr::new(Transport::Https, "svc.example", 4433),
+                ping: true,
+                failures: 0,
+                paired_with: Some(c),
+            }
+        );
+        assert_eq!(snap[1].kind, "client");
+        assert_eq!(snap[1].paired_with, Some(s));
+        assert_eq!(
+            serde_json::to_value(&snap[1]).unwrap()["bind_addr"],
+            serde_json::json!("10.0.0.9:7000")
+        );
+    }
+}

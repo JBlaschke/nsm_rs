@@ -240,9 +240,15 @@ impl FromStr for Addr {
             .parse()
             .map_err(|_| err("port must be a number between 0 and 65535"))?;
 
+        // IP literals are stored in canonical form (`::1`, not `0::0001`) so
+        // two spellings of one address compare equal and display alike.
+        let host = match host.parse::<IpAddr>() {
+            Ok(ip) => ip.to_string(),
+            Err(_) => host.to_owned(),
+        };
         Ok(Addr {
             transport,
-            host: host.to_owned(),
+            host,
             port,
         })
     }
@@ -386,5 +392,121 @@ mod tests {
         );
         let lo = parse("localhost:9").resolve().await.unwrap();
         assert!(lo.ip().is_loopback());
+    }
+
+    // ---- randomized properties (deterministic seeds; see crate::testing) ----
+
+    #[test]
+    fn generated_addresses_round_trip_through_display_parse_and_serde() {
+        let mut rng = crate::testing::Rng::new(2024);
+        for i in 0..3000 {
+            let addr = rng.addr();
+            let text = addr.to_string();
+            let parsed: Addr = text
+                .parse()
+                .unwrap_or_else(|e| panic!("iteration {i}: {text:?} does not parse: {e}"));
+            assert_eq!(parsed, addr, "iteration {i}: {text:?}");
+            let json = serde_json::to_string(&addr).unwrap();
+            assert_eq!(json, serde_json::to_string(&text).unwrap(), "iteration {i}");
+            assert_eq!(
+                serde_json::from_str::<Addr>(&json).unwrap(),
+                addr,
+                "iteration {i}"
+            );
+            // The authority is what the wire and URLs carry; IPv6 is bracketed.
+            let authority = addr.authority();
+            assert!(text.ends_with(&authority), "iteration {i}: {text:?}");
+            assert_eq!(
+                authority.starts_with('['),
+                addr.ip().is_some_and(|ip| ip.is_ipv6()),
+                "iteration {i}: {authority:?}"
+            );
+            // Only raw TCP has no scheme and therefore no URL form.
+            match addr.url("v1/message") {
+                Some(url) => {
+                    assert_ne!(addr.transport, Transport::Tcp, "iteration {i}");
+                    assert_eq!(url, format!("{text}/v1/message"), "iteration {i}");
+                }
+                None => assert_eq!(addr.transport, Transport::Tcp, "iteration {i}"),
+            }
+        }
+    }
+
+    #[test]
+    fn ip_literals_are_canonicalised() {
+        let a: Addr = "[0:0:0:0:0:0:0:1]:80".parse().unwrap();
+        let b: Addr = "::1:80".parse().unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.host, "::1");
+        assert_eq!(a.to_string(), "[::1]:80");
+        let v4: Addr = "http://127.000.000.001:80".parse().unwrap_or_else(|_| {
+            // Leading zeros are not valid IPv4 text: kept as a name, unchanged.
+            "http://127.000.000.001:80".parse().unwrap()
+        });
+        assert_eq!(v4.host, "127.000.000.001");
+        assert_eq!(v4.ip(), None);
+        let name: Addr = "Broker.Example:12000".parse().unwrap();
+        assert_eq!(name.host, "Broker.Example", "names are not case-folded");
+    }
+
+    #[test]
+    fn parser_never_panics_and_accepted_forms_are_canonical() {
+        const ALPHABET: &[char] = &[
+            'a', 'Z', '0', '9', '-', '.', ':', '/', '[', ']', '@', '?', '#', ' ', 'é', '%', '+',
+        ];
+        const PREFIXES: &[&str] = &["http://", "https://", "tls://", "tcp://", "ftp://", "//"];
+        let mut rng = crate::testing::Rng::new(7);
+        let (mut accepted, mut rejected) = (0, 0);
+        for i in 0..8000 {
+            // Half pure noise, half almost-valid: a plausible host and port
+            // with a few random characters thrown in.
+            let mut input = if rng.chance(2) {
+                rng.string(ALPHABET, 24)
+            } else {
+                let mut host = rng.host();
+                if rng.chance(3) {
+                    let at = rng.below(host.len() + 1);
+                    host.insert(at, *rng.pick(ALPHABET));
+                }
+                if rng.chance(4) {
+                    host = format!("[{host}]");
+                }
+                let port = match rng.below(4) {
+                    0 => String::new(),
+                    1 => rng.string(&['0', '1', '9', 'x', '+', '-'], 6),
+                    _ => (rng.next_u64() as u16).to_string(),
+                };
+                let tail = if rng.chance(4) {
+                    *rng.pick(&["/", "//", "/x", "?q"])
+                } else {
+                    ""
+                };
+                format!("{host}:{port}{tail}")
+            };
+            if rng.chance(3) {
+                input = format!("{}{input}", rng.pick(PREFIXES));
+            }
+            match input.parse::<Addr>() {
+                Ok(addr) => {
+                    accepted += 1;
+                    let text = addr.to_string();
+                    let again: Addr = text.parse().unwrap_or_else(|e| {
+                        panic!("iteration {i}: {input:?} -> {text:?} does not re-parse: {e}")
+                    });
+                    assert_eq!(again, addr, "iteration {i}: {input:?} -> {text:?}");
+                    assert!(!addr.host.is_empty(), "iteration {i}");
+                    assert!(!addr.host.contains(['/', '@', '?', '#']), "iteration {i}");
+                }
+                Err(e) => {
+                    rejected += 1;
+                    let shown = e.to_string();
+                    assert!(shown.contains(input.trim()), "iteration {i}: {shown:?}");
+                }
+            }
+        }
+        assert!(
+            accepted > 100 && rejected > 100,
+            "{accepted} accepted, {rejected} rejected"
+        );
     }
 }
