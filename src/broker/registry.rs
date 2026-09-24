@@ -370,10 +370,10 @@ impl Registry {
     /// becomes pending.
     pub fn reclaim(&mut self, client: PartyId) -> Option<ServiceHandle> {
         let entry = self.clients.get_mut(&client)?;
-        if let Some(current) = self.services.get(&entry.record.service) {
-            if current.claimed_by == Some(client) {
-                return Some(current.record.handle());
-            }
+        if let Some(current) = self.services.get(&entry.record.service)
+            && current.claimed_by == Some(client)
+        {
+            return Some(current.record.handle());
         }
         let service = Self::lowest_unclaimed(&mut self.services, entry.record.key)?;
         service.claimed_by = Some(client);
@@ -459,10 +459,10 @@ impl Registry {
             if entry.inbox.is_none() {
                 entry.inbox = inbox;
             }
-        } else if let Some(entry) = self.clients.get_mut(&id) {
-            if entry.pending_service.is_none() {
-                entry.pending_service = service;
-            }
+        } else if let Some(entry) = self.clients.get_mut(&id)
+            && entry.pending_service.is_none()
+        {
+            entry.pending_service = service;
         }
     }
 

@@ -7,10 +7,10 @@ use tracing::info;
 
 use super::handler::BrokerHandler;
 use super::monitor::Broker;
+use crate::Result;
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::Addr;
 use crate::transport::{self, Client, Server};
-use crate::Result;
 
 /// Everything needed to run a broker.
 #[derive(Debug, Clone)]

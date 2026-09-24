@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -537,10 +537,10 @@ async fn cancel_job(
         return Err(ApiError::not_found(format!("job {id}")));
     };
     token.cancel();
-    if let Some(j) = lock(&app.jobs).get_mut(&id) {
-        if j.view.state == JobState::Running {
-            j.view.state = JobState::Cancelled;
-        }
+    if let Some(j) = lock(&app.jobs).get_mut(&id)
+        && j.view.state == JobState::Running
+    {
+        j.view.state = JobState::Cancelled;
     }
     app.job_view(id)
         .map(Json)

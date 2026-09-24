@@ -10,9 +10,9 @@ use std::net::IpAddr;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::broker::listen::{listen as start_broker, BrokerHandle, ListenOpts};
+use crate::broker::listen::{BrokerHandle, ListenOpts, listen as start_broker};
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
-use crate::net::{interfaces, Addr, IpVersion, LocalAddr, Selector, Transport};
+use crate::net::{Addr, IpVersion, LocalAddr, Selector, Transport, interfaces};
 use crate::party::{ClaimOpts, PartyOpts, PublishOpts, Session};
 use crate::protocol::{Key, Message, ServiceHandle};
 use crate::transport::Client;

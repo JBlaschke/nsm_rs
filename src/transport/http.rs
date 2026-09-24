@@ -37,7 +37,7 @@ use tracing::{debug, trace, warn};
 use super::{Client, Handler, PeerInfo, Server};
 use crate::config::{Limits, Timing, TlsPaths};
 use crate::net::{Addr, Transport};
-use crate::protocol::{decode, encode, Message};
+use crate::protocol::{Message, decode, encode};
 use crate::{Error, Result};
 
 struct AppState<H> {
@@ -267,13 +267,13 @@ pub(super) async fn call(client: &Client, to: &Addr, msg: Message) -> Result<Mes
         .await
         .map_err(|e| map_reqwest(e, &url, client.timing()))?;
     let status = response.status();
-    if let Some(len) = response.content_length() {
-        if len > max as u64 {
-            return Err(Error::FrameTooLarge {
-                size: len as usize,
-                limit: max,
-            });
-        }
+    if let Some(len) = response.content_length()
+        && len > max as u64
+    {
+        return Err(Error::FrameTooLarge {
+            size: len as usize,
+            limit: max,
+        });
     }
     let mut response = response;
     let mut bytes = Vec::new();
@@ -345,7 +345,7 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use super::super::testing::{certs, start, Echo, PeerReporter};
+    use super::super::testing::{Echo, PeerReporter, certs, start};
     use super::*;
     use crate::protocol::PartyId;
 

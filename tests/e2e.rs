@@ -8,7 +8,7 @@ use std::time::Duration;
 use nsm::config::BrokerPolicy;
 use nsm::net::Transport;
 use nsm::protocol::{Message, PartyId, RegToken, ServiceHandle};
-use nsm::{ops, Error};
+use nsm::{Error, ops};
 
 use common::{Cluster, TRANSPORTS};
 

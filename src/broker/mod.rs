@@ -7,6 +7,6 @@ pub mod monitor;
 pub mod registry;
 
 pub use handler::BrokerHandler;
-pub use listen::{listen, BrokerHandle, ListenOpts};
+pub use listen::{BrokerHandle, ListenOpts, listen};
 pub use monitor::{Broker, PartySummary};
 pub use registry::{ClientEntry, Party, Registry, Removed, ServiceEntry};

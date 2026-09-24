@@ -10,7 +10,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -313,7 +313,7 @@ async fn register(
                     "broker answered {} with {}",
                     request.kind(),
                     other.kind()
-                )))
+                )));
             }
             Err(e) if e.is_disconnect() || matches!(e, Error::Io(_)) => {
                 debug!(attempt, error = %e, "registration attempt failed");

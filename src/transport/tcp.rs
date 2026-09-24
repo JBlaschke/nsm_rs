@@ -29,7 +29,7 @@ use tracing::{debug, trace, warn};
 use super::{Client, Handler, PeerInfo, Server};
 use crate::config::{Limits, Timing, TlsPaths};
 use crate::net::{Addr, Transport};
-use crate::protocol::{framed, Message};
+use crate::protocol::{Message, framed};
 use crate::{Error, Result};
 
 /// Serve `handler` on a TCP (or TLS) listener bound to `bind`.
@@ -223,7 +223,7 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use super::super::testing::{certs, start, Echo};
+    use super::super::testing::{Echo, certs, start};
     use super::*;
     use crate::protocol::PartyId;
 

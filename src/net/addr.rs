@@ -83,7 +83,9 @@ pub struct Addr {
 
 /// Returned when a string is not a valid [`Addr`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("invalid address {input:?}: {reason} (expected host:port, http://host:port or https://host:port)")]
+#[error(
+    "invalid address {input:?}: {reason} (expected host:port, http://host:port or https://host:port)"
+)]
 pub struct ParseAddrError {
     /// The offending input.
     pub input: String,

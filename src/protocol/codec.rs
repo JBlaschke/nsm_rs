@@ -155,8 +155,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
-    use crate::protocol::message::{all_variants, test_token};
     use crate::protocol::PartyId;
+    use crate::protocol::message::{all_variants, test_token};
 
     fn frame(msg: &Message) -> BytesMut {
         let mut buf = BytesMut::new();

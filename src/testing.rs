@@ -142,9 +142,10 @@ mod tests {
             assert!(!host.is_empty());
             assert!(!host.contains(['/', '@', '?', '#', ' ']));
             if host.parse::<std::net::IpAddr>().is_err() {
-                assert!(host
-                    .split('.')
-                    .all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-')));
+                assert!(
+                    host.split('.')
+                        .all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-'))
+                );
             }
         }
     }

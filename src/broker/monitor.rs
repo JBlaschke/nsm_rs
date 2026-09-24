@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::task::AbortHandle;
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{Instant, sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -256,11 +256,11 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::Result;
     use crate::config::TlsPaths;
     use crate::net::Transport;
     use crate::protocol::{RegToken, ServiceHandle};
-    use crate::transport::{serve, Handler, PeerInfo, Server};
-    use crate::Result;
+    use crate::transport::{Handler, PeerInfo, Server, serve};
 
     /// How a scripted party answers the broker's heartbeats.
     #[derive(Debug, Clone, Copy)]

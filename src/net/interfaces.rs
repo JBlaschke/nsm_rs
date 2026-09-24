@@ -55,20 +55,20 @@ pub struct Selector {
 impl Selector {
     /// True when `addr` passes every configured filter.
     pub fn matches(&self, addr: &LocalAddr) -> bool {
-        if let Some(name) = &self.interface {
-            if &addr.interface != name {
-                return false;
-            }
+        if let Some(name) = &self.interface
+            && &addr.interface != name
+        {
+            return false;
         }
-        if let Some(v) = self.version {
-            if !v.matches(addr.ip) {
-                return false;
-            }
+        if let Some(v) = self.version
+            && !v.matches(addr.ip)
+        {
+            return false;
         }
-        if let Some(p) = &self.prefix {
-            if !addr.ip.to_string().starts_with(p.as_str()) {
-                return false;
-            }
+        if let Some(p) = &self.prefix
+            && !addr.ip.to_string().starts_with(p.as_str())
+        {
+            return false;
         }
         true
     }

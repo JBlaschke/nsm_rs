@@ -74,10 +74,10 @@ async fn fifty_services_and_fifty_clients_pair_exchange_and_survive_churn() {
         }
         c.wait_until(|snap| snap.len() == 2 * PARTIES - 20).await;
         let snap = c.broker().snapshot();
-        assert!(snap
-            .iter()
-            .all(|p| !dead.contains(&p.id)
-                && p.paired_with.is_some_and(|other| !dead.contains(&other))));
+        assert!(
+            snap.iter().all(|p| !dead.contains(&p.id)
+                && p.paired_with.is_some_and(|other| !dead.contains(&other)))
+        );
 
         // Ten surviving clients leave: their services are freed and can be
         // claimed again.

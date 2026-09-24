@@ -11,9 +11,9 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use super::{PartyState, Role};
+use crate::Result;
 use crate::protocol::{Message, PartyId};
 use crate::transport::{Handler, PeerInfo};
-use crate::Result;
 
 /// [`Handler`] for a party's own listener.
 #[derive(Debug, Clone)]

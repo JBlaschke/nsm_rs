@@ -36,7 +36,7 @@ fn spawn_signal_handler(shutdown: CancellationToken) {
     tokio::spawn(async move {
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             match signal(SignalKind::terminate()) {
                 Ok(mut term) => {
                     tokio::select! {

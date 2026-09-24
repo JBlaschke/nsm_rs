@@ -13,6 +13,6 @@ pub mod codec;
 pub mod message;
 pub mod types;
 
-pub use codec::{decode, encode, framed, Framed, MessageCodec};
+pub use codec::{Framed, MessageCodec, decode, encode, framed};
 pub use message::{Message, PROTOCOL_VERSION};
 pub use types::{ClientRecord, Key, PartyId, RegToken, ServiceHandle, ServiceRecord};

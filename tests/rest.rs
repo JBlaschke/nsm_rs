@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use nsm::net::{Addr, Transport};
 use nsm::ops::NetOpts;
-use nsm::rest::{serve, ControlPlane, ServeOpts};
+use nsm::rest::{ControlPlane, ServeOpts, serve};
 use reqwest::{Method, StatusCode};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use common::Cluster;

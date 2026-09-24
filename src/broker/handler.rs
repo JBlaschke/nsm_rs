@@ -7,7 +7,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tracing::{debug, trace};
 
 use super::monitor::Broker;
