@@ -38,7 +38,9 @@ cargo build --release
 
 Dependencies are vendored under `vendor/` and `.cargo/config.toml` points Cargo
 at them, so a clean checkout builds without network access
-(`cargo build --offline`). One binary is produced: `target/release/nsm`.
+(`cargo build --offline`). One binary is produced: `target/release/nsm`. The
+minimum supported Rust is 1.88 (`rust-version` in `Cargo.toml`, edition 2024);
+CI builds and tests on it as well as on stable.
 
 TLS uses [rustls](https://github.com/rustls/rustls) with the `aws-lc-rs` crypto
 provider by default, which needs a C compiler (and cmake on some targets). For
@@ -374,5 +376,8 @@ cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 
 API documentation (`cargo doc`) and these pages are published by CI to
 <https://jblaschke.github.io/nsm_rs/> (the repository's Pages source must be
-set to "GitHub Actions" for the deploy step to take effect). No license has
-been chosen for this repository yet; see the plan.
+set to "GitHub Actions" for the deploy step to take effect). Tagging `vX.Y.Z`
+runs the release workflow: static musl binaries (`ring`), glibc and macOS
+binaries (`aws-lc-rs`), a vendored source tarball for air-gapped builds, and
+the container image on GHCR. No license has been chosen for this repository
+yet; see the plan.

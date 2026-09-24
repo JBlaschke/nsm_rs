@@ -12,7 +12,7 @@ Written 2026-09-24 against `main` at `edd23a33`. Companion document: [the audit]
 | `cleanup/04-hardening` | done | platform trust store opt-in (`--system-roots`), broker admission policy (matching-host check, per-host registration cap), CLI overrides for every timing and limit, `deny(unwrap_used, expect_used, panic)` outside tests, release overflow checks; security review of the branch found 4 items (unauthenticated `Ping`/`Deliver`, forgeable party heartbeats, the rendezvous key inside `ServiceHandle` and job views), all fixed with per-registration tokens |
 | `cleanup/05-tests-ci` | done | randomized address/framing tests, monitor decision tables, REST and CLI integration suites, 50-party stress test; CI adds cargo-deny, cargo-machete, a Docker build and a coverage floor; two fixes the new tests found (IP literals canonicalised, TLS configuration checked before dialling) |
 | `cleanup/06-docs` | done | README rewritten with the full command-line reference and TLS, deployment and HPC sections; `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, `docs/REST_API.md`, `CONTRIBUTING.md`, `CHANGELOG.md`; README is the rustdoc front page, `missing_docs` denied; Pages publishes rustdoc plus the rendered guides; REST maps unreachable peers to 502 as documented |
-| `cleanup/07-deps` | next | |
+| `cleanup/07-deps` | done | every dependency at its latest version, edition 2024, `rust-version = "1.88"` (verified with that toolchain), narrowed `tokio`/`hyper-util` features, no open advisories, `deny.toml` without ignores and with yanked crates denied, MSRV job in CI, release workflow (musl/glibc/macOS binaries, vendored tarball, GHCR image), Dependabot; re-vendored |
 
 Commits inside a branch group changes by topic for reading; only the branch tip is guaranteed to build. Vendor updates are always their own commit (`chore: re-vendor`) so they can be skipped in review.
 
@@ -186,6 +186,7 @@ The dependency bump you asked for, last, with tests in place to catch regression
 - `deny.toml`, `.github/dependabot.yml`, `release.yml` (static musl binaries with `ring`, gnu binaries with `aws-lc-rs`, filtered vendor tarball for air-gapped builds, image to GHCR), Dockerfile on the current Rust image.
 - Re-vendor (D1).
 - Acceptance: `cargo deny check` and `cargo audit` clean; all tests green on MSRV and stable.
+- Outcome (2026-09-24): done, with two deviations. The MSRV is 1.88, not 1.85: with the MSRV-aware resolver of edition 2024, `rust-version = "1.85"` held back the ICU crates, `idna_adapter`, `rcgen` and `time` (all wanting 1.88), and the brief was the latest versions; 1.88 is fifteen months behind the current stable. The vendor tarball is not platform-filtered: `cargo vendor` has no such option, so the release attaches the tracked source tree with `vendor/` (a `git archive`), which builds offline on every supported platform. `rustls-pemfile`, `base64`, `url` and `lazy_static` were already gone from the direct dependencies after 03. `cargo audit` is run locally; CI relies on cargo-deny's advisories check against the same database. Manifest-level bumps: `clap` 4.6, `rcgen` 0.14 (new `Issuer` API in the test fixtures); everything else moved in the lock file (90 updated, 7 added, 14 removed crates). Dependabot's Cargo pull requests will need a `cargo vendor` commit before they pass CI, which `.github/dependabot.yml` says.
 
 ## 6. How to review
 

@@ -77,6 +77,20 @@ version: 1 (the first versioned format).
 
 ### Changed
 
+- Every dependency is at its latest version (2026-09-24): among the direct
+  ones `clap` 4.6 and `rcgen` 0.14; in the lock file `bytes` 1.12, `ring`
+  0.17.14, `hashbrown` 0.17, the ICU crates 2.3 and about ninety more. Only
+  `matchit` stays at the version `axum` pins. The yanked `spin` is gone.
+- Edition 2024 and `rust-version = "1.88"`, the minimum the latest
+  dependencies need; CI builds and tests on that toolchain as well as on
+  stable. Decision D12.
+- `tokio` and `hyper-util` are enabled with only the features the code uses
+  instead of `full`.
+- Release automation: tagging `vX.Y.Z` builds static musl binaries (`ring`)
+  for x86_64 and aarch64, glibc and macOS binaries (`aws-lc-rs`), a vendored
+  source tarball for air-gapped builds and the container image on GHCR, and
+  publishes a GitHub release with the changelog section as notes. Dependabot
+  watches the GitHub Actions and Cargo dependencies weekly.
 - Interface enumeration uses `if-addrs` instead of `pnet` (35 crates fewer).
   Decision D6.
 - HTTP servers are axum, HTTP clients are reqwest, both on hyper 1.x with
@@ -127,7 +141,9 @@ version: 1 (the first versioned format).
 - Frame sizes, body sizes, connection counts and registrations are bounded;
   release builds keep integer overflow checks.
 - `unwrap`, `expect` and `panic!` are denied outside tests.
+- The dependency update closes RUSTSEC-2026-0007 (`bytes` 1.9.0,
+  `BytesMut::reserve` overflow) and RUSTSEC-2025-0009 (`ring` 0.17.8, AES
+  panic with overflow checks); `cargo audit` and `cargo deny` report nothing
+  open, and yanked crates now fail the check.
 - Known open items: the TLS key committed in 2025 (`01a90972`) must be
-  rotated; the `bytes 1.9.0` and `ring 0.17.8` advisories are addressed by
-  the dependency bump that follows this release; mutual TLS is not
-  implemented.
+  rotated, and mutual TLS is not implemented.
