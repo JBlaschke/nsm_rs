@@ -1,7 +1,13 @@
-#![allow(clippy::needless_lifetimes, clippy::uninlined_format_args)]
+#![allow(
+    clippy::elidable_lifetime_names,
+    clippy::needless_lifetimes,
+    clippy::uninlined_format_args
+)]
 
 #[macro_use]
-mod macros;
+mod snapshot;
+
+mod debug;
 
 #[test]
 fn test_basic() {
@@ -13,7 +19,9 @@ fn test_basic() {
         items: [
             Item::Fn {
                 vis: Visibility::Inherited,
+                modifiers: FnModifiers,
                 sig: Signature {
+                    safety: Safety::Default,
                     ident: "main",
                     generics: Generics,
                     output: ReturnType::Default,
@@ -52,7 +60,9 @@ fn test_comment() {
         items: [
             Item::Fn {
                 vis: Visibility::Inherited,
+                modifiers: FnModifiers,
                 sig: Signature {
+                    safety: Safety::Default,
                     ident: "main",
                     generics: Generics,
                     output: ReturnType::Default,

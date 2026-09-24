@@ -1,7 +1,10 @@
 use self::{Action::*, Input::*};
 use proc_macro2::{Delimiter, Ident, Spacing, TokenTree};
 use syn::parse::{ParseStream, Result};
-use syn::{AngleBracketedGenericArguments, BinOp, Expr, ExprPath, Lifetime, Lit, Token, Type};
+#[allow(unused_imports)]
+//#[cfg_attr(not(test), expect(unused_imports))] // Rust 1.81+
+use syn::Token;
+use syn::{AngleBracketedGenericArguments, BinOp, Expr, ExprPath, Lifetime, Lit, Type};
 
 enum Input {
     Keyword(&'static str),
@@ -29,7 +32,7 @@ enum Action {
     Finish,
 }
 
-static INIT: [(Input, Action); 28] = [
+static INIT: [(Input, Action); 29] = [
     (ConsumeDelimiter, SetState(&POSTFIX)),
     (Keyword("async"), SetState(&ASYNC)),
     (Keyword("break"), SetState(&BREAK_LABEL)),
@@ -43,6 +46,7 @@ static INIT: [(Input, Action); 28] = [
     (Keyword("move"), SetState(&CLOSURE)),
     (Keyword("return"), SetState(&RETURN)),
     (Keyword("static"), SetState(&CLOSURE)),
+    (Keyword("try"), SetState(&BLOCK)),
     (Keyword("unsafe"), SetState(&BLOCK)),
     (Keyword("while"), IncDepth),
     (Keyword("yield"), SetState(&RETURN)),
@@ -92,13 +96,14 @@ static BREAK_VALUE: [(Input, Action); 3] = [
     (Otherwise, SetState(&POSTFIX)),
 ];
 
-static CLOSURE: [(Input, Action); 6] = [
+static CLOSURE: [(Input, Action); 7] = [
     (Keyword("async"), SetState(&CLOSURE)),
     (Keyword("move"), SetState(&CLOSURE)),
     (Punct(","), SetState(&CLOSURE)),
     (Punct(">"), SetState(&CLOSURE)),
     (Punct("|"), SetState(&CLOSURE_ARGS)),
     (ConsumeLifetime, SetState(&CLOSURE)),
+    (ConsumeIdent, SetState(&CLOSURE)),
 ];
 
 static CLOSURE_ARGS: [(Input, Action); 2] = [
@@ -111,7 +116,8 @@ static CLOSURE_RET: [(Input, Action); 2] = [
     (Otherwise, SetState(&INIT)),
 ];
 
-static CONST: [(Input, Action); 2] = [
+static CONST: [(Input, Action); 3] = [
+    (Keyword("move"), SetState(&CLOSURE)),
     (Punct("|"), SetState(&CLOSURE_ARGS)),
     (ConsumeBrace, SetState(&POSTFIX)),
 ];
