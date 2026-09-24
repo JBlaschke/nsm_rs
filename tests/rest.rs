@@ -306,7 +306,7 @@ async fn errors_map_to_statuses() {
             "{body}"
         );
 
-        // An unreachable broker or party is upstream trouble: a 5xx with a
+        // An unreachable broker or party is upstream trouble: a 502 with a
         // message, never a crash, and no job is left behind.
         let dead = Addr::new(Transport::Http, "127.0.0.1", unused_port());
         let (status, body) = api
@@ -315,12 +315,12 @@ async fn errors_map_to_statuses() {
                 &party_body(&dead, 1, json!({ "service_port": 9000 })),
             )
             .await;
-        assert!(status.is_server_error(), "{status} {body}");
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
         assert!(body["error"].is_string(), "{body}");
         let (status, body) = api
             .post("/v1/collect", &json!({ "party": dead.to_string() }))
             .await;
-        assert!(status.is_server_error(), "{status} {body}");
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
         assert_eq!(api.get("/v1/jobs").await.1, json!([]));
         assert_eq!(api.get("/healthz").await.0, StatusCode::OK);
 

@@ -393,6 +393,7 @@ impl IntoResponse for ApiError {
                 StatusCode::BAD_GATEWAY
             }
             Error::Resolve(_) => StatusCode::BAD_GATEWAY,
+            Error::Io(e) if is_unreachable(e) => StatusCode::BAD_GATEWAY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         });
         (
@@ -401,6 +402,25 @@ impl IntoResponse for ApiError {
         )
             .into_response()
     }
+}
+
+/// Connection-level I/O failures: the peer or the broker could not be
+/// reached, as opposed to a local file or socket problem.
+fn is_unreachable(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(
+        e.kind(),
+        ConnectionRefused
+            | ConnectionReset
+            | ConnectionAborted
+            | NotConnected
+            | HostUnreachable
+            | NetworkUnreachable
+            | NetworkDown
+            | TimedOut
+            | UnexpectedEof
+            | BrokenPipe
+    )
 }
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
