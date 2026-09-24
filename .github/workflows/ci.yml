@@ -113,7 +113,9 @@ jobs:
       - run: docker run --rm nsm:ci list-ips --ip-version 4
 
   coverage:
-    name: line coverage (floor ${{ env.COVERAGE_FLOOR }}%)
+    # The `env` context is not available in a job name, so the floor is
+    # printed by the step below instead.
+    name: line coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -126,6 +128,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: coverage
+      - run: echo "enforcing a line-coverage floor of ${COVERAGE_FLOOR}%"
       - run: cargo llvm-cov --locked --lcov --output-path lcov.info --fail-under-lines "$COVERAGE_FLOOR"
       - run: cargo llvm-cov report --summary-only
       - uses: actions/upload-artifact@v4
