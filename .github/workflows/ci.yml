@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "cleanup/**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Dependencies are vendored and .cargo/config.toml replaces crates.io with
+  # vendor/, so every cargo invocation runs offline against Cargo.lock.
+  CARGO_NET_OFFLINE: "true"
+
+jobs:
+  build-test:
+    name: build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --all-targets
+      - run: cargo test --locked --all-targets
+      - run: cargo test --locked --doc
+
+  lint:
+    name: clippy and rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # Warnings are reported but not yet fatal: the pre-cleanup tree has ~160.
+      # The foundation branch (cleanup/02) turns this into `-D warnings` and adds
+      # `cargo fmt --check` once the new module tree exists.
+      - run: cargo clippy --locked --all-targets
+      - run: cargo doc --locked --no-deps
