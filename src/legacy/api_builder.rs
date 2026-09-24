@@ -1,7 +1,7 @@
-use crate::operations::{get_interfaces, claim, publish, collect, send_msg};
-use crate::models::{Claim, Publish, Collect, SendMSG};
-use crate::network::{get_local_ips, get_matching_ipstr};
-use crate::connection::{Addr, ComType, Transport};
+use crate::legacy::operations::{get_interfaces, claim, publish, collect, send_msg};
+use crate::legacy::models::{Claim, Publish, Collect, SendMSG};
+use crate::legacy::network::{get_local_ips, get_matching_ipstr};
+use crate::legacy::connection::{Addr, ComType, Transport};
 
 use std::str::FromStr;
 use std::collections::HashMap;

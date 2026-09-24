@@ -1,13 +1,13 @@
-use crate::connection::{
+use crate::legacy::connection::{
     Addr, Message, MessageHeader, api_server, serialize_message,
     collect_request
 };
-use crate::service::{
+use crate::legacy::service::{
     request_handler, event_monitor, serialize, deserialize, ping_heartbeat
 };
-use crate::tls::{tls_config, get_tls_acceptor};
-use crate::operations::{AMState, HttpResult};
-use crate::operations::GLOBAL_LAST_HEARTBEAT;
+use crate::legacy::tls::{tls_config, get_tls_acceptor};
+use crate::legacy::operations::{AMState, HttpResult};
+use crate::legacy::operations::GLOBAL_LAST_HEARTBEAT;
 
 use std::sync::Arc;
 use std::net::SocketAddr;
@@ -131,7 +131,7 @@ pub async fn listen(
 
 type HttpClient<T> = Client<HttpsConnector<HttpConnector>, T>;
 
-// TODO: This could also be crate::tls::setup_https_client
+// TODO: This could also be crate::legacy::tls::setup_https_client
 pub async fn get_https_connector<T: Body + Send>(
         tls: Option<&ClientConfig>
     ) -> Result<HttpClient<T>, std::io::Error> where <T as Body>::Data: Send {

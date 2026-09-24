@@ -1,4 +1,4 @@
-use crate::connection::Addr;
+use crate::legacy::connection::Addr;
 
 use serde::{Serialize, Deserialize};
 

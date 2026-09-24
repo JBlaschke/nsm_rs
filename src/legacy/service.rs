@@ -24,10 +24,10 @@ use serde::{Serialize, Deserialize};
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
-use crate::utils::{only_or_error, epoch};
-use crate::connection::{MessageHeader, Message, Addr, ComType, connect, send, receive,
+use crate::legacy::utils::{only_or_error, epoch};
+use crate::legacy::connection::{MessageHeader, Message, Addr, ComType, connect, send, receive,
      serialize_message, deserialize_message, collect_request, stream_write, stream_read};
-use crate::tls::{setup_https_client};
+use crate::legacy::tls::{setup_https_client};
 
 /// Store client or service metadata
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

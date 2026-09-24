@@ -1,7 +1,5 @@
 /// Validates existance of Interfaces and IP Addresses
 
-use pnet::datalink;
-use pnet::ipnetwork::IpNetwork;
 use std::net::IpAddr;
 
 #[allow(unused_imports)]
@@ -29,32 +27,16 @@ pub async fn get_local_ips() -> LocalIpAddresses {
     let mut ipv4_addrs = Vec::new();
     let mut ipv6_addrs = Vec::new();
 
-    for iface in datalink::interfaces() {
-        trace!("Found interface: {:?}", & iface.name);
-
-        for ip_network in iface.ips {
-            match ip_network {
-                IpNetwork::V4(ipv4_network) => {
-                    trace!("Found IPv4 address: {:?}", ipv4_network.ip());
-
-                    ipv4_addrs.push(
-                        LocalInterface {
-                            ip:   IpAddr::V4(ipv4_network.ip()),
-                            name: Some(iface.name.clone())
-                        }
-                    )
-                }
-                IpNetwork::V6(ipv6_network) => {
-                    trace!("Found IPv6 address: {:?}", ipv6_network.ip());
-
-                    ipv6_addrs.push(
-                        LocalInterface {
-                            ip:   IpAddr::V6(ipv6_network.ip()),
-                            name: Some(iface.name.clone())
-                        }
-                    )
-                }
-            }
+    let addrs = crate::net::interfaces::local_addrs().unwrap_or_else(|e| {
+        error!("Failed to enumerate local interfaces: {}", e);
+        Vec::new()
+    });
+    for a in addrs {
+        trace!("Found {:?} on interface {:?}", a.ip, a.interface);
+        let entry = LocalInterface { ip: a.ip, name: Some(a.interface) };
+        match a.ip {
+            IpAddr::V4(_) => ipv4_addrs.push(entry),
+            IpAddr::V6(_) => ipv6_addrs.push(entry),
         }
     }
     LocalIpAddresses {

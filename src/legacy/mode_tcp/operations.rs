@@ -1,8 +1,8 @@
-use crate::connection::{
+use crate::legacy::connection::{
     Addr, Message, MessageHeader, tcp_server, connect, send
 };
-use crate::service::{heartbeat_handler_helper, request_handler, event_monitor};
-use crate::operations::{AMState, HttpResult};
+use crate::legacy::service::{heartbeat_handler_helper, request_handler, event_monitor};
+use crate::legacy::operations::{AMState, HttpResult};
 
 use std::io::{ErrorKind, Error};
 use std::pin::Pin;

@@ -1,7 +1,7 @@
 use std::{env, fs, io};
 use std::io::Error;
 use std::sync::Arc;
-use pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, ServerConfig, RootCertStore};
 use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
 use hyper_util::client::legacy::connect::HttpConnector;

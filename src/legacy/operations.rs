@@ -1,20 +1,20 @@
-use crate::network::{get_local_ips, get_matching_ipstr};
-use crate::connection::{
+use crate::legacy::network::{get_local_ips, get_matching_ipstr};
+use crate::legacy::connection::{
     ComType, Message, MessageHeader, Addr, api_server, tcp_server,
     serialize_message, deserialize_message, send, connect, collect_request,
     stream_read
 };
-use crate::service::{
+use crate::legacy::service::{
     Payload, State, serialize, heartbeat_handler_helper, ping_heartbeat
 };
-use crate::utils::{only_or_error, epoch};
-use crate::models::{
+use crate::legacy::utils::{only_or_error, epoch};
+use crate::legacy::models::{
     ListInterfaces, ListIPs, Listen, Claim, Publish, Collect, SendMSG
 };
-use crate::tls::{tls_config, load_ca};
+use crate::legacy::tls::{tls_config, load_ca};
 
-use crate::mode_api;
-use crate::mode_tcp;
+use crate::legacy::mode_api;
+use crate::legacy::mode_tcp;
 
 use std::{env, fs};
 use std::sync::Arc;

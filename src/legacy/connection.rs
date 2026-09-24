@@ -1,6 +1,6 @@
 /// Handles incoming connections and sending/receiving messages
 
-use crate::operations::GLOBAL_LAST_HEARTBEAT;
+use crate::legacy::operations::GLOBAL_LAST_HEARTBEAT;
 
 use std::fmt;
 use std::sync::Arc;
