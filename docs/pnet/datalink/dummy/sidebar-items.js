@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["channel","dummy_interface","interfaces"],"struct":["Config"]};

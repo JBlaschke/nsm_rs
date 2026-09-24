@@ -1,9 +1,30 @@
-/target
+# Build outputs (also catches Finder duplicates such as "target 2/")
+target*/
+
+# OS and editor noise
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.csr
+*.crt
+*.p12
+
+# Archives and images (never commit build artefacts)
+*.tar
+*.tar.*
+*.log
+
+# Deployment-specific manifests generated per cluster (see deploy/k8s/README.md)
 clusterrole.yaml
 clusterrolebinding.yaml
 role.yaml
 rolebinding.yaml
 view-events-role.yaml
-view-events-rolebinding.yam
-server.csr
-server.keyl

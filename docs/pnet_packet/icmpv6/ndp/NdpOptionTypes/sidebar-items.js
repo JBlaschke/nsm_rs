@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["MTU","PrefixInformation","RedirectedHeader","SourceLLAddr","TargetLLAddr"]};

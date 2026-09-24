@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["EDEADLOCK","ELAST","EWOULDBLOCK"],"enum":["Errno"],"fn":["errno","from_i32"],"trait":["ErrnoSentinel"]};

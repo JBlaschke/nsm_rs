@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["IcmpCodes"],"struct":["DestinationUnreachable","DestinationUnreachableIterable","DestinationUnreachablePacket","MutableDestinationUnreachablePacket"]};

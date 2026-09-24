@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["checksum"],"mod":["IcmpTypes","destination_unreachable","echo_reply","echo_request","time_exceeded"],"struct":["Icmp","IcmpCode","IcmpIterable","IcmpPacket","IcmpType","MutableIcmpPacket"]};

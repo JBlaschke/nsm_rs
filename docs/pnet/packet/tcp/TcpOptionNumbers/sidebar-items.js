@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["EOL","MSS","NOP","SACK","SACK_PERMITTED","TIMESTAMPS","WSCALE"]};

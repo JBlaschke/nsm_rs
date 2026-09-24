@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["Icmpv6Codes"],"struct":["EchoReply","EchoReplyIterable","EchoReplyPacket","Identifier","MutableEchoReplyPacket","SequenceNumber"]};

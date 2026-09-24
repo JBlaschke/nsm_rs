@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ParseMacAddrErr"],"fn":["checksum","ipv4_checksum","ipv6_checksum"],"struct":["MacAddr"],"trait":["Octets"]};

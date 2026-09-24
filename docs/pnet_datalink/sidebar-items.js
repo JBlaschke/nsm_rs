@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Channel","ChannelType","FanoutType","ParseMacAddrErr"],"fn":["channel","interfaces"],"mod":["bpf","dummy"],"struct":["Config","FanoutOption","MacAddr","NetworkInterface"],"trait":["DataLinkReceiver","DataLinkSender"],"type":["EtherType","InterfaceType"]};
