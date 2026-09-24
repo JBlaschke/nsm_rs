@@ -1,3 +1,67 @@
+# 1.12.1 (July 8th, 2026)
+
+### Fixed
+- Properly handle when `Box::new` panics (#837)
+
+# 1.12.0 (June 18th, 2026)
+
+### Added
+- Add `BytesMut::extend_from_within()` (#818)
+- Add `BytesMut::try_unsplit()` (#746)
+
+### Fixed
+- Fix panic in `get_int` if `nbytes` is zero (#806)
+
+### Changed
+- Pass vtable data by value (#826)
+- Exclude development scripts from published package (#810)
+
+### Documented
+- Document that `BytesMut::{reserve,try_reserve}` doesn't preserve unused capacity (#808)
+
+# 1.11.1 (February 3rd, 2026)
+
+- Fix integer overflow in `BytesMut::reserve`
+
+# 1.11.0 (November 14th, 2025)
+
+- Bump MSRV to 1.57 (#788)
+
+### Fixed
+
+- fix: `BytesMut` only reuse if src has remaining (#803)
+- Specialize `BytesMut::put::<Bytes>` (#793)
+- Reserve capacity in `BytesMut::put` (#794)
+- Change `BytesMut::remaining_mut` to use `isize::MAX` instead of `usize::MAX` (#795)
+
+### Internal changes
+
+- Guarantee address in `slice()` for empty slices. (#780)
+- Rename `Vtable::to_*` -> `Vtable::into_*` (#776)
+- Fix latest clippy warnings (#787)
+- Ignore `BytesMut::freeze` doctest on wasm (#790)
+- Move `drop_fn` of `from_owner` into vtable (#801)
+
+# 1.10.1 (March 5th, 2025)
+
+### Fixed
+
+- Fix memory leak when using `to_vec` with `Bytes::from_owner` (#773)
+
+# 1.10.0 (February 3rd, 2025)
+
+### Added
+
+- Add feature to support platforms without atomic CAS (#467)
+- `try_get_*` methods for `Buf` trait (#753)
+- Implement `Buf::chunks_vectored` for `Take` (#617)
+- Implement `Buf::chunks_vectored` for `VecDeque<u8>` (#708)
+
+### Fixed
+
+- Remove incorrect guarantee for `chunks_vectored` (#754)
+- Ensure that tests pass under `panic=abort` (#749)
+
 # 1.9.0 (November 27, 2024)
 
 ### Added

@@ -1,20 +1,20 @@
 use super::TokenStreamExt;
-use alloc::borrow::Cow;
+use alloc::borrow::{Cow, ToOwned};
+use alloc::boxed::Box;
+use alloc::ffi::CString;
 use alloc::rc::Rc;
+use alloc::string::String;
+use core::ffi::CStr;
 use core::iter;
 use proc_macro2::{Group, Ident, Literal, Punct, Span, TokenStream, TokenTree};
-use std::ffi::{CStr, CString};
+use std::sync::Arc;
 
 /// Types that can be interpolated inside a `quote!` invocation.
-///
-/// [`quote!`]: macro.quote.html
 pub trait ToTokens {
     /// Write `self` to the given `TokenStream`.
     ///
     /// The token append methods provided by the [`TokenStreamExt`] extension
     /// trait may be useful for implementing `ToTokens`.
-    ///
-    /// [`TokenStreamExt`]: trait.TokenStreamExt.html
     ///
     /// # Example
     ///
@@ -75,13 +75,13 @@ pub trait ToTokens {
     }
 }
 
-impl<'a, T: ?Sized + ToTokens> ToTokens for &'a T {
+impl<T: ?Sized + ToTokens> ToTokens for &T {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         (**self).to_tokens(tokens);
     }
 }
 
-impl<'a, T: ?Sized + ToTokens> ToTokens for &'a mut T {
+impl<T: ?Sized + ToTokens> ToTokens for &mut T {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         (**self).to_tokens(tokens);
     }
@@ -100,6 +100,12 @@ impl<T: ?Sized + ToTokens> ToTokens for Box<T> {
 }
 
 impl<T: ?Sized + ToTokens> ToTokens for Rc<T> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        (**self).to_tokens(tokens);
+    }
+}
+
+impl<T: ?Sized + ToTokens> ToTokens for Arc<T> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         (**self).to_tokens(tokens);
     }

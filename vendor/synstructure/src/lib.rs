@@ -164,6 +164,7 @@ extern crate proc_macro;
 use std::collections::HashSet;
 
 use syn::parse::{ParseStream, Parser};
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
     braced, punctuated, token, Attribute, Data, DeriveInput, Error, Expr, Field, Fields,
@@ -256,31 +257,29 @@ fn merge_generics(into: &mut Generics, from: &Generics) -> Result<()> {
     for p in &from.params {
         for op in &into.params {
             match (op, p) {
-                (GenericParam::Type(otp), GenericParam::Type(tp)) => {
-                    // NOTE: This is only OK because syn ignores the span for equality purposes.
-                    if otp.ident == tp.ident {
-                        return Err(Error::new_spanned(
-                            p,
-                            format!(
-                                "Attempted to merge conflicting generic parameters: {} and {}",
-                                quote!(#op),
-                                quote!(#p)
-                            ),
-                        ));
-                    }
+                // NOTE: This is only OK because syn ignores the span for equality purposes.
+                (GenericParam::Type(otp), GenericParam::Type(tp)) if otp.ident == tp.ident => {
+                    return Err(Error::new_spanned(
+                        p,
+                        format!(
+                            "Attempted to merge conflicting generic parameters: {} and {}",
+                            quote!(#op),
+                            quote!(#p)
+                        ),
+                    ));
                 }
-                (GenericParam::Lifetime(olp), GenericParam::Lifetime(lp)) => {
-                    // NOTE: This is only OK because syn ignores the span for equality purposes.
-                    if olp.lifetime == lp.lifetime {
-                        return Err(Error::new_spanned(
-                            p,
-                            format!(
-                                "Attempted to merge conflicting generic parameters: {} and {}",
-                                quote!(#op),
-                                quote!(#p)
-                            ),
-                        ));
-                    }
+                // NOTE: This is only OK because syn ignores the span for equality purposes.
+                (GenericParam::Lifetime(olp), GenericParam::Lifetime(lp))
+                    if olp.lifetime == lp.lifetime =>
+                {
+                    return Err(Error::new_spanned(
+                        p,
+                        format!(
+                            "Attempted to merge conflicting generic parameters: {} and {}",
+                            quote!(#op),
+                            quote!(#p)
+                        ),
+                    ));
                 }
                 // We don't support merging Const parameters, because that wouldn't make much sense.
                 _ => (),
@@ -324,10 +323,10 @@ where
 /// `quote!` macro. It expands to a reference to the matched field.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BindingInfo<'a> {
-    /// The name which this BindingInfo will bind to.
+    /// The name which this `BindingInfo` will bind to.
     pub binding: Ident,
 
-    /// The type of binding which this BindingInfo will create.
+    /// The type of binding which this `BindingInfo` will create.
     pub style: BindStyle,
 
     field: &'a Field,
@@ -340,7 +339,7 @@ pub struct BindingInfo<'a> {
     index: usize,
 }
 
-impl<'a> ToTokens for BindingInfo<'a> {
+impl ToTokens for BindingInfo<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         self.binding.to_tokens(tokens);
     }
@@ -459,9 +458,7 @@ fn get_ty_params(field: &Field, generics: &Generics) -> Vec<bool> {
         fn visit_type_macro(&mut self, x: &'a TypeMacro) {
             // If we see a type_mac declaration, then we can't know what type parameters
             // it might be binding, so we presume it binds all of them.
-            for r in &mut self.result {
-                *r = true;
-            }
+            self.result.fill(true);
             visit::visit_type_macro(self, x);
         }
     }
@@ -488,10 +485,12 @@ impl<'a> VariantInfo<'a> {
                     .into_iter()
                     .enumerate()
                     .map(|(i, field)| {
+                        // XXX: binding_span has to be call_site to avoid privacy
+                        // when deriving on private fields, but be located at the field
+                        // span for nicer diagnostics.
+                        let binding_span = Span::call_site().located_at(field.span());
                         BindingInfo {
-                            // XXX: This has to be call_site to avoid privacy
-                            // when deriving on private fields.
-                            binding: format_ident!("__binding_{}", i),
+                            binding: format_ident!("__binding_{}", i, span = binding_span),
                             style: BindStyle::Ref,
                             field,
                             generics,
@@ -1748,6 +1747,7 @@ impl<'a> Structure<'a> {
                     predicates: punctuated::Punctuated::new(),
                 });
                 clause.predicates.push(WherePredicate::Type(PredicateType {
+                    attrs: Vec::new(),
                     lifetimes: None,
                     bounded_ty: ty,
                     colon_token: Default::default(),
@@ -1776,6 +1776,7 @@ impl<'a> Structure<'a> {
                     AddBounds::Both | AddBounds::Generics => {
                         for param in binding.referenced_ty_params() {
                             pred(Type::Path(TypePath {
+                                attrs: Vec::new(),
                                 qself: None,
                                 path: (*param).clone().into(),
                             }));

@@ -11,8 +11,9 @@
 
 [package]
 edition = "2021"
+rust-version = "1.88"
 name = "rcgen"
-version = "0.13.2"
+version = "0.14.10"
 build = false
 autolib = false
 autobins = false
@@ -30,6 +31,19 @@ keywords = [
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rustls/rcgen"
 
+[package.metadata.docs.rs]
+features = [
+    "aws_lc_rs",
+    "aws_lc_rs_unstable",
+    "crypto",
+    "ring",
+    "x509-parser",
+]
+rustdoc-args = [
+    "--cfg",
+    "rcgen_docsrs",
+]
+
 [package.metadata.cargo_check_external_types]
 allowed_external_types = [
     "time::offset_date_time::OffsetDateTime",
@@ -37,17 +51,34 @@ allowed_external_types = [
     "rustls_pki_types::*",
 ]
 
-[package.metadata.docs.rs]
-features = ["x509-parser"]
+[features]
+aws_lc_rs = [
+    "crypto",
+    "dep:aws-lc-rs",
+    "aws-lc-rs/aws-lc-sys",
+    "x509-parser?/verify-aws",
+]
+aws_lc_rs_unstable = ["aws_lc_rs"]
+crypto = []
+default = [
+    "crypto",
+    "pem",
+    "ring",
+]
+fips = [
+    "crypto",
+    "dep:aws-lc-rs",
+    "aws-lc-rs/fips",
+]
+ring = [
+    "crypto",
+    "dep:ring",
+    "x509-parser?/verify",
+]
 
 [lib]
 name = "rcgen"
 path = "src/lib.rs"
-
-[[example]]
-name = "rsa-irc"
-path = "examples/rsa-irc.rs"
-required-features = ["pem"]
 
 [[example]]
 name = "rsa-irc-openssl"
@@ -63,6 +94,14 @@ required-features = [
 ]
 
 [[example]]
+name = "sign-leaf-with-pem-files"
+path = "examples/sign-leaf-with-pem-files.rs"
+required-features = [
+    "pem",
+    "x509-parser",
+]
+
+[[example]]
 name = "simple"
 path = "examples/simple.rs"
 required-features = [
@@ -70,33 +109,13 @@ required-features = [
     "pem",
 ]
 
-[[test]]
-name = "botan"
-path = "tests/botan.rs"
-
-[[test]]
-name = "generic"
-path = "tests/generic.rs"
-
-[[test]]
-name = "openssl"
-path = "tests/openssl.rs"
-
-[[test]]
-name = "util"
-path = "tests/util.rs"
-
-[[test]]
-name = "webpki"
-path = "tests/webpki.rs"
-
 [dependencies.aws-lc-rs]
-version = "1.6.0"
+version = "1.18"
 optional = true
 default-features = false
 
 [dependencies.pem]
-version = "3.0.2"
+version = "4"
 optional = true
 
 [dependencies.pki-types]
@@ -112,12 +131,11 @@ version = "0.3.6"
 default-features = false
 
 [dependencies.x509-parser]
-version = "0.16"
-features = ["verify"]
+version = "0.18"
 optional = true
 
 [dependencies.yasna]
-version = "0.5.2"
+version = "0.6"
 features = [
     "time",
     "std",
@@ -127,52 +145,10 @@ features = [
 version = "1.2"
 optional = true
 
-[dev-dependencies.botan]
-version = "0.10"
-features = ["vendored"]
-
-[dev-dependencies.openssl]
+[target."cfg(unix)".dev-dependencies.openssl]
 version = "0.10"
 
-[dev-dependencies.pki-types]
-version = "1"
-package = "rustls-pki-types"
-
-[dev-dependencies.rand]
-version = "0.8"
-
-[dev-dependencies.ring]
-version = "0.17"
-
-[dev-dependencies.rsa]
-version = "0.9"
-
-[dev-dependencies.rustls-webpki]
-version = "0.102"
-features = ["std"]
-
-[dev-dependencies.x509-parser]
-version = "0.16"
-features = ["verify"]
-
-[features]
-aws_lc_rs = [
-    "crypto",
-    "dep:aws-lc-rs",
-    "aws-lc-rs/aws-lc-sys",
-]
-crypto = []
-default = [
-    "crypto",
-    "pem",
-    "ring",
-]
-fips = [
-    "crypto",
-    "dep:aws-lc-rs",
-    "aws-lc-rs/fips",
-]
-ring = [
-    "crypto",
-    "dep:ring",
-]
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = ["cfg(rcgen_docsrs)"]

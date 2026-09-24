@@ -14,15 +14,15 @@
 
 #![doc = include_str!("../README.md")]
 #![doc(html_logo_url = "https://raw.githubusercontent.com/clap-rs/clap/master/assets/clap.png")]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::print_stderr)]
 #![warn(clippy::print_stdout)]
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput};
 use syn::{Data, DataStruct, Fields};
+use syn::{DeriveInput, parse_macro_input};
 
 #[macro_use]
 mod macros;

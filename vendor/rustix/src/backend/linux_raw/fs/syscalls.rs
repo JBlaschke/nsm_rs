@@ -14,6 +14,10 @@ use crate::backend::conv::fs::oflags_for_open_how;
     target_arch = "riscv64",
     target_arch = "mips",
     target_arch = "mips32r6",
+    all(
+        target_pointer_width = "32",
+        any(target_arch = "arm", target_arch = "powerpc"),
+    )
 ))]
 use crate::backend::conv::zero;
 use crate::backend::conv::{
@@ -509,6 +513,10 @@ pub(crate) fn fstat(fd: BorrowedFd<'_>) -> io::Result<Stat> {
     unsafe {
         let mut result = MaybeUninit::<Stat>::uninit();
         ret(syscall!(__NR_fstat, fd, &mut result))?;
+
+        #[cfg(sanitize_memory)]
+        crate::msan::unpoison_maybe_uninit(&result);
+
         Ok(result.assume_init())
     }
 }
@@ -1712,11 +1720,17 @@ mod tests {
 
     #[test]
     fn test_sizes() {
-        assert_eq_size!(linux_raw_sys::general::__kernel_loff_t, u64);
-        assert_eq_align!(linux_raw_sys::general::__kernel_loff_t, u64);
+        static_assertions::assert_eq_size!(linux_raw_sys::general::__kernel_loff_t, u64);
+        static_assertions::assert_eq_align!(linux_raw_sys::general::__kernel_loff_t, u64);
 
         // Assert that `Timestamps` has the expected layout.
-        assert_eq_size!([linux_raw_sys::general::__kernel_timespec; 2], Timestamps);
-        assert_eq_align!([linux_raw_sys::general::__kernel_timespec; 2], Timestamps);
+        static_assertions::assert_eq_size!(
+            [linux_raw_sys::general::__kernel_timespec; 2],
+            Timestamps
+        );
+        static_assertions::assert_eq_align!(
+            [linux_raw_sys::general::__kernel_timespec; 2],
+            Timestamps
+        );
     }
 }

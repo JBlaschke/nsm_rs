@@ -1,6 +1,6 @@
 // cargo run --example upstream_benchmark --release
 
-use rand::{Rng, SeedableRng};
+use rand::{RngExt as _, SeedableRng as _};
 
 const SAMPLES: usize = 10000;
 const ITERATIONS: usize = 1000;
@@ -45,7 +45,7 @@ macro_rules! benchmark {
             let mut throwaway = 0;
             for _ in 0..SAMPLES {
                 let f = loop {
-                    let f = $ty::from_bits(rng.gen());
+                    let f = $ty::from_bits(rng.random());
                     if f.is_finite() {
                         break f;
                     }

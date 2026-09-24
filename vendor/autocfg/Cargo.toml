@@ -12,10 +12,11 @@
 [package]
 rust-version = "1.0"
 name = "autocfg"
-version = "1.4.0"
+version = "1.5.1"
 authors = ["Josh Stone <cuviper@gmail.com>"]
 build = false
 exclude = ["/.github/**"]
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -71,5 +72,4 @@ path = "tests/tests.rs"
 [[test]]
 name = "wrappers"
 path = "tests/wrappers.rs"
-
-[dependencies]
+harness = false

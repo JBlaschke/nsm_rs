@@ -56,28 +56,28 @@ mod tests {
 
     #[test]
     fn test_layouts() {
-        #[cfg(linux_kernel)]
-        assert_eq_size!(FsWord, linux_raw_sys::general::__fsword_t);
+        #[cfg(linux_raw_dep)]
+        static_assertions::assert_eq_size!(FsWord, linux_raw_sys::general::__fsword_t);
 
         // Don't test against `__kernel_mode_t` on platforms where it's a
         // `u16`.
-        #[cfg(linux_kernel)]
+        #[cfg(linux_raw_dep)]
         #[cfg(not(any(
             target_arch = "x86",
             target_arch = "sparc",
             target_arch = "avr",
             target_arch = "arm",
         )))]
-        assert_eq_size!(RawMode, linux_raw_sys::general::__kernel_mode_t);
+        static_assertions::assert_eq_size!(RawMode, linux_raw_sys::general::__kernel_mode_t);
 
-        #[cfg(linux_kernel)]
+        #[cfg(linux_raw_dep)]
         #[cfg(any(
             target_arch = "x86",
             target_arch = "sparc",
             target_arch = "avr",
             target_arch = "arm",
         ))]
-        assert_eq_size!(u16, linux_raw_sys::general::__kernel_mode_t);
+        static_assertions::assert_eq_size!(u16, linux_raw_sys::general::__kernel_mode_t);
 
         let some_stat: Stat = unsafe { core::mem::zeroed() };
 
@@ -347,7 +347,11 @@ mod tests {
             #[cfg(not(libc))] // not in libc yet
             check_renamed_struct_field!(Statx, statx, stx_atomic_write_segments_max);
             #[cfg(linux_raw)]
-            check_renamed_struct_field!(Statx, statx, __spare1);
+            check_renamed_struct_field!(Statx, statx, stx_dio_read_offset_align);
+            #[cfg(linux_raw)]
+            check_renamed_struct_field!(Statx, statx, stx_atomic_write_unit_max_opt);
+            #[cfg(linux_raw)]
+            check_renamed_struct_field!(Statx, statx, __spare2);
             #[cfg(linux_raw)]
             check_renamed_struct_field!(Statx, statx, __spare3);
         }

@@ -189,7 +189,10 @@
 //!     https://docs.rs/tracing/latest/tracing/trait.Subscriber.html
 //! [`tracing`]: https://crates.io/crates/tracing
 //! [`fmt::format`]: mod@crate::fmt::format
-use std::{any::TypeId, error::Error, io};
+
+use alloc::boxed::Box;
+use core::any::TypeId;
+use std::{error::Error, io};
 use tracing_core::{span, subscriber::Interest, Event, Metadata};
 
 mod fmt_layer;
@@ -443,7 +446,7 @@ where
         if id == TypeId::of::<Self>() {
             Some(self as *const Self as *const ())
         } else {
-            self.inner.downcast_raw(id)
+            unsafe { self.inner.downcast_raw(id) }
         }
     }
 }
@@ -630,6 +633,22 @@ where
     pub fn with_ansi(self, ansi: bool) -> SubscriberBuilder<N, format::Format<L, T>, F, W> {
         SubscriberBuilder {
             inner: self.inner.with_ansi(ansi),
+            ..self
+        }
+    }
+
+    /// Sets whether ANSI control character sanitization is enabled.
+    ///
+    /// This defaults to `true` as a protective measure against terminal
+    /// injection attacks. If this is set to `false`, ANSI sanitization is
+    /// disabled and trusted ANSI control sequences in logged values are passed
+    /// through unchanged.
+    pub fn with_ansi_sanitization(
+        self,
+        ansi_sanitization: bool,
+    ) -> SubscriberBuilder<N, format::Format<L, T>, F, W> {
+        SubscriberBuilder {
+            inner: self.inner.with_ansi_sanitization(ansi_sanitization),
             ..self
         }
     }
@@ -1196,7 +1215,7 @@ pub fn try_init() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     #[cfg(not(feature = "env-filter"))]
     let subscriber = {
         use crate::{filter::Targets, layer::SubscriberExt};
-        use std::{env, str::FromStr};
+        use std::{env, eprintln, str::FromStr};
         let targets = match env::var("RUST_LOG") {
             Ok(var) => Targets::from_str(&var)
                 .map_err(|e| {
@@ -1255,6 +1274,7 @@ mod test {
             Subscriber,
         },
     };
+    use alloc::{borrow::ToOwned, string::String, vec::Vec};
     use std::{
         io,
         sync::{Arc, Mutex, MutexGuard, TryLockError},

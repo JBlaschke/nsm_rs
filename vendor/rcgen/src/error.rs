@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 /// The error type of the rcgen crate
 pub enum Error {
@@ -10,6 +10,9 @@ pub enum Error {
 	CouldNotParseCertificationRequest,
 	/// The given key pair couldn't be parsed
 	CouldNotParseKeyPair,
+	/// The CSR signature is invalid
+	#[cfg(feature = "x509-parser")]
+	InvalidCertificationRequestSignature,
 	#[cfg(feature = "x509-parser")]
 	/// Invalid subject alternative name type
 	InvalidNameType,
@@ -42,6 +45,8 @@ pub enum Error {
 	InvalidCrlNextUpdate,
 	/// CRL issuer specifies Key Usages that don't include cRLSign.
 	IssuerNotCrlSigner,
+	/// A CRL distribution point was specified without any URIs.
+	EmptyCrlDistributionPointUris,
 	#[cfg(not(feature = "crypto"))]
 	/// Missing serial number
 	MissingSerialNumber,
@@ -62,8 +67,10 @@ impl fmt::Display for Error {
 			)?,
 			CouldNotParseKeyPair => write!(f, "Could not parse key pair")?,
 			#[cfg(feature = "x509-parser")]
+			InvalidCertificationRequestSignature => write!(f, "Invalid CSR signature")?,
+			#[cfg(feature = "x509-parser")]
 			InvalidNameType => write!(f, "Invalid subject alternative name type")?,
-			InvalidAsn1String(e) => write!(f, "{}", e)?,
+			InvalidAsn1String(e) => write!(f, "{e}")?,
 			InvalidIpAddressOctetLength(actual) => {
 				write!(f, "Invalid IP address octet length of {actual} bytes")?
 			},
@@ -80,18 +87,21 @@ impl fmt::Display for Error {
 			#[cfg(feature = "x509-parser")]
 			UnsupportedExtension => write!(f, "Unsupported extension requested in CSR")?,
 			RingUnspecified => write!(f, "Unspecified ring error")?,
-			RingKeyRejected(e) => write!(f, "Key rejected by ring: {}", e)?,
+			RingKeyRejected(e) => write!(f, "Key rejected by ring: {e}")?,
 
 			Time => write!(f, "Time error")?,
 			RemoteKeyError => write!(f, "Remote key error")?,
 			#[cfg(feature = "pem")]
-			PemError(e) => write!(f, "PEM error: {}", e)?,
+			PemError(e) => write!(f, "PEM error: {e}")?,
 			UnsupportedInCsr => write!(f, "Certificate parameter unsupported in CSR")?,
 			InvalidCrlNextUpdate => write!(f, "Invalid CRL next update parameter")?,
 			IssuerNotCrlSigner => write!(
 				f,
 				"CRL issuer must specify no key usage, or key usage including cRLSign"
 			)?,
+			EmptyCrlDistributionPointUris => {
+				write!(f, "CRL distribution points must include at least one URI")?
+			},
 			#[cfg(not(feature = "crypto"))]
 			MissingSerialNumber => write!(f, "A serial number must be specified")?,
 			#[cfg(feature = "x509-parser")]
@@ -104,7 +114,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Invalid ASN.1 string type
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum InvalidAsn1String {
 	/// Invalid PrintableString type
@@ -123,11 +133,11 @@ impl fmt::Display for InvalidAsn1String {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		use InvalidAsn1String::*;
 		match self {
-			PrintableString(s) => write!(f, "Invalid PrintableString: '{}'", s)?,
-			Ia5String(s) => write!(f, "Invalid IA5String: '{}'", s)?,
-			BmpString(s) => write!(f, "Invalid BMPString: '{}'", s)?,
-			UniversalString(s) => write!(f, "Invalid UniversalString: '{}'", s)?,
-			TeletexString(s) => write!(f, "Invalid TeletexString: '{}'", s)?,
+			PrintableString(s) => write!(f, "Invalid PrintableString: '{s}'")?,
+			Ia5String(s) => write!(f, "Invalid IA5String: '{s}'")?,
+			BmpString(s) => write!(f, "Invalid BMPString: '{s}'")?,
+			UniversalString(s) => write!(f, "Invalid UniversalString: '{s}'")?,
+			TeletexString(s) => write!(f, "Invalid TeletexString: '{s}'")?,
 		};
 		Ok(())
 	}

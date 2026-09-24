@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::parts_write_adapter::CoreWriteAsPartsWrite;
-use core::{cmp::Ordering, convert::Infallible};
+use core::convert::Infallible;
 
 /// A writeable object that can fail while writing.
 ///
@@ -93,6 +93,7 @@ use core::{cmp::Ordering, convert::Infallible};
 /// );
 /// ```
 pub trait TryWriteable {
+    /// The error type
     type Error;
 
     /// Writes the content of this writeable to a sink.
@@ -174,11 +175,22 @@ pub trait TryWriteable {
         LengthHint::undefined()
     }
 
+    /// Returns a `&str` that matches the output of `try_write_to`, if possible.
+    ///
+    /// This method is used to avoid materializing a [`String`] in `write_to_string`.
+    fn try_writeable_borrow(&self) -> Option<Result<&str, (Self::Error, &str)>> {
+        None
+    }
+
     /// Writes the content of this writeable to a string.
     ///
     /// In the failure case, this function returns the error and the best-effort string ("lossy mode").
     ///
-    /// Examples
+    /// # Note to implementors
+    ///
+    /// See the note in [`Writeable::write_to_string`].
+    ///
+    /// # Examples
     ///
     /// ```
     /// # use std::borrow::Cow;
@@ -192,7 +204,13 @@ pub trait TryWriteable {
     ///     .try_write_to_string()
     ///     .map_err(|(e, _)| e);
     /// ```
-    fn try_write_to_string(&self) -> Result<Cow<str>, (Self::Error, Cow<str>)> {
+    #[cfg(feature = "alloc")]
+    fn try_write_to_string(&self) -> Result<Cow<'_, str>, (Self::Error, Cow<'_, str>)> {
+        if let Some(borrow) = self.try_writeable_borrow() {
+            return borrow
+                .map(Cow::Borrowed)
+                .map_err(|(e, s)| (e, Cow::Borrowed(s)));
+        }
         let hint = self.writeable_length_hint();
         if hint.is_zero() {
             return Ok(Cow::Borrowed(""));
@@ -205,87 +223,6 @@ pub trait TryWriteable {
             Ok(()) => Ok(Cow::Owned(output)),
             Err(e) => Err((e, Cow::Owned(output))),
         }
-    }
-
-    /// Compares the content of this writeable to a byte slice.
-    ///
-    /// This function compares the "lossy mode" string; for more information,
-    /// see [`TryWriteable::try_write_to()`].
-    ///
-    /// For more information, see [`Writeable::writeable_cmp_bytes()`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use core::cmp::Ordering;
-    /// use core::fmt;
-    /// use writeable::TryWriteable;
-    /// # use writeable::PartsWrite;
-    /// # use writeable::LengthHint;
-    ///
-    /// #[derive(Debug, PartialEq, Eq)]
-    /// enum HelloWorldWriteableError {
-    ///     MissingName
-    /// }
-    ///
-    /// #[derive(Debug, PartialEq, Eq)]
-    /// struct HelloWorldWriteable {
-    ///     pub name: Option<&'static str>
-    /// }
-    ///
-    /// impl TryWriteable for HelloWorldWriteable {
-    ///     type Error = HelloWorldWriteableError;
-    ///     // see impl in TryWriteable docs
-    /// #    fn try_write_to_parts<S: PartsWrite + ?Sized>(
-    /// #        &self,
-    /// #        sink: &mut S,
-    /// #    ) -> Result<Result<(), Self::Error>, fmt::Error> {
-    /// #        sink.write_str("Hello, ")?;
-    /// #        // Use `impl TryWriteable for Result` to generate the error part:
-    /// #        let _ = self.name.ok_or("nobody").try_write_to_parts(sink)?;
-    /// #        sink.write_char('!')?;
-    /// #        // Return a doubly-wrapped Result.
-    /// #        // The outer Result is for fmt::Error, handled by the `?`s above.
-    /// #        // The inner Result is for our own Self::Error.
-    /// #        if self.name.is_some() {
-    /// #            Ok(Ok(()))
-    /// #        } else {
-    /// #            Ok(Err(HelloWorldWriteableError::MissingName))
-    /// #        }
-    /// #    }
-    /// }
-    ///
-    /// // Success case:
-    /// let writeable = HelloWorldWriteable { name: Some("Alice") };
-    /// let writeable_str = writeable.try_write_to_string().expect("name is Some");
-    ///
-    /// assert_eq!(Ordering::Equal, writeable.writeable_cmp_bytes(b"Hello, Alice!"));
-    ///
-    /// assert_eq!(Ordering::Greater, writeable.writeable_cmp_bytes(b"Alice!"));
-    /// assert_eq!(Ordering::Greater, (*writeable_str).cmp("Alice!"));
-    ///
-    /// assert_eq!(Ordering::Less, writeable.writeable_cmp_bytes(b"Hello, Bob!"));
-    /// assert_eq!(Ordering::Less, (*writeable_str).cmp("Hello, Bob!"));
-    ///
-    /// // Failure case:
-    /// let writeable = HelloWorldWriteable { name: None };
-    /// let mut writeable_str = String::new();
-    /// let _ = writeable.try_write_to(&mut writeable_str).expect("write to String is infallible");
-    ///
-    /// assert_eq!(Ordering::Equal, writeable.writeable_cmp_bytes(b"Hello, nobody!"));
-    ///
-    /// assert_eq!(Ordering::Greater, writeable.writeable_cmp_bytes(b"Hello, alice!"));
-    /// assert_eq!(Ordering::Greater, (*writeable_str).cmp("Hello, alice!"));
-    ///
-    /// assert_eq!(Ordering::Less, writeable.writeable_cmp_bytes(b"Hello, zero!"));
-    /// assert_eq!(Ordering::Less, (*writeable_str).cmp("Hello, zero!"));
-    /// ```
-    fn writeable_cmp_bytes(&self, other: &[u8]) -> Ordering {
-        let mut wc = cmp::WriteComparator::new(other);
-        let _ = self
-            .try_write_to(&mut wc)
-            .unwrap_or_else(|fmt::Error| Ok(()));
-        wc.finish().reverse()
     }
 }
 
@@ -328,19 +265,19 @@ where
         }
     }
 
-    #[inline]
-    fn try_write_to_string(&self) -> Result<Cow<str>, (Self::Error, Cow<str>)> {
+    fn try_writeable_borrow(&self) -> Option<Result<&str, (Self::Error, &str)>> {
         match self {
-            Ok(t) => Ok(t.write_to_string()),
-            Err(e) => Err((e.clone(), e.write_to_string())),
+            Ok(t) => t.writeable_borrow().map(Ok),
+            Err(e) => e.writeable_borrow().map(|s| Err((e.clone(), s))),
         }
     }
 
     #[inline]
-    fn writeable_cmp_bytes(&self, other: &[u8]) -> Ordering {
+    #[cfg(feature = "alloc")]
+    fn try_write_to_string(&self) -> Result<Cow<'_, str>, (Self::Error, Cow<'_, str>)> {
         match self {
-            Ok(t) => t.writeable_cmp_bytes(other),
-            Err(e) => e.writeable_cmp_bytes(other),
+            Ok(t) => Ok(t.write_to_string()),
+            Err(e) => Err((e.clone(), e.write_to_string())),
         }
     }
 }
@@ -380,16 +317,18 @@ where
     }
 
     #[inline]
-    fn write_to_string(&self) -> Cow<str> {
+    fn writeable_borrow(&self) -> Option<&str> {
+        let Ok(s) = self.0.try_writeable_borrow()?;
+        Some(s)
+    }
+
+    #[inline]
+    #[cfg(feature = "alloc")]
+    fn write_to_string(&self) -> Cow<'_, str> {
         match self.0.try_write_to_string() {
             Ok(s) => s,
             Err((infallible, _)) => match infallible {},
         }
-    }
-
-    #[inline]
-    fn writeable_cmp_bytes(&self, other: &[u8]) -> core::cmp::Ordering {
-        self.0.writeable_cmp_bytes(other)
     }
 }
 
@@ -438,15 +377,174 @@ where
     }
 
     #[inline]
-    fn try_write_to_string(&self) -> Result<Cow<str>, (Infallible, Cow<str>)> {
-        Ok(self.0.write_to_string())
+    fn try_writeable_borrow(&self) -> Option<Result<&str, (Self::Error, &str)>> {
+        self.0.writeable_borrow().map(Ok)
     }
 
     #[inline]
-    fn writeable_cmp_bytes(&self, other: &[u8]) -> core::cmp::Ordering {
-        self.0.writeable_cmp_bytes(other)
+    #[cfg(feature = "alloc")]
+    fn try_write_to_string(&self) -> Result<Cow<'_, str>, (Infallible, Cow<'_, str>)> {
+        Ok(self.0.write_to_string())
     }
 }
+
+/// Macro to implement [`TryWriteable`] by delegating to another `TryWriteable`.
+///
+/// Useful for wrapper types.
+///
+/// # Examples
+///
+/// ```
+/// struct MyStruct(Result<String, String>);
+/// writeable::impl_try_writeable_delegate!(
+///     MyStruct,
+///     |&self| &self.0,
+///     Error = String
+/// );
+///
+/// writeable::assert_try_writeable_eq!(
+///     MyStruct(Ok("hello".to_string())),
+///     "hello"
+/// );
+/// ```
+///
+/// With an error mapping fn:
+///
+/// ```
+/// struct MyStruct(Result<String, String>);
+/// #[derive(Debug, PartialEq)]
+/// struct MyError;
+/// writeable::impl_try_writeable_delegate!(
+///     MyStruct,
+///     |&self| &self.0,
+///     Error = MyError,
+///     |_error| MyError
+/// );
+///
+/// writeable::assert_try_writeable_eq!(
+///     MyStruct(Ok("hello".to_string())),
+///     "hello"
+/// );
+/// writeable::assert_try_writeable_eq!(
+///     MyStruct(Err("hello".to_string())),
+///     "hello",
+///     Err(MyError)
+/// );
+/// ```
+///
+/// With a cfg on fn `write_to_string`:
+///
+/// ```
+/// struct MyStruct(Result<String, String>);
+/// writeable::impl_try_writeable_delegate!(MyStruct, |&self| &self.0, Error = String, #[cfg(feature = "alloc")] fn try_write_to_string);
+///
+/// writeable::assert_try_writeable_eq!(
+///     MyStruct(Ok("hello".to_string())),
+///     "hello"
+/// );
+/// ```
+///
+/// With generics:
+///
+/// ```
+/// use writeable::Writeable;
+///
+/// struct MyStruct<T>(Result<T, T>);
+/// writeable::impl_try_writeable_delegate!(MyStruct<T>, |&self| &self.0, Error = T, where T: Writeable + Clone);
+///
+/// writeable::assert_try_writeable_eq!(
+///     MyStruct(Ok("hello".to_string())),
+///     "hello"
+/// );
+/// ```
+///
+/// Implement both `Writeable` and `TryWriteable`:
+///
+/// ```
+/// use writeable::adapters::LossyWrap;
+///
+/// // The LossyWrap needs to be a field of MyStruct since it can be borrowed from.
+/// struct MyStruct(LossyWrap<Result<String, String>>);
+/// writeable::impl_try_writeable_delegate!(MyStruct, |&self| &self.0.0, Error = String);
+/// writeable::impl_writeable_delegate!(MyStruct, |&self| &self.0);
+/// writeable::impl_display_with_writeable!(MyStruct);
+///
+/// writeable::assert_try_writeable_eq!(
+///     MyStruct(LossyWrap(Ok("hello".to_string()))),
+///     "hello"
+/// );
+///
+/// writeable::assert_writeable_eq!(
+///     MyStruct(LossyWrap(Ok("hello".to_string()))),
+///     "hello"
+/// );
+/// ```
+#[macro_export]
+macro_rules! impl_try_writeable_delegate {
+    ($ty:ty, |&$self:ident| $delegate:expr, Error = $error:ty $(, |$error_arg:ident| $error_map:expr)? $(, #[$alloc_feature:meta] fn try_write_to_string)? $(, where $($generics:tt)*)?) => {
+        impl$(<$($generics)*>)? $crate::TryWriteable for $ty {
+            type Error = $error;
+            #[inline]
+            fn try_write_to<W: core::fmt::Write + ?Sized>(
+                &$self,
+                sink: &mut W,
+            ) -> core::result::Result<core::result::Result<(), Self::Error>, core::fmt::Error> {
+                let result = ($delegate).try_write_to(sink)?;
+                $(
+                    let result = result.map_err(|$error_arg| { $error_map });
+                )?
+                Ok(result)
+            }
+            #[inline]
+            fn try_write_to_parts<S: $crate::PartsWrite + ?Sized>(
+                &$self,
+                sink: &mut S,
+            ) -> core::result::Result<core::result::Result<(), Self::Error>, core::fmt::Error> {
+                let result = ($delegate).try_write_to_parts(sink)?;
+                $(
+                    let result = result.map_err(|$error_arg| { $error_map });
+                )?
+                Ok(result)
+            }
+            #[inline]
+            fn writeable_length_hint(&$self) -> $crate::LengthHint {
+                ($delegate).writeable_length_hint()
+            }
+            #[inline]
+            fn try_writeable_borrow(&$self) -> Option<Result<&str, (Self::Error, &str)>> {
+                let result = ($delegate).try_writeable_borrow()?;
+                $(
+                    let error_map = |$error_arg| { $error_map };
+                    let result = result.map_err(|(err, cow)| (error_map(err), cow));
+                )?
+                Some(result)
+            }
+            #[inline]
+            $(#[$alloc_feature])?
+            fn try_write_to_string(
+                &$self,
+            ) -> core::result::Result<
+                $crate::_internal::Cow<'_, str>,
+                (Self::Error, $crate::_internal::Cow<'_, str>),
+            > {
+                let result = ($delegate).try_write_to_string();
+                $(
+                    let error_map = |$error_arg| { $error_map };
+                    let result = result.map_err(|(err, cow)| (error_map(err), cow));
+                )?
+                result
+            }
+        }
+    };
+}
+
+impl_try_writeable_delegate!(
+    &T,
+    |&self| *self,
+    Error = T::Error,
+    #[cfg(feature = "alloc")] fn try_write_to_string,
+    where T: TryWriteable + ?Sized
+);
 
 /// Testing macros for types implementing [`TryWriteable`].
 ///
@@ -464,7 +562,6 @@ where
 /// - Equality of string content
 /// - Equality of parts ([`*_parts_eq`] only)
 /// - Validity of size hint
-/// - Reflexivity of `cmp_bytes` and order against largest and smallest strings
 ///
 /// For a usage example, see [`TryWriteable`].
 ///
@@ -481,12 +578,11 @@ macro_rules! assert_try_writeable_eq {
         $crate::assert_try_writeable_eq!(@internal, $actual_writeable, $expected_str, $expected_result, $($arg)*);
     }};
     (@internal, $actual_writeable:expr, $expected_str:expr, $expected_result:expr, $($arg:tt)+) => {{
-        use $crate::TryWriteable;
         let actual_writeable = &$actual_writeable;
         let (actual_str, actual_parts, actual_error) = $crate::_internal::try_writeable_to_parts_for_test(actual_writeable);
         assert_eq!(actual_str, $expected_str, $($arg)*);
         assert_eq!(actual_error, Result::<(), _>::from($expected_result).err(), $($arg)*);
-        let actual_result = match actual_writeable.try_write_to_string() {
+        let actual_result = match $crate::TryWriteable::try_write_to_string(&actual_writeable) {
             Ok(actual_cow_str) => {
                 assert_eq!(actual_cow_str, $expected_str, $($arg)+);
                 Ok(())
@@ -497,7 +593,7 @@ macro_rules! assert_try_writeable_eq {
             }
         };
         assert_eq!(actual_result, Result::<(), _>::from($expected_result), $($arg)*);
-        let length_hint = actual_writeable.writeable_length_hint();
+        let length_hint = $crate::TryWriteable::writeable_length_hint(&actual_writeable);
         assert!(
             length_hint.0 <= actual_str.len(),
             "hint lower bound {} larger than actual length {}: {}",
@@ -509,14 +605,6 @@ macro_rules! assert_try_writeable_eq {
                 "hint upper bound {} smaller than actual length {}: {}",
                 length_hint.0, actual_str.len(), format!($($arg)*),
             );
-        }
-        let ordering = actual_writeable.writeable_cmp_bytes($expected_str.as_bytes());
-        assert_eq!(ordering, core::cmp::Ordering::Equal, $($arg)*);
-        let ordering = actual_writeable.writeable_cmp_bytes("\u{10FFFF}".as_bytes());
-        assert_eq!(ordering, core::cmp::Ordering::Less, $($arg)*);
-        if $expected_str != "" {
-            let ordering = actual_writeable.writeable_cmp_bytes("".as_bytes());
-            assert_eq!(ordering, core::cmp::Ordering::Greater, $($arg)*);
         }
         actual_parts // return for assert_try_writeable_parts_eq
     }};
@@ -544,4 +632,18 @@ fn test_result_try_writeable() {
     result = Err(44);
     assert_try_writeable_eq!(result, "44", Err(44));
     assert_try_writeable_parts_eq!(result, "44", Err(44), [(0, 2, Part::ERROR)])
+}
+
+#[cfg(test)]
+struct DelegatedTryMessage<'s>(Result<&'s str, usize>);
+
+#[cfg(test)]
+impl_try_writeable_delegate!(DelegatedTryMessage<'_>, |&self| &self.0, Error = usize);
+
+#[test]
+fn test_delegated_try_writeable() {
+    let mut message = DelegatedTryMessage(Ok("success"));
+    assert_try_writeable_eq!(message, "success");
+    message = DelegatedTryMessage(Err(44));
+    assert_try_writeable_eq!(message, "44", Err(44));
 }

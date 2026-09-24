@@ -2,9 +2,9 @@
 // called LICENSE at the top level of the ICU4X source tree
 // (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
 
-use criterion::{black_box, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box};
 
-use icu_normalizer::{ComposingNormalizer, DecomposingNormalizer};
+use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
 
 struct BenchDataContent {
     pub file_name: String,
@@ -28,10 +28,10 @@ fn strip_headers(content: &str) -> String {
 }
 
 fn normalizer_bench_data() -> [BenchDataContent; 15] {
-    let nfc_normalizer: ComposingNormalizer = ComposingNormalizer::new_nfc();
-    let nfd_normalizer: DecomposingNormalizer = DecomposingNormalizer::new_nfd();
-    let nfkc_normalizer: ComposingNormalizer = ComposingNormalizer::new_nfkc();
-    let nfkd_normalizer: DecomposingNormalizer = DecomposingNormalizer::new_nfkd();
+    let nfc_normalizer = ComposingNormalizerBorrowed::new_nfc();
+    let nfd_normalizer = DecomposingNormalizerBorrowed::new_nfd();
+    let nfkc_normalizer = ComposingNormalizerBorrowed::new_nfkc();
+    let nfkd_normalizer = DecomposingNormalizerBorrowed::new_nfkd();
 
     let content_latin: (&str, &str) = (
         "TestNames_Latin",
@@ -50,44 +50,44 @@ fn normalizer_bench_data() -> [BenchDataContent; 15] {
         &strip_headers(include_str!("./data/TestNames_Korean.txt")),
     );
     let content_random_words_ar: (&str, &str) = (
-        "TestRandomWordsUDHR_ar",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_ar.txt")),
+        "Carroll-11-ar",
+        &strip_headers(include_str!("./data/Carroll-11-ar.txt")),
     );
     let content_random_words_de: (&str, &str) = (
-        "TestRandomWordsUDHR_de",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_de.txt")),
+        "Carroll-11-de",
+        &strip_headers(include_str!("./data/Carroll-11-de.txt")),
     );
     let content_random_words_el: (&str, &str) = (
-        "TestRandomWordsUDHR_el",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_el.txt")),
+        "Carroll-11-el",
+        &strip_headers(include_str!("./data/Carroll-11-el.txt")),
     );
     let content_random_words_es: (&str, &str) = (
-        "TestRandomWordsUDHR_es",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_es.txt")),
+        "Carroll-11-es",
+        &strip_headers(include_str!("./data/Carroll-11-es.txt")),
     );
     let content_random_words_fr: (&str, &str) = (
-        "TestRandomWordsUDHR_fr",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_fr.txt")),
+        "Carroll-11-fr",
+        &strip_headers(include_str!("./data/Carroll-11-fr.txt")),
     );
     let content_random_words_he: (&str, &str) = (
-        "TestRandomWordsUDHR_he",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_he.txt")),
+        "Carroll-11-he",
+        &strip_headers(include_str!("./data/Carroll-11-he.txt")),
     );
     let content_random_words_pl: (&str, &str) = (
-        "TestRandomWordsUDHR_pl",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_pl.txt")),
+        "Carroll-11-pl",
+        &strip_headers(include_str!("./data/Carroll-11-pl.txt")),
     );
     let content_random_words_ru: (&str, &str) = (
-        "TestRandomWordsUDHR_ru",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_ru.txt")),
+        "Carroll-11-ru",
+        &strip_headers(include_str!("./data/Carroll-11-ru.txt")),
     );
     let content_random_words_th: (&str, &str) = (
-        "TestRandomWordsUDHR_th",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_th.txt")),
+        "Carroll-11-th",
+        &strip_headers(include_str!("./data/Carroll-11-th.txt")),
     );
     let content_random_words_tr: (&str, &str) = (
-        "TestRandomWordsUDHR_tr",
-        &strip_headers(include_str!("./data/TestRandomWordsUDHR_tr.txt")),
+        "Carroll-11-tr",
+        &strip_headers(include_str!("./data/Carroll-11-tr.txt")),
     );
     let content_viet: (&str, &str) = ("wotw", &strip_headers(include_str!("./data/wotw.txt")));
 
@@ -115,10 +115,10 @@ fn normalizer_bench_data() -> [BenchDataContent; 15] {
         let nfkd = &nfkd_normalizer.normalize(raw_content);
         BenchDataContent {
             file_name: file_name.to_owned(),
-            nfc: nfc.to_owned(),
-            nfd: nfd.to_owned(),
-            nfkc: nfkc.to_owned(),
-            nfkd: nfkd.to_owned(),
+            nfc: nfc.to_string(),
+            nfd: nfd.to_string(),
+            nfkc: nfkc.to_string(),
+            nfkd: nfkd.to_string(),
             nfc_u16: nfc.encode_utf16().collect(),
             nfd_u16: nfd.encode_utf16().collect(),
             nfkc_u16: nfkc.encode_utf16().collect(),
@@ -127,18 +127,18 @@ fn normalizer_bench_data() -> [BenchDataContent; 15] {
     })
 }
 
-fn function_under_bench(normalizer: &DecomposingNormalizer, text: &str) {
+fn function_under_bench(normalizer: &DecomposingNormalizerBorrowed, text: &str) {
     normalizer.normalize(text);
 }
 
-fn function_under_bench_u16(normalizer: &DecomposingNormalizer, text: &[u16]) {
+fn function_under_bench_u16(normalizer: &DecomposingNormalizerBorrowed, text: &[u16]) {
     normalizer.normalize_utf16(text);
 }
 
 pub fn criterion_benchmark(criterion: &mut Criterion) {
     let group_name = "decomposing_normalizer_nfkd";
 
-    let normalizer_under_bench: DecomposingNormalizer = DecomposingNormalizer::new_nfkd();
+    let normalizer_under_bench = DecomposingNormalizerBorrowed::new_nfkd();
 
     let mut group = criterion.benchmark_group(group_name);
     for bench_data_content in black_box(normalizer_bench_data()) {

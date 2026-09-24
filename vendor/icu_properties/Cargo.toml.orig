@@ -5,41 +5,58 @@
 [package]
 name = "icu_properties"
 description = "Definitions for Unicode properties"
+version.workspace = true
+categories.workspace = true
+keywords = ["character-properties", "unicode"]
 
 authors.workspace = true
-categories.workspace = true
 edition.workspace = true
 homepage.workspace = true
 include.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-version = "1.5.1"
 
 [package.metadata.docs.rs]
 all-features = true
 
-[dependencies]
-displaydoc = { workspace = true }
-icu_collections = { workspace = true }
-icu_provider = { workspace = true, features = ["macros"] }
-zerovec = { workspace = true, features = ["derive"] }
-databake = { workspace = true, features = ["derive"], optional = true}
-serde = { workspace = true, features = ["derive", "alloc"], optional = true }
-tinystr = { workspace = true, features = ["alloc", "zerovec"] }
+[package.metadata.cargo-all-features]
+max_combination_size = 3
 
+[dependencies]
+icu_collections = { workspace = true }
+icu_provider = { workspace = true }
+zerovec = { workspace = true, features = ["derive", "yoke"] }
+zerotrie = { workspace = true, features = ["yoke", "zerofrom"] }
+databake = { workspace = true, features = ["derive"], optional = true}
+serde = { workspace = true, features = ["derive"], optional = true }
+icu_locale_core = { workspace = true, features = ["zerovec"] }
+
+displaydoc = { workspace = true }
+
+log = { workspace = true, optional = true }
+
+harfbuzz-traits = { workspace = true, optional = true }
 unicode-bidi = { workspace = true, optional = true }
 
 icu_properties_data = { workspace = true, optional = true }
-icu_locid_transform = { workspace = true, optional = true, features = ["compiled_data"] }
 
 [dev-dependencies]
 icu = { path = "../../components/icu", default-features = false }
 
 [features]
+unstable = []
+log = ["dep:log"]
 default = ["compiled_data"]
-std = ["icu_collections/std", "icu_provider/std"]
-serde = ["dep:serde", "tinystr/serde", "zerovec/serde", "icu_collections/serde", "icu_provider/serde"]
-datagen = ["serde", "dep:databake", "zerovec/databake", "icu_collections/databake", "tinystr/databake"]
-bidi = [ "dep:unicode-bidi" ]
-compiled_data = ["dep:icu_properties_data", "dep:icu_locid_transform"]
+serde = ["dep:serde", "icu_locale_core/serde", "zerovec/serde", "icu_collections/serde", "icu_provider/serde", "zerotrie/serde"]
+datagen = ["serde", "dep:databake", "zerovec/databake", "icu_collections/databake", "icu_locale_core/databake", "zerotrie/databake", "icu_provider/export"]
+unicode_bidi = ["dep:unicode-bidi"]
+harfbuzz_traits = ["dep:harfbuzz-traits"]
+compiled_data = ["dep:icu_properties_data", "icu_provider/baked"]
+alloc = ["zerovec/alloc", "icu_collections/alloc", "serde?/alloc"]
+
+[package.metadata.cargo-semver-checks.lints]
+workspace = true
+
+[lints]
+workspace = true

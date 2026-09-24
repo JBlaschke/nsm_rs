@@ -33,7 +33,7 @@ use crate::fs::FallocateFlags;
 use crate::fs::FlockOperation;
 #[cfg(any(linux_kernel, target_os = "freebsd"))]
 use crate::fs::MemfdFlags;
-#[cfg(any(linux_kernel, apple))]
+#[cfg(any(linux_kernel, apple, target_os = "redox"))]
 use crate::fs::RenameFlags;
 #[cfg(any(linux_kernel, target_os = "freebsd", target_os = "fuchsia"))]
 use crate::fs::SealFlags;
@@ -49,18 +49,19 @@ use crate::fs::SealFlags;
     target_os = "wasi",
 )))]
 use crate::fs::StatFs;
-#[cfg(not(any(target_os = "espidf", target_os = "vita")))]
+#[cfg(not(any(target_os = "espidf", target_os = "horizon", target_os = "vita")))]
 use crate::fs::Timestamps;
 #[cfg(not(any(
     apple,
     target_os = "espidf",
+    target_os = "horizon",
     target_os = "redox",
     target_os = "vita",
     target_os = "wasi"
 )))]
 use crate::fs::{Dev, FileType};
 use crate::fs::{Mode, OFlags, SeekFrom, Stat};
-#[cfg(not(any(target_os = "haiku", target_os = "redox", target_os = "wasi")))]
+#[cfg(not(target_os = "wasi"))]
 use crate::fs::{StatVfs, StatVfsMountFlags};
 use crate::io;
 #[cfg(all(target_env = "gnu", fix_y2038))]
@@ -271,7 +272,7 @@ pub(crate) fn statfs(filename: &CStr) -> io::Result<StatFs> {
     }
 }
 
-#[cfg(not(any(target_os = "haiku", target_os = "redox", target_os = "wasi")))]
+#[cfg(not(target_os = "wasi"))]
 #[inline]
 pub(crate) fn statvfs(filename: &CStr) -> io::Result<StatVfs> {
     unsafe {
@@ -448,7 +449,6 @@ pub(crate) fn rename(old_path: &CStr, new_path: &CStr) -> io::Result<()> {
     unsafe { ret(c::rename(c_str(old_path), c_str(new_path))) }
 }
 
-#[cfg(not(target_os = "redox"))]
 pub(crate) fn renameat(
     old_dirfd: BorrowedFd<'_>,
     old_path: &CStr,
@@ -489,6 +489,25 @@ pub(crate) fn renameat(
             c_str(old_path),
             borrowed_fd(new_dirfd),
             c_str(new_path),
+        ))
+    }
+}
+
+#[cfg(target_os = "redox")]
+pub(crate) fn renameat2(
+    old_dirfd: BorrowedFd<'_>,
+    old_path: &CStr,
+    new_dirfd: BorrowedFd<'_>,
+    new_path: &CStr,
+    flags: RenameFlags,
+) -> io::Result<()> {
+    unsafe {
+        ret(c::renameat2(
+            borrowed_fd(old_dirfd),
+            c_str(old_path),
+            borrowed_fd(new_dirfd),
+            c_str(new_path),
+            flags.bits(),
         ))
     }
 }
@@ -654,7 +673,7 @@ pub(crate) fn stat(path: &CStr) -> io::Result<Stat> {
     )))]
     unsafe {
         #[cfg(test)]
-        assert_eq_size!(Stat, c::stat);
+        static_assertions::assert_eq_size!(Stat, c::stat);
 
         let mut stat = MaybeUninit::<Stat>::uninit();
         ret(c::stat(c_str(path), stat.as_mut_ptr().cast()))?;
@@ -700,7 +719,7 @@ pub(crate) fn lstat(path: &CStr) -> io::Result<Stat> {
     )))]
     unsafe {
         #[cfg(test)]
-        assert_eq_size!(Stat, c::stat);
+        static_assertions::assert_eq_size!(Stat, c::stat);
 
         let mut stat = MaybeUninit::<Stat>::uninit();
         ret(c::lstat(c_str(path), stat.as_mut_ptr().cast()))?;
@@ -742,7 +761,7 @@ pub(crate) fn statat(dirfd: BorrowedFd<'_>, path: &CStr, flags: AtFlags) -> io::
     )))]
     unsafe {
         #[cfg(test)]
-        assert_eq_size!(Stat, c::stat);
+        static_assertions::assert_eq_size!(Stat, c::stat);
 
         let mut stat = MaybeUninit::<Stat>::uninit();
         ret(c::fstatat(
@@ -923,6 +942,7 @@ pub(crate) fn utimensat(
                 c::c_int
             ) -> c::c_int
         }
+        #[cfg(not(any(target_os = "tvos", target_os = "watchos")))]
         extern "C" {
             fn setattrlist(
                 path: *const ffi::c_char,
@@ -932,6 +952,7 @@ pub(crate) fn utimensat(
                 options: c::c_ulong,
             ) -> c::c_int;
         }
+        #[cfg(not(any(target_os = "tvos", target_os = "watchos")))]
         const FSOPT_NOFOLLOW: c::c_ulong = 0x0000_0001;
 
         // If we have `utimensat`, use it.
@@ -944,8 +965,14 @@ pub(crate) fn utimensat(
             ));
         }
 
+        // Return `NOSYS` on platforms where `utimensat` cannot be emulated
+        // because `fork` is unavailable.
+        #[cfg(any(target_os = "tvos", target_os = "watchos"))]
+        return Err(io::Errno::NOSYS);
+
         // Convert `times`. We only need this in the child, but do it before
         // calling `fork` because it might fail.
+        #[cfg(not(any(target_os = "tvos", target_os = "watchos")))]
         let (attrbuf_size, times, attrs) = times_to_attrlist(times)?;
 
         // `setattrlistat` was introduced in 10.13 along with `utimensat`, so
@@ -953,6 +980,7 @@ pub(crate) fn utimensat(
         // Emulate it using `fork`, and `fchdir` and [`setattrlist`].
         //
         // [`setattrlist`]: https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/setattrlist.2.html
+        #[cfg(not(any(target_os = "tvos", target_os = "watchos")))]
         match c::fork() {
             -1 => Err(io::Errno::IO),
             0 => {
@@ -1545,7 +1573,7 @@ pub(crate) fn fstat(fd: BorrowedFd<'_>) -> io::Result<Stat> {
     )))]
     unsafe {
         #[cfg(test)]
-        assert_eq_size!(Stat, c::stat);
+        static_assertions::assert_eq_size!(Stat, c::stat);
 
         let mut stat = MaybeUninit::<Stat>::uninit();
         ret(c::fstat(borrowed_fd(fd), stat.as_mut_ptr().cast()))?;
@@ -1591,7 +1619,7 @@ pub(crate) fn fstatfs(fd: BorrowedFd<'_>) -> io::Result<StatFs> {
     }
 }
 
-#[cfg(not(any(target_os = "haiku", target_os = "redox", target_os = "wasi")))]
+#[cfg(not(target_os = "wasi"))]
 pub(crate) fn fstatvfs(fd: BorrowedFd<'_>) -> io::Result<StatVfs> {
     let mut statvfs = MaybeUninit::<c::statvfs>::uninit();
     unsafe {
@@ -1600,7 +1628,7 @@ pub(crate) fn fstatvfs(fd: BorrowedFd<'_>) -> io::Result<StatVfs> {
     }
 }
 
-#[cfg(not(any(target_os = "haiku", target_os = "redox", target_os = "wasi")))]
+#[cfg(not(target_os = "wasi"))]
 fn libc_statvfs_to_statvfs(from: c::statvfs) -> StatVfs {
     StatVfs {
         f_bsize: from.f_bsize as u64,
@@ -1840,7 +1868,7 @@ pub(crate) fn memfd_create(name: &CStr, flags: MemfdFlags) -> io::Result<OwnedFd
     unsafe { ret_owned_fd(memfd_create(c_str(name), bitflags_bits!(flags))) }
 }
 
-#[cfg(linux_kernel)]
+#[cfg(linux_raw_dep)]
 pub(crate) fn openat2(
     dirfd: BorrowedFd<'_>,
     path: &CStr,
@@ -2053,9 +2081,9 @@ pub(crate) fn statx(
     // doesn't represent all the known flags.
     //
     // [it's deprecated]: https://patchwork.kernel.org/project/linux-fsdevel/patch/20200505095915.11275-7-mszeredi@redhat.com/
-    #[cfg(not(any(target_os = "android", target_env = "musl")))]
+    #[cfg(any(not(linux_raw_dep), not(target_env = "musl")))]
     const STATX__RESERVED: u32 = c::STATX__RESERVED as u32;
-    #[cfg(any(target_os = "android", target_env = "musl"))]
+    #[cfg(target_env = "musl")]
     const STATX__RESERVED: u32 = linux_raw_sys::general::STATX__RESERVED;
     if (mask.bits() & STATX__RESERVED) == STATX__RESERVED {
         return Err(io::Errno::INVAL);
@@ -2709,12 +2737,12 @@ mod tests {
     #[test]
     fn test_sizes() {
         #[cfg(linux_kernel)]
-        assert_eq_size!(c::loff_t, u64);
+        static_assertions::assert_eq_size!(c::loff_t, u64);
 
         // Assert that `Timestamps` has the expected layout. If we're not fixing
         // y2038, libc's type should match ours. If we are, it's smaller.
         #[cfg(not(fix_y2038))]
-        assert_eq_size!([c::timespec; 2], Timestamps);
+        static_assertions::assert_eq_size!([c::timespec; 2], Timestamps);
         #[cfg(fix_y2038)]
         assert!(core::mem::size_of::<[c::timespec; 2]>() < core::mem::size_of::<Timestamps>());
     }

@@ -19,7 +19,7 @@ This crate has four main types:
 - [`ZeroMap2d<'a, K0, K1, V>`] to map from the pair `(K0, K1)` to `V`
 
 The first two are intended as close-to-drop-in replacements for `Vec<T>` in Serde structs. The third and fourth are
-intended as a replacement for `HashMap` or [`LiteMap`](docs.rs/litemap). When used with Serde derives, **be sure to apply
+intended as a replacement for `HashMap` or [`LiteMap`](https://docs.rs/litemap). When used with Serde derives, **be sure to apply
 `#[serde(borrow)]` to these types**, same as one would for [`Cow<'a, T>`].
 
 [`ZeroVec<'a, T>`], [`VarZeroVec<'a, T>`], [`ZeroMap<'a, K, V>`], and [`ZeroMap2d<'a, K0, K1, V>`] all behave like
@@ -35,12 +35,12 @@ works under the hood.
 ## Cargo features
 
 This crate has several optional Cargo features:
- -  `serde`: Allows serializing and deserializing `zerovec`'s abstractions via [`serde`](https://docs.rs/serde)
- -   `yoke`: Enables implementations of `Yokeable` from the [`yoke`](https://docs.rs/yoke/) crate, which is also useful
-             in situations involving a lot of zero-copy deserialization.
+ - `serde`: Allows serializing and deserializing `zerovec`'s abstractions via [`serde`](https://docs.rs/serde)
+ - `yoke`: Enables implementations of `Yokeable` from the [`yoke`](https://docs.rs/yoke/) crate, which is also useful
+   in situations involving a lot of zero-copy deserialization.
  - `derive`: Makes it easier to use custom types in these collections by providing the `#[make_ule]` and
-    `#[make_varule]` proc macros, which generate appropriate [`ULE`](https://docs.rs/zerovec/latest/zerovec/ule/trait.ULE.html) and
-    [`VarULE`](https://docs.rs/zerovec/latest/zerovec/ule/trait.VarULE.html)-conformant types for a given "normal" type.
+   `#[make_varule]` proc macros, which generate appropriate [`ULE`](https://docs.rs/zerovec/latest/zerovec/ule/trait.ULE.html) and
+   [`VarULE`](https://docs.rs/zerovec/latest/zerovec/ule/trait.VarULE.html)-conformant types for a given "normal" type.
  - `std`: Enabled `std::Error` implementations for error types. This crate is by default `no_std` with a dependency on `alloc`.
 
 [`ZeroVec<'a, T>`]: ZeroVec
@@ -51,7 +51,7 @@ This crate has several optional Cargo features:
 
 ## Examples
 
-Serialize and deserialize a struct with ZeroVec and VarZeroVec with Bincode:
+Serialize and deserialize a struct with [`ZeroVec`] and [`VarZeroVec`] with Bincode:
 
 ```rust
 use zerovec::{VarZeroVec, ZeroVec};
@@ -74,7 +74,7 @@ let data = DataStruct {
 };
 let bincode_bytes =
     bincode::serialize(&data).expect("Serialization should be successful");
-assert_eq!(bincode_bytes.len(), 67);
+assert_eq!(bincode_bytes.len(), 63);
 
 let deserialized: DataStruct = bincode::deserialize(&bincode_bytes)
     .expect("Deserialization should be successful");
@@ -85,7 +85,7 @@ assert_eq!(deserialized.strs.get(1), Some("world"));
 assert!(!deserialized.nums.is_owned());
 ```
 
-Use custom types inside of ZeroVec:
+Use custom types inside of [`ZeroVec`]:
 
 ```rust
 use zerovec::{ZeroVec, VarZeroVec, ZeroMap};
@@ -146,7 +146,7 @@ let data = Data { important_dates, important_people, birthdays_to_people };
 
 let bincode_bytes = bincode::serialize(&data)
     .expect("Serialization should be successful");
-assert_eq!(bincode_bytes.len(), 168);
+assert_eq!(bincode_bytes.len(), 160);
 
 let deserialized: Data = bincode::deserialize(&bincode_bytes)
     .expect("Deserialization should be successful");
@@ -164,7 +164,7 @@ assert_eq!(&deserialized.birthdays_to_people.get(&person1.birthday).unwrap().nam
 `zerovec` is designed for fast deserialization from byte buffers with zero memory allocations
 while minimizing performance regressions for common vector operations.
 
-Benchmark results on x86_64:
+Benchmark results on `x86_64`:
 
 | Operation | `Vec<T>` | `zerovec` |
 |---|---|---|

@@ -1,5 +1,7 @@
 //! User and Group ID types.
 
+use core::fmt;
+
 use crate::backend::c;
 use crate::ffi;
 
@@ -86,6 +88,78 @@ impl Gid {
     }
 }
 
+impl fmt::Display for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::Binary for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::Octal for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::LowerHex for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::UpperHex for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::LowerExp for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::UpperExp for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl fmt::Display for Gid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::Binary for Gid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::Octal for Gid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::LowerHex for Gid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::UpperHex for Gid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::LowerExp for Gid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::UpperExp for Gid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 // Return the raw value of the IDs. In case of `None` it returns `!0` since it
 // has the same bit pattern as `-1` indicating no change to the owner/group ID.
 pub(crate) fn translate_fchown_args(
@@ -111,9 +185,9 @@ mod tests {
 
     #[test]
     fn test_sizes() {
-        assert_eq_size!(RawUid, u32);
-        assert_eq_size!(RawGid, u32);
-        assert_eq_size!(RawUid, libc::uid_t);
-        assert_eq_size!(RawGid, libc::gid_t);
+        static_assertions::assert_eq_size!(RawUid, u32);
+        static_assertions::assert_eq_size!(RawGid, u32);
+        static_assertions::assert_eq_size!(RawUid, libc::uid_t);
+        static_assertions::assert_eq_size!(RawGid, libc::gid_t);
     }
 }

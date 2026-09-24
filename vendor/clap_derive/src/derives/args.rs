@@ -15,12 +15,12 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{
-    punctuated::Punctuated, spanned::Spanned, token::Comma, Data, DataStruct, DeriveInput, Field,
-    Fields, FieldsNamed, Generics,
+    Data, DataStruct, DeriveInput, Field, Fields, FieldsNamed, Generics, punctuated::Punctuated,
+    spanned::Spanned, token::Comma,
 };
 
 use crate::item::{Item, Kind, Name};
-use crate::utils::{inner_type, sub_type, Sp, Ty};
+use crate::utils::{Sp, Ty, inner_type, sub_type};
 
 pub(crate) fn derive_args(input: &DeriveInput) -> Result<TokenStream, syn::Error> {
     let ident = &input.ident;
@@ -63,7 +63,7 @@ pub(crate) fn gen_for_struct(
 ) -> Result<TokenStream, syn::Error> {
     if !matches!(&*item.kind(), Kind::Command(_)) {
         abort! { item.kind().span(),
-            "`{}` cannot be used with `command`",
+            "`{}` cannot be used with `#[command]`",
             item.kind().name(),
         }
     }
@@ -77,6 +77,8 @@ pub(crate) fn gen_for_struct(
     let app_var = Ident::new("__clap_app", Span::call_site());
     let augmentation = gen_augment(fields, &app_var, item, false)?;
     let augmentation_update = gen_augment(fields, &app_var, item, true)?;
+    let initial_app_methods = item.initial_top_level_methods();
+    let final_app_methods = item.final_top_level_methods();
 
     let group_id = if item.skip_group() {
         quote!(None)
@@ -155,10 +157,14 @@ pub(crate) fn gen_for_struct(
                 #group_id
             }
             fn augment_args<'b>(#app_var: clap::Command) -> clap::Command {
-                #augmentation
+                let #app_var = #app_var #initial_app_methods;
+                let #app_var = #augmentation;
+                #app_var #final_app_methods
             }
             fn augment_args_for_update<'b>(#app_var: clap::Command) -> clap::Command {
-                #augmentation_update
+                let #app_var = #app_var #initial_app_methods;
+                let #app_var = #augmentation_update;
+                #app_var #final_app_methods
             }
         }
     })
@@ -380,8 +386,6 @@ pub(crate) fn gen_augment(
     } else {
         quote!()
     };
-    let initial_app_methods = parent_item.initial_top_level_methods();
-    let final_app_methods = parent_item.final_top_level_methods();
     let group_app_methods = if parent_item.skip_group() {
         quote!()
     } else {
@@ -432,11 +436,10 @@ pub(crate) fn gen_augment(
     Ok(quote! {{
         #deprecations
         let #app_var = #app_var
-            #initial_app_methods
             #group_app_methods
             ;
         #( #args )*
-        #app_var #final_app_methods
+        #app_var
     }})
 }
 
@@ -450,7 +453,7 @@ pub(crate) fn gen_constructor(fields: &[(&Field, Item)]) -> Result<TokenStream, 
             | Kind::Value
             | Kind::ExternalSubcommand => {
                 abort! { kind.span(),
-                    "`{}` cannot be used with `arg`",
+                    "`{}` cannot be used with `#[arg]`",
                     kind.name(),
                 }
             }
@@ -486,7 +489,7 @@ pub(crate) fn gen_constructor(fields: &[(&Field, Item)]) -> Result<TokenStream, 
                     Ty::OptionVecVec => {
                         abort!(
                             ty.span(),
-                            "{} types are not supported for subcommand",
+                            "`{}` is an invalid `#[command(subcommand)]` type",
                             ty.as_str()
                         );
                     }
@@ -527,7 +530,7 @@ pub(crate) fn gen_constructor(fields: &[(&Field, Item)]) -> Result<TokenStream, 
                     Ty::OptionVecVec => {
                         abort!(
                             ty.span(),
-                            "{} types are not supported for flatten",
+                            "`{}` is an invalid `#[command(flatten)]` type",
                             ty.as_str()
                         );
                     }
@@ -573,7 +576,7 @@ pub(crate) fn gen_updater(
         let genned = match &*kind {
             Kind::Command(_) | Kind::Value | Kind::ExternalSubcommand => {
                 abort! { kind.span(),
-                    "`{}` cannot be used with `arg`",
+                    "`{}` cannot be used with `#[arg]`",
                     kind.name(),
                 }
             }
@@ -735,13 +738,13 @@ fn gen_parsers(
                 Name::Assigned(_) => {
                     quote_spanned! { ty.span()=>
                         #arg_matches.#get_one(#id)
-                            .ok_or_else(|| clap::Error::raw(clap::error::ErrorKind::MissingRequiredArgument, format!("The following required argument was not provided: {}", #id)))?
+                            .ok_or_else(|| clap::Error::raw(clap::error::ErrorKind::MissingRequiredArgument, format!("the following required argument was not provided: {}", #id)))?
                     }
                 }
                 Name::Derived(_) => {
                     quote_spanned! { ty.span()=>
                         #arg_matches.#get_one(#id)
-                            .ok_or_else(|| clap::Error::raw(clap::error::ErrorKind::MissingRequiredArgument, concat!("The following required argument was not provided: ", #id)))?
+                            .ok_or_else(|| clap::Error::raw(clap::error::ErrorKind::MissingRequiredArgument, concat!("the following required argument was not provided: ", #id)))?
                     }
                 }
             }

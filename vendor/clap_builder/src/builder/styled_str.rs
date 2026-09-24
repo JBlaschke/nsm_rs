@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "usage"), allow(dead_code))]
+use std::borrow::Cow;
 
 /// Terminal-styling container
 ///
@@ -41,7 +42,8 @@ impl StyledStr {
         self.0.push_str(&msg);
     }
 
-    pub(crate) fn push_str(&mut self, msg: &str) {
+    /// Appends a given string slice onto the end of this `StyledStr`.
+    pub fn push_str(&mut self, msg: &str) {
         self.0.push_str(msg);
     }
 
@@ -158,13 +160,13 @@ impl Default for &'_ StyledStr {
 
 impl From<String> for StyledStr {
     fn from(name: String) -> Self {
-        StyledStr(name)
+        Self(name)
     }
 }
 
 impl From<&'_ String> for StyledStr {
     fn from(name: &'_ String) -> Self {
-        let mut styled = StyledStr::new();
+        let mut styled = Self::new();
         styled.push_str(name);
         styled
     }
@@ -172,7 +174,7 @@ impl From<&'_ String> for StyledStr {
 
 impl From<&'static str> for StyledStr {
     fn from(name: &'static str) -> Self {
-        let mut styled = StyledStr::new();
+        let mut styled = Self::new();
         styled.push_str(name);
         styled
     }
@@ -180,7 +182,16 @@ impl From<&'static str> for StyledStr {
 
 impl From<&'_ &'static str> for StyledStr {
     fn from(name: &'_ &'static str) -> Self {
-        StyledStr::from(*name)
+        Self::from(*name)
+    }
+}
+
+impl From<Cow<'static, str>> for StyledStr {
+    fn from(cow: Cow<'static, str>) -> Self {
+        match cow {
+            Cow::Borrowed(s) => Self::from(s),
+            Cow::Owned(s) => Self::from(s),
+        }
     }
 }
 
@@ -206,5 +217,71 @@ impl std::fmt::Display for StyledStr {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "wrap_help")]
+mod wrap_tests {
+    use super::*;
+
+    use snapbox::assert_data_eq;
+    use snapbox::str;
+
+    #[test]
+    #[cfg(feature = "wrap_help")]
+    fn wrap_unstyled() {
+        let style = anstyle::Style::new();
+        let input = format!(
+            "{style}12345{style:#} {style}12345{style:#} {style}12345{style:#} {style}12345{style:#}"
+        );
+        let mut actual = StyledStr::new();
+        actual.push_string(input);
+        actual.wrap(20);
+        assert_data_eq!(
+            actual.ansi().to_string(),
+            str![[r#"
+12345 12345 12345
+12345
+"#]]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "wrap_help")]
+    fn wrap_styled() {
+        let style = anstyle::Style::new().bold();
+        let input = format!(
+            "{style}12345{style:#} {style}12345{style:#} {style}12345{style:#} {style}12345{style:#}"
+        );
+        let mut actual = StyledStr::new();
+        actual.push_string(input);
+        actual.wrap(20);
+        assert_data_eq!(
+            actual.ansi().to_string(),
+            str![[r#"
+[1m12345[0m [1m12345[0m [1m12345[0m [1m
+12345[0m
+"#]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_cow_borrowed() {
+        let cow = Cow::Borrowed("hello");
+        let styled = StyledStr::from(cow);
+        assert_eq!(styled, StyledStr::from("hello"));
+    }
+
+    #[test]
+    fn from_cow_owned() {
+        let cow = Cow::Owned("world".to_owned());
+        let styled = StyledStr::from(cow);
+        assert_eq!(styled, StyledStr::from("world"));
     }
 }

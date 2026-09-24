@@ -1,3 +1,72 @@
+/// Create an [`IndexMap`][crate::IndexMap] from a list of key-value pairs
+/// and a [`BuildHasherDefault`][core::hash::BuildHasherDefault]-wrapped custom hasher.
+///
+/// ## Example
+///
+/// ```
+/// use indexmap::indexmap_with_default;
+/// use fnv::FnvHasher;
+///
+/// let map = indexmap_with_default!{
+///     FnvHasher;
+///     "a" => 1,
+///     "b" => 2,
+/// };
+/// assert_eq!(map["a"], 1);
+/// assert_eq!(map["b"], 2);
+/// assert_eq!(map.get("c"), None);
+///
+/// // "a" is the first key
+/// assert_eq!(map.keys().next(), Some(&"a"));
+/// ```
+///
+/// This can also be initialized in `const` contexts:
+///
+/// ```
+/// use indexmap::{IndexMap, indexmap_with_default};
+/// use fnv::FnvBuildHasher; // = BuildHasherDefault<FnvHasher>
+/// use std::sync::Mutex;
+///
+/// static GLOBAL: Mutex<IndexMap<String, i32, FnvBuildHasher>> =
+///     Mutex::new(indexmap_with_default!());
+///
+/// if let Ok(mut map) = GLOBAL.lock() {
+///     map.insert("a".into(), 1);
+///     map.insert("b".into(), 2);
+/// }
+///
+/// assert_eq!(GLOBAL.lock().unwrap()["a"], 1);
+/// assert_eq!(GLOBAL.lock().unwrap()["b"], 2);
+/// ```
+#[macro_export]
+macro_rules! indexmap_with_default {
+    () => { const {
+        $crate::IndexMap::with_hasher(
+            // Let type inference figure out the hasher:
+            ::core::hash::BuildHasherDefault::new(),
+        )
+    }};
+    ($H:ty $(;)?) => { const {
+        $crate::IndexMap::with_hasher(
+            // Specify your custom `H` (must implement Default + Hasher) as the hasher:
+            ::core::hash::BuildHasherDefault::<$H>::new(),
+        )
+    }};
+    ($H:ty; $($key:expr => $value:expr),+ $(,)?) => {{
+        let mut map = $crate::IndexMap::with_capacity_and_hasher(
+            // Note: `stringify!($key)` is just here to consume the repetition,
+            // but we throw away that string literal during constant evaluation.
+            const { <[()]>::len(&[$({ stringify!($key); }),*]) },
+            // Specify your custom `H` (must implement Default + Hasher) as the hasher:
+            ::core::hash::BuildHasherDefault::<$H>::new(),
+        );
+        $(
+            map.insert($key, $value);
+        )+
+        map
+    }};
+}
+
 #[cfg(feature = "std")]
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 #[macro_export]
@@ -20,19 +89,89 @@
 /// assert_eq!(map.keys().next(), Some(&"a"));
 /// ```
 macro_rules! indexmap {
-    ($($key:expr => $value:expr,)+) => { $crate::indexmap!($($key => $value),+) };
-    ($($key:expr => $value:expr),*) => {
-        {
+    () => { $crate::IndexMap::new() };
+    ($($key:expr => $value:expr),+ $(,)?) => {{
+        let mut map = $crate::IndexMap::with_capacity(
             // Note: `stringify!($key)` is just here to consume the repetition,
             // but we throw away that string literal during constant evaluation.
-            const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
-            let mut map = $crate::IndexMap::with_capacity(CAP);
-            $(
-                map.insert($key, $value);
-            )*
-            map
-        }
-    };
+            const { <[()]>::len(&[$({ stringify!($key); }),*]) },
+        );
+        $(
+            map.insert($key, $value);
+        )+
+        map
+    }};
+}
+
+/// Create an [`IndexSet`][crate::IndexSet] from a list of values
+/// and a [`BuildHasherDefault`][core::hash::BuildHasherDefault]-wrapped custom hasher.
+///
+/// ## Example
+///
+/// ```
+/// use indexmap::indexset_with_default;
+/// use fnv::FnvHasher;
+///
+/// let set = indexset_with_default!{
+///     FnvHasher;
+///     "a",
+///     "b",
+/// };
+/// assert!(set.contains("a"));
+/// assert!(set.contains("b"));
+/// assert!(!set.contains("c"));
+///
+/// // "a" is the first value
+/// assert_eq!(set.iter().next(), Some(&"a"));
+/// ```
+///
+/// This can also be initialized in `const` contexts:
+///
+/// ```
+/// use indexmap::{IndexSet, indexset_with_default};
+/// use fnv::FnvBuildHasher; // = BuildHasherDefault<FnvHasher>
+/// use std::sync::Mutex;
+///
+/// static INTERN: Mutex<IndexSet<String, FnvBuildHasher>> =
+///     Mutex::new(indexset_with_default!());
+///
+/// if let Ok(mut set) = INTERN.lock() {
+///     set.insert("a".into());
+///     set.insert("b".into());
+///     set.insert("c".into());
+/// }
+///
+/// assert!(INTERN.lock().unwrap().contains("a"));
+/// assert!(INTERN.lock().unwrap().contains("b"));
+/// assert!(INTERN.lock().unwrap().contains("c"));
+/// ```
+#[macro_export]
+macro_rules! indexset_with_default {
+    () => { const {
+        $crate::IndexSet::with_hasher(
+            // Let type inference figure out the hasher:
+            ::core::hash::BuildHasherDefault::new(),
+        )
+    }};
+    ($H:ty $(;)?) => { const {
+        $crate::IndexSet::with_hasher(
+            // Specify your custom `H` (must implement Default + Hasher) as the hasher:
+            ::core::hash::BuildHasherDefault::<$H>::new(),
+        )
+    }};
+    ($H:ty; $($value:expr),+ $(,)?) => {{
+        let mut set = $crate::IndexSet::with_capacity_and_hasher(
+            // Note: `stringify!($value)` is just here to consume the repetition,
+            // but we throw away that string literal during constant evaluation.
+            const { <[()]>::len(&[$({ stringify!($value); }),*]) },
+            // Specify your custom `H` (must implement Default + Hasher) as the hasher:
+            ::core::hash::BuildHasherDefault::<$H>::new(),
+        );
+        $(
+            set.insert($value);
+        )+
+        set
+    }};
 }
 
 #[cfg(feature = "std")]
@@ -57,19 +196,18 @@ macro_rules! indexmap {
 /// assert_eq!(set.iter().next(), Some(&"a"));
 /// ```
 macro_rules! indexset {
-    ($($value:expr,)+) => { $crate::indexset!($($value),+) };
-    ($($value:expr),*) => {
-        {
+    () => { $crate::IndexSet::new() };
+    ($($value:expr),+ $(,)?) => {{
+        let mut set = $crate::IndexSet::with_capacity(
             // Note: `stringify!($value)` is just here to consume the repetition,
             // but we throw away that string literal during constant evaluation.
-            const CAP: usize = <[()]>::len(&[$({ stringify!($value); }),*]);
-            let mut set = $crate::IndexSet::with_capacity(CAP);
-            $(
-                set.insert($value);
-            )*
-            set
-        }
-    };
+            const { <[()]>::len(&[$({ stringify!($value); }),*]) },
+        );
+        $(
+            set.insert($value);
+        )+
+        set
+    }};
 }
 
 // generate all the Iterator methods by just forwarding to the underlying
@@ -125,7 +263,7 @@ macro_rules! double_ended_iterator_methods {
 
 // generate `ParallelIterator` methods by just forwarding to the underlying
 // self.entries and mapping its elements.
-#[cfg(any(feature = "rayon", feature = "rustc-rayon"))]
+#[cfg(feature = "rayon")]
 macro_rules! parallel_iterator_methods {
     // $map_elt is the mapping function from the underlying iterator's element
     ($map_elt:expr) => {
@@ -150,7 +288,7 @@ macro_rules! parallel_iterator_methods {
 
 // generate `IndexedParallelIterator` methods by just forwarding to the underlying
 // self.entries and mapping its elements.
-#[cfg(any(feature = "rayon", feature = "rustc-rayon"))]
+#[cfg(feature = "rayon")]
 macro_rules! indexed_parallel_iterator_methods {
     // $map_elt is the mapping function from the underlying iterator's element
     ($map_elt:expr) => {

@@ -2,21 +2,21 @@
 // called LICENSE at the top level of the ICU4X source tree
 // (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
 
-//! Traits for pluggable LiteMap backends.
+//! Traits for pluggable [`LiteMap`] backends.
 //!
-//! By default, LiteMap is backed by a `Vec`. However, in some environments, it may be desirable
-//! to use a different data store while still using LiteMap to manage proper ordering of items.
+//! By default, [`LiteMap`] is backed by a `Vec`. However, in some environments, it may be desirable
+//! to use a different data store while still using [`LiteMap`] to manage proper ordering of items.
 //!
 //! The general guidelines for a performant data store are:
 //!
 //! 1. Must support efficient random access for binary search
 //! 2. Should support efficient append operations for deserialization
 //!
-//! To plug a custom data store into LiteMap, implement:
+//! To plug a custom data store into [`LiteMap`], implement:
 //!
 //! - [`Store`] for most of the methods
 //! - [`StoreIterable`] for methods that return iterators
-//! - [`StoreFromIterator`] to enable `FromIterator` for LiteMap
+//! - [`StoreFromIterator`] to enable `FromIterator` for [`LiteMap`]
 //!
 //! To test your implementation, enable the `"testing"` Cargo feature and use [`check_store()`].
 //!
@@ -26,6 +26,8 @@ mod slice_impl;
 #[cfg(feature = "alloc")]
 mod vec_impl;
 
+#[cfg(doc)]
+use crate::LiteMap;
 use core::cmp::Ordering;
 use core::iter::DoubleEndedIterator;
 use core::iter::FromIterator;
@@ -38,7 +40,7 @@ pub trait StoreConstEmpty<K: ?Sized, V: ?Sized> {
     const EMPTY: Self;
 }
 
-/// Trait to enable pluggable backends for LiteMap.
+/// Trait to enable pluggable backends for [`LiteMap`].
 ///
 /// Some methods have default implementations provided for convenience; however, it is generally
 /// better to implement all methods that your data store supports.
@@ -116,26 +118,21 @@ pub trait StoreMut<K, V>: Store<K, V> {
 
     /// Removes all items from the store.
     fn lm_clear(&mut self);
-
-    /// Retains items satisfying a predicate in this store.
-    fn lm_retain<F>(&mut self, mut predicate: F)
-    where
-        F: FnMut(&K, &V) -> bool,
-    {
-        let mut i = 0;
-        while i < self.lm_len() {
-            #[allow(clippy::unwrap_used)] // i is in range
-            let (k, v) = self.lm_get(i).unwrap();
-            if predicate(k, v) {
-                i += 1;
-            } else {
-                self.lm_remove(i);
-            }
-        }
-    }
 }
 
-/// Iterator methods for the LiteMap store.
+pub trait StoreBulkMut<K, V>: StoreMut<K, V> {
+    /// Retains items satisfying a predicate in this store.
+    fn lm_retain<F>(&mut self, predicate: F)
+    where
+        F: FnMut(&K, &V) -> bool;
+
+    /// Extends this store with items from an iterator.
+    fn lm_extend<I>(&mut self, other: I)
+    where
+        I: IntoIterator<Item = (K, V)>;
+}
+
+/// Iterator methods for the [`LiteMap`] store.
 pub trait StoreIterable<'a, K: 'a + ?Sized, V: 'a + ?Sized>: Store<K, V> {
     type KeyValueIter: Iterator<Item = (&'a K, &'a V)> + DoubleEndedIterator + 'a;
 

@@ -1,4 +1,6 @@
 use crate::builder::Str;
+#[cfg(feature = "string")]
+use std::borrow::Cow;
 
 /// A UTF-8-encoded fixed string
 ///
@@ -45,8 +47,8 @@ impl OsStr {
     }
 }
 
-impl From<&'_ OsStr> for OsStr {
-    fn from(id: &'_ OsStr) -> Self {
+impl From<&'_ Self> for OsStr {
+    fn from(id: &'_ Self) -> Self {
         id.clone()
     }
 }
@@ -123,6 +125,16 @@ impl From<&'static str> for OsStr {
 impl From<&'_ &'static str> for OsStr {
     fn from(name: &'_ &'static str) -> Self {
         Self::from_static_ref((*name).as_ref())
+    }
+}
+
+#[cfg(feature = "string")]
+impl From<Cow<'static, str>> for OsStr {
+    fn from(cow: Cow<'static, str>) -> Self {
+        match cow {
+            Cow::Borrowed(s) => Self::from(s),
+            Cow::Owned(s) => Self::from(s),
+        }
     }
 }
 
@@ -303,7 +315,7 @@ impl Default for Inner {
 }
 
 impl PartialEq for Inner {
-    fn eq(&self, other: &Inner) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.as_os_str() == other.as_os_str()
     }
 }
@@ -315,7 +327,7 @@ impl PartialOrd for Inner {
 }
 
 impl Ord for Inner {
-    fn cmp(&self, other: &Inner) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.as_os_str().cmp(other.as_os_str())
     }
 }
@@ -326,5 +338,27 @@ impl std::hash::Hash for Inner {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.as_os_str().hash(state);
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "string")]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "string")]
+    fn from_cow_borrowed() {
+        let cow = Cow::Borrowed("hello");
+        let osstr = OsStr::from(cow);
+        assert_eq!(osstr, OsStr::from("hello"));
+    }
+
+    #[test]
+    #[cfg(feature = "string")]
+    fn from_cow_owned() {
+        let cow = Cow::Owned("world".to_owned());
+        let osstr = OsStr::from(cow);
+        assert_eq!(osstr, OsStr::from("world"));
     }
 }

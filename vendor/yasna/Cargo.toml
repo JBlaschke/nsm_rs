@@ -10,14 +10,23 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2018"
+edition = "2021"
+rust-version = "1.60"
 name = "yasna"
-version = "0.5.2"
+version = "0.6.0"
 authors = ["Masaki Hara <ackie.h.gmai@gmail.com>"]
+build = false
 include = [
     "src/**/*.rs",
     "Cargo.toml",
+    "LICENSE-*",
+    "README.md",
 ]
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "ASN.1 library for Rust"
 homepage = "https://github.com/qnighy/yasna.rs"
 documentation = "https://docs.rs/yasna"
@@ -37,26 +46,32 @@ features = [
     "std",
 ]
 
+[features]
+default = []
+std = [
+    "bit-vec?/std",
+    "time?/std",
+]
+
+[lib]
+name = "yasna"
+path = "src/lib.rs"
+
 [dependencies.bit-vec]
-version = "0.6.1"
-features = ["std"]
+version = "0.9.1"
 optional = true
 default-features = false
 
 [dependencies.num-bigint]
 version = "0.4"
 optional = true
+default-features = false
 
 [dependencies.time]
 version = "0.3.1"
-features = ["std"]
 optional = true
 default-features = false
 
 [dev-dependencies.num-traits]
 version = "0.2"
 default-features = false
-
-[features]
-default = []
-std = []

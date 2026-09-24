@@ -2,7 +2,7 @@
 
 #![allow(unsafe_code)]
 
-use core::num::NonZeroI32;
+use core::{fmt, num::NonZeroI32};
 
 /// A process identifier as a raw integer.
 pub type RawPid = i32;
@@ -78,6 +78,14 @@ impl Pid {
         self.0
     }
 
+    /// Converts a `Pid` into a `RawPid`.
+    ///
+    /// This is the same as `self.as_raw_nonzero().get()`.
+    #[inline]
+    pub const fn as_raw_pid(self) -> RawPid {
+        self.0.get()
+    }
+
     /// Converts an `Option<Pid>` into a `RawPid`.
     #[inline]
     pub const fn as_raw(pid: Option<Self>) -> RawPid {
@@ -94,6 +102,44 @@ impl Pid {
     }
 }
 
+impl fmt::Display for Pid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::Binary for Pid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::Octal for Pid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::LowerHex for Pid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::UpperHex for Pid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+#[cfg(lower_upper_exp_for_non_zero)]
+impl fmt::LowerExp for Pid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+#[cfg(lower_upper_exp_for_non_zero)]
+impl fmt::UpperExp for Pid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,16 +148,16 @@ mod tests {
     fn test_sizes() {
         use core::mem::transmute;
 
-        assert_eq_size!(RawPid, NonZeroI32);
-        assert_eq_size!(RawPid, Pid);
-        assert_eq_size!(RawPid, Option<Pid>);
+        static_assertions::assert_eq_size!(RawPid, NonZeroI32);
+        static_assertions::assert_eq_size!(RawPid, Pid);
+        static_assertions::assert_eq_size!(RawPid, Option<Pid>);
 
         // Rustix doesn't depend on `Option<Pid>` matching the ABI of a raw integer
         // for correctness, but it should work nonetheless.
-        const_assert_eq!(0 as RawPid, unsafe {
+        static_assertions::const_assert_eq!(0 as RawPid, unsafe {
             transmute::<Option<Pid>, RawPid>(None)
         });
-        const_assert_eq!(4567 as RawPid, unsafe {
+        static_assertions::const_assert_eq!(4567 as RawPid, unsafe {
             transmute::<Option<Pid>, RawPid>(Some(Pid::from_raw_unchecked(4567)))
         });
     }
@@ -124,6 +170,7 @@ mod tests {
             Pid::from_raw(77).unwrap().as_raw_nonzero(),
             NonZeroI32::new(77).unwrap()
         );
+        assert_eq!(Pid::from_raw(77).unwrap().as_raw_pid(), 77);
         assert_eq!(Pid::as_raw(Pid::from_raw(77)), 77);
     }
 

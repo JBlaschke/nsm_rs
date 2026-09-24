@@ -7,14 +7,13 @@ use pki_types::CertificateSigningRequestDer;
 #[cfg(feature = "pem")]
 use crate::ENCODE_CONFIG;
 use crate::{
-	key_pair::serialize_public_key_der, Certificate, CertificateParams, Error, Issuer, KeyPair,
-	PublicKeyData, SignatureAlgorithm,
+	Certificate, CertificateParams, Error, Issuer, PublicKeyData, SignatureAlgorithm, SigningKey,
 };
 #[cfg(feature = "x509-parser")]
-use crate::{DistinguishedName, SanType};
+use crate::{DistinguishedName, ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType};
 
 /// A public key, extracted from a CSR
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PublicKey {
 	raw: Vec<u8>,
 	alg: &'static SignatureAlgorithm,
@@ -32,12 +31,18 @@ impl PublicKeyData for PublicKey {
 		&self.raw
 	}
 
-	fn algorithm(&self) -> &SignatureAlgorithm {
+	fn algorithm(&self) -> &'static SignatureAlgorithm {
 		self.alg
 	}
 }
 
 /// A certificate signing request (CSR) that can be encoded to PEM or DER.
+///
+/// A new certificate signing request is created by filling out a [`CertificateParams`] object
+/// and then calling [`CertificateParams::serialize_request()`] or
+/// [`CertificateParams::serialize_request_with_attributes()`] with a
+/// [`crate::KeyPair`] (or other [`SigningKey`] capable trait).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CertificateSigningRequest {
 	pub(crate) der: CertificateSigningRequestDer<'static>,
 }
@@ -66,6 +71,7 @@ impl From<CertificateSigningRequest> for CertificateSigningRequestDer<'static> {
 }
 
 /// Parameters for a certificate signing request
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CertificateSigningRequestParams {
 	/// Parameters for the certificate to be signed.
 	pub params: CertificateParams,
@@ -74,34 +80,41 @@ pub struct CertificateSigningRequestParams {
 }
 
 impl CertificateSigningRequestParams {
-	/// Parse a certificate signing request from the ASCII PEM format
+	/// Parse and verify a certificate signing request from the ASCII PEM format
 	///
 	/// See [`from_der`](Self::from_der) for more details.
 	#[cfg(all(feature = "pem", feature = "x509-parser"))]
 	pub fn from_pem(pem_str: &str) -> Result<Self, Error> {
-		let csr = pem::parse(pem_str).or(Err(Error::CouldNotParseCertificationRequest))?;
+		let csr = pem::parse(pem_str).map_err(|_| Error::CouldNotParseCertificationRequest)?;
 		Self::from_der(&csr.contents().into())
 	}
 
-	/// Parse a certificate signing request from DER-encoded bytes
+	/// Parse and verify a certificate signing request from DER-encoded bytes
 	///
-	/// Currently, this only supports the `Subject Alternative Name` extension.
-	/// On encountering other extensions, this function will return an error.
+	/// Currently, this supports the following extensions:
+	/// - `Subject Alternative Name` (see [`SanType`])
+	/// - `Key Usage` (see [`KeyUsagePurpose`])
+	/// - `Extended Key Usage` (see [`ExtendedKeyUsagePurpose`])
+	/// - `Basic Constraints` (see [`crate::BasicConstraints`])
 	///
-	/// [`rustls_pemfile::csr()`] is often used to obtain a [`CertificateSigningRequestDer`] from
+	/// On encountering other extensions, this function will return [`Error::UnsupportedExtension`].
+	/// If the request's signature is invalid, it will return
+	/// [`Error::InvalidCertificationRequestSignature`].
+	///
+	/// The [`PemObject`] trait is often used to obtain a [`CertificateSigningRequestDer`] from
 	/// PEM input. If you already have a byte slice containing DER, it can trivially be converted
 	/// into [`CertificateSigningRequestDer`] using the [`Into`] trait.
 	///
-	/// [`rustls_pemfile::csr()`]: https://docs.rs/rustls-pemfile/latest/rustls_pemfile/fn.csr.html
+	/// [`PemObject`]: pki_types::pem::PemObject
 	#[cfg(feature = "x509-parser")]
 	pub fn from_der(csr: &CertificateSigningRequestDer<'_>) -> Result<Self, Error> {
-		use crate::KeyUsagePurpose;
 		use x509_parser::prelude::FromDer;
 
 		let csr = x509_parser::certification_request::X509CertificationRequest::from_der(csr)
 			.map_err(|_| Error::CouldNotParseCertificationRequest)?
 			.1;
-		csr.verify_signature().map_err(|_| Error::RingUnspecified)?;
+		csr.verify_signature()
+			.map_err(|_| Error::InvalidCertificationRequestSignature)?;
 		let alg_oid = csr
 			.signature_algorithm
 			.algorithm
@@ -134,41 +147,34 @@ impl CertificateSigningRequestParams {
 					},
 					x509_parser::extensions::ParsedExtension::ExtendedKeyUsage(eku) => {
 						if eku.any {
-							params.insert_extended_key_usage(crate::ExtendedKeyUsagePurpose::Any);
+							params.insert_extended_key_usage(ExtendedKeyUsagePurpose::Any);
 						}
 						if eku.server_auth {
-							params.insert_extended_key_usage(
-								crate::ExtendedKeyUsagePurpose::ServerAuth,
-							);
+							params.insert_extended_key_usage(ExtendedKeyUsagePurpose::ServerAuth);
 						}
 						if eku.client_auth {
-							params.insert_extended_key_usage(
-								crate::ExtendedKeyUsagePurpose::ClientAuth,
-							);
+							params.insert_extended_key_usage(ExtendedKeyUsagePurpose::ClientAuth);
 						}
 						if eku.code_signing {
-							params.insert_extended_key_usage(
-								crate::ExtendedKeyUsagePurpose::CodeSigning,
-							);
+							params.insert_extended_key_usage(ExtendedKeyUsagePurpose::CodeSigning);
 						}
 						if eku.email_protection {
 							params.insert_extended_key_usage(
-								crate::ExtendedKeyUsagePurpose::EmailProtection,
+								ExtendedKeyUsagePurpose::EmailProtection,
 							);
 						}
 						if eku.time_stamping {
-							params.insert_extended_key_usage(
-								crate::ExtendedKeyUsagePurpose::TimeStamping,
-							);
+							params.insert_extended_key_usage(ExtendedKeyUsagePurpose::TimeStamping);
 						}
 						if eku.ocsp_signing {
-							params.insert_extended_key_usage(
-								crate::ExtendedKeyUsagePurpose::OcspSigning,
-							);
+							params.insert_extended_key_usage(ExtendedKeyUsagePurpose::OcspSigning);
 						}
 						if !eku.other.is_empty() {
 							return Err(Error::UnsupportedExtension);
 						}
+					},
+					x509_parser::extensions::ParsedExtension::BasicConstraints(bc) => {
+						params.is_ca = IsCa::from_basic_constraints(bc)?;
 					},
 					_ => return Err(Error::UnsupportedExtension),
 				}
@@ -176,8 +182,6 @@ impl CertificateSigningRequestParams {
 		}
 
 		// Not yet handled:
-		// * is_ca
-		// * extended_key_usages
 		// * name_constraints
 		// and any other extensions.
 
@@ -199,28 +203,92 @@ impl CertificateSigningRequestParams {
 	///
 	/// The returned [`Certificate`] may be serialized using [`Certificate::der`] and
 	/// [`Certificate::pem`].
-	pub fn signed_by(
-		self,
-		issuer: &Certificate,
-		issuer_key: &KeyPair,
-	) -> Result<Certificate, Error> {
-		let issuer = Issuer {
-			distinguished_name: &issuer.params.distinguished_name,
-			key_identifier_method: &issuer.params.key_identifier_method,
-			key_usages: &issuer.params.key_usages,
-			key_pair: issuer_key,
-		};
-
-		let der = self
-			.params
-			.serialize_der_with_signer(&self.public_key, issuer)?;
-		let subject_public_key_info = yasna::construct_der(|writer| {
-			serialize_public_key_der(&self.public_key, writer);
-		});
+	pub fn signed_by(&self, issuer: &Issuer<impl SigningKey>) -> Result<Certificate, Error> {
 		Ok(Certificate {
-			params: self.params,
-			subject_public_key_info,
-			der,
+			der: self
+				.params
+				.serialize_der_with_signer(&self.public_key, issuer)?,
 		})
+	}
+}
+
+#[cfg(all(test, feature = "x509-parser"))]
+mod tests {
+	use x509_parser::certification_request::X509CertificationRequest;
+	use x509_parser::prelude::{FromDer, ParsedExtension};
+
+	use crate::{
+		BasicConstraints, CertificateParams, CertificateSigningRequestParams,
+		ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
+	};
+
+	#[test]
+	fn dont_write_sans_extension_if_no_sans_are_present() {
+		let mut params = CertificateParams::default();
+		params.key_usages.push(KeyUsagePurpose::DigitalSignature);
+		let key_pair = KeyPair::generate().unwrap();
+		let csr = params.serialize_request(&key_pair).unwrap();
+		let (_, parsed_csr) = X509CertificationRequest::from_der(csr.der()).unwrap();
+		assert!(!parsed_csr
+			.requested_extensions()
+			.unwrap()
+			.any(|ext| matches!(ext, ParsedExtension::SubjectAlternativeName(_))));
+	}
+
+	#[test]
+	fn write_extension_request_if_ekus_are_present() {
+		let mut params = CertificateParams::default();
+		params
+			.extended_key_usages
+			.push(ExtendedKeyUsagePurpose::ClientAuth);
+		let key_pair = KeyPair::generate().unwrap();
+		let csr = params.serialize_request(&key_pair).unwrap();
+		let (_, parsed_csr) = X509CertificationRequest::from_der(csr.der()).unwrap();
+		let requested_extensions = parsed_csr
+			.requested_extensions()
+			.unwrap()
+			.collect::<Vec<_>>();
+		assert!(matches!(
+			requested_extensions.first().unwrap(),
+			ParsedExtension::ExtendedKeyUsage(_)
+		));
+	}
+
+	#[test]
+	fn write_basic_constraints_if_present() {
+		use x509_parser::extensions::BasicConstraints as B;
+
+		let params = CertificateParams {
+			is_ca: IsCa::ExplicitNoCa,
+			..Default::default()
+		};
+		let key_pair = KeyPair::generate().unwrap();
+		let csr = params.serialize_request(&key_pair).unwrap();
+		let (_, parsed_csr) = X509CertificationRequest::from_der(csr.der()).unwrap();
+		let requested_extensions = parsed_csr
+			.requested_extensions()
+			.unwrap()
+			.collect::<Vec<_>>();
+
+		assert!(matches!(
+			requested_extensions.first().unwrap(),
+			ParsedExtension::BasicConstraints(B {
+				ca: false,
+				path_len_constraint: None
+			})
+		));
+	}
+
+	#[test]
+	fn serialize_and_deserialize_eq_basic_constraints() {
+		let params = CertificateParams {
+			is_ca: IsCa::Ca(BasicConstraints::Constrained(10)),
+			..Default::default()
+		};
+		let key_pair = KeyPair::generate().unwrap();
+		let csr = params.serialize_request(&key_pair).unwrap();
+		let csr_de = CertificateSigningRequestParams::from_der(csr.der()).unwrap();
+
+		assert_eq!(csr_de.params.is_ca, params.is_ca);
 	}
 }

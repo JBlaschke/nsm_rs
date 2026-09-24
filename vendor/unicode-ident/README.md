@@ -13,7 +13,7 @@ Implementation of [Unicode Standard Annex #31][tr31] for determining which
 
 This crate is a better optimized implementation of the older `unicode-xid`
 crate. This crate uses less static storage, and is able to classify both ASCII
-and non-ASCII codepoints with better performance, 2&ndash;10&times; faster than
+and non-ASCII codepoints with better performance, 6&times; faster than
 `unicode-xid`.
 
 <br>
@@ -41,11 +41,11 @@ different ratios of ASCII to non-ASCII codepoints in the input data.
 
 | | static storage | 0% nonascii | 1% | 10% | 100% nonascii |
 |---|---|---|---|---|---|
-| **`unicode-ident`** | 10.4 K | 0.96 ns | 0.95 ns | 1.09 ns | 1.55 ns |
-| **`unicode-xid`** | 11.8 K | 1.88 ns | 2.14 ns | 3.48 ns | 15.63 ns |
-| **`ucd-trie`** | 10.3 K | 1.29 ns | 1.28 ns | 1.36 ns | 2.15 ns |
-| **`fst`** | 144 K | 55.1 ns | 54.9 ns | 53.2 ns | 28.5 ns |
-| **`roaring`** | 66.1 K | 2.78 ns | 3.09 ns | 3.37 ns | 4.70 ns |
+| **`unicode-ident`** | 10.3 K | 0.36 ns | 0.37 ns | 0.37 ns | 0.43 ns |
+| **`unicode-xid`** | 12.2 K | 1.63 ns | 1.70 ns | 1.82 ns | 4.56 ns |
+| **`ucd-trie`** | 10.8 K | 1.01 ns | 0.73 ns | 0.97 ns | 1.09 ns |
+| **`fst`** | 149 K | 22.0 ns | 21.9 ns | 20.9 ns | 10.5 ns |
+| **`roaring`** | 66.1 K | 1.91 ns | 1.90 ns | 1.94 ns | 2.67 ns |
 
 Source code for the benchmark is provided in the *bench* directory of this repo
 and may be repeated by running `cargo criterion`.
@@ -84,7 +84,7 @@ lines on average. Each cache line fits only 8 table entries. Additionally, the
 branching performed during the binary search is probably mostly unpredictable to
 the branch predictor.
 
-Overall, the crate ends up being about 10&times; slower on non-ASCII input
+Overall, the crate ends up being about 6&times; slower on non-ASCII input
 compared to the fastest crate.
 
 A potential improvement would be to pack the table entries more compactly.
@@ -212,9 +212,8 @@ reasonable. However, as you can see there is a large degree of similarity
 between the two bitmaps and across the rows, which lends well to compression.
 
 This crate stores one 512-bit "row" of the above bitmaps in the leaf level of a
-trie, and a single additional level to index into the leafs. It turns out there
-are 124 unique 512-bit chunks across the two bitmaps so 7 bits are sufficient to
-index them.
+trie, and a single additional level to index into the leafs. There are 134
+unique 512-bit chunks across the two bitmaps.
 
 The chunk size of 512 bits is selected as the size that minimizes the total size
 of the data structure. A smaller chunk, like 256 or 128 bits, would achieve
@@ -222,12 +221,13 @@ better deduplication but require a larger index. A larger chunk would increase
 redundancy in the leaf bitmaps. 512 bit chunks are the optimum for total size of
 the index plus leaf bitmaps.
 
-In fact since there are only 124 unique chunks, we can use an 8-bit index with a
-spare bit to index at the half-chunk level. This achieves an additional 8.5%
-compression by eliminating redundancies between the second half of any chunk and
-the first half of any other chunk. Note that this is not the same as using
-chunks which are half the size, because it does not necessitate raising the size
-of the trie's first level.
+The chunk data is compressed using the Kuhn–Munkres algorithm for bipartite
+matching to eliminate redundancies between the second half of any chunk and the
+first half of any other chunk. This achieves an additional 9% compression of the
+leaf level, leaving 122 chunks that can be indexed at the half-chunk level using
+an 8-bit index. Note that this is not the same as using chunks which are half
+the size, because it does not necessitate raising the size of the trie's first
+level.
 
 In contrast to binary search or the `ucd-trie` crate, performing lookups in this
 data structure is straight-line code with no need for branching.
@@ -236,26 +236,18 @@ data structure is straight-line code with no need for branching.
 is_xid_start:
 	mov eax, edi
 	shr eax, 9
-	lea rcx, [rip + unicode_ident::tables::TRIE_START]
-	add rcx, rax
-	xor eax, eax
-	cmp edi, 201728
-	cmovb rax, rcx
-	test rax, rax
-	lea rcx, [rip + .L__unnamed_1]
-	cmovne rcx, rax
+	cmp edi, 261632
+	mov ecx, offset unicode_ident::tables::TRIE_START+17
+	lea rax, [rax + unicode_ident::tables::TRIE_START]
+	cmovb rcx, rax
 	movzx eax, byte ptr [rcx]
-	shl rax, 5
-	mov ecx, edi
-	shr ecx, 3
-	and ecx, 63
-	add rcx, rax
-	lea rax, [rip + unicode_ident::tables::LEAF]
-	mov al, byte ptr [rax + rcx]
-	and dil, 7
-	mov ecx, edi
-	shr al, cl
-	and al, 1
+	mov ecx, 1539
+	bextr ecx, edi, ecx
+	and edi, 7
+	shl eax, 5
+	movzx eax, byte ptr [rax + rcx + unicode_ident::tables::LEAF]
+	bt eax, edi
+	setb al
 	ret
 ```
 
@@ -264,7 +256,7 @@ is_xid_start:
 ## License
 
 Use of the Unicode Character Database, as this crate does, is governed by the <a
-href="LICENSE-UNICODE">UNICODE LICENSE V3</a>.
+href="LICENSE-UNICODE">Unicode license</a>.
 
 All intellectual property within this crate that is **not generated** using the
 Unicode Character Database as input is licensed under either of <a

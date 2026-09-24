@@ -2,6 +2,19 @@
 // called LICENSE at the top level of the ICU4X source tree
 // (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
 
+// https://github.com/unicode-org/icu4x/blob/main/documents/process/boilerplate.md#library-annotations
+#![cfg_attr(not(any(test, doc)), no_std)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+    )
+)]
+// #![warn(missing_docs)]
+
 //! `tinystr` is a utility crate of the [`ICU4X`] project.
 //!
 //! It includes [`TinyAsciiStr`], a core API for representing small ASCII-only bounded length strings.
@@ -51,21 +64,6 @@
 //!
 //! [`ICU4X`]: ../icu/index.html
 
-// https://github.com/unicode-org/icu4x/blob/main/documents/process/boilerplate.md#library-annotations
-#![cfg_attr(not(any(test, feature = "std")), no_std)]
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::exhaustive_structs,
-        clippy::exhaustive_enums,
-        missing_debug_implementations,
-    )
-)]
-
 mod macros;
 
 mod ascii;
@@ -83,11 +81,11 @@ mod databake;
 #[cfg(feature = "zerovec")]
 mod ule;
 
-#[cfg(any(feature = "serde", feature = "alloc"))]
+#[cfg(feature = "alloc")]
 extern crate alloc;
 
 pub use ascii::TinyAsciiStr;
-pub use error::TinyStrError;
+pub use error::ParseError;
 pub use unvalidated::UnvalidatedTinyAsciiStr;
 
 /// These are temporary compatability reexports that will be removed
@@ -102,17 +100,6 @@ pub type TinyStr16 = TinyAsciiStr<16>;
 
 #[test]
 fn test_size() {
-    assert_eq!(
-        core::mem::size_of::<TinyStr4>(),
-        core::mem::size_of::<Option<TinyStr4>>()
-    );
-    assert_eq!(
-        core::mem::size_of::<TinyStr8>(),
-        core::mem::size_of::<Option<TinyStr8>>()
-    );
+    assert_eq!(size_of::<TinyStr4>(), size_of::<Option<TinyStr4>>());
+    assert_eq!(size_of::<TinyStr8>(), size_of::<Option<TinyStr8>>());
 }
-// /// Allows unit tests to use the macro
-// #[cfg(test)]
-// mod tinystr {
-//     pub use super::{TinyAsciiStr, TinyStrError};
-// }

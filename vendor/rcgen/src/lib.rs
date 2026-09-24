@@ -20,32 +20,26 @@ use rcgen::{generate_simple_self_signed, CertifiedKey};
 let subject_alt_names = vec!["hello.world.example".to_string(),
 	"localhost".to_string()];
 
-let CertifiedKey { cert, key_pair } = generate_simple_self_signed(subject_alt_names).unwrap();
+let CertifiedKey { cert, signing_key } = generate_simple_self_signed(subject_alt_names).unwrap();
 println!("{}", cert.pem());
-println!("{}", key_pair.serialize_pem());
+println!("{}", signing_key.serialize_pem());
 # }
 ```"##
 )]
 #![forbid(unsafe_code)]
 #![forbid(non_ascii_idents)]
 #![deny(missing_docs)]
-#![allow(clippy::complexity, clippy::style, clippy::pedantic)]
-#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+#![cfg_attr(rcgen_docsrs, feature(doc_cfg))]
 #![warn(unreachable_pub)]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::net::IpAddr;
 #[cfg(feature = "x509-parser")]
 use std::net::{Ipv4Addr, Ipv6Addr};
-
-use time::{OffsetDateTime, Time};
-use yasna::models::ObjectIdentifier;
-use yasna::models::{GeneralizedTime, UTCTime};
-use yasna::tags::{TAG_BMPSTRING, TAG_TELETEXSTRING, TAG_UNIVERSALSTRING};
-use yasna::DERWriter;
-use yasna::Tag;
+use std::ops::Deref;
 
 pub use certificate::{
 	date_time_ymd, Attribute, BasicConstraints, Certificate, CertificateParams, CidrSubnet,
@@ -57,15 +51,24 @@ pub use crl::{
 };
 pub use csr::{CertificateSigningRequest, CertificateSigningRequestParams, PublicKey};
 pub use error::{Error, InvalidAsn1String};
-pub use key_pair::PublicKeyData;
+#[cfg(feature = "crypto")]
+pub use key_pair::KeyPair;
 #[cfg(all(feature = "crypto", feature = "aws_lc_rs"))]
 pub use key_pair::RsaKeySize;
-pub use key_pair::{KeyPair, RemoteKeyPair, SubjectPublicKeyInfo};
+pub use key_pair::{PublicKeyData, SigningKey, SubjectPublicKeyInfo};
+#[cfg(feature = "pem")]
+use pem::Pem;
+use pki_types::CertificateDer;
 #[cfg(feature = "crypto")]
 use ring_like::digest;
 pub use sign_algo::algo::*;
 pub use sign_algo::SignatureAlgorithm;
-pub use string_types::*;
+use time::{OffsetDateTime, Time};
+use yasna::models::{GeneralizedTime, ObjectIdentifier, UTCTime};
+use yasna::tags::{TAG_BMPSTRING, TAG_TELETEXSTRING, TAG_UNIVERSALSTRING};
+use yasna::{DERWriter, Tag};
+
+use crate::string::{BmpString, Ia5String, PrintableString, TeletexString, UniversalString};
 
 mod certificate;
 mod crl;
@@ -75,7 +78,7 @@ mod key_pair;
 mod oid;
 mod ring_like;
 mod sign_algo;
-mod string_types;
+pub mod string;
 
 /// Type-alias for the old name of [`Error`].
 #[deprecated(
@@ -84,11 +87,12 @@ mod string_types;
 pub type RcgenError = Error;
 
 /// An issued certificate, together with the subject keypair.
-pub struct CertifiedKey {
+#[derive(PartialEq, Eq)]
+pub struct CertifiedKey<S: SigningKey> {
 	/// An issued certificate.
 	pub cert: Certificate,
-	/// The certificate's subject key pair.
-	pub key_pair: KeyPair,
+	/// The certificate's subject signing key.
+	pub signing_key: S,
 }
 
 /**
@@ -112,28 +116,175 @@ use rcgen::{generate_simple_self_signed, CertifiedKey};
 let subject_alt_names = vec!["hello.world.example".to_string(),
 	"localhost".to_string()];
 
-let CertifiedKey { cert, key_pair } = generate_simple_self_signed(subject_alt_names).unwrap();
+let CertifiedKey { cert, signing_key } = generate_simple_self_signed(subject_alt_names).unwrap();
 
 // The certificate is now valid for localhost and the domain "hello.world.example"
 println!("{}", cert.pem());
-println!("{}", key_pair.serialize_pem());
+println!("{}", signing_key.serialize_pem());
 # }
 ```
 "##
 )]
 pub fn generate_simple_self_signed(
 	subject_alt_names: impl Into<Vec<String>>,
-) -> Result<CertifiedKey, Error> {
-	let key_pair = KeyPair::generate()?;
-	let cert = CertificateParams::new(subject_alt_names)?.self_signed(&key_pair)?;
-	Ok(CertifiedKey { cert, key_pair })
+) -> Result<CertifiedKey<KeyPair>, Error> {
+	let signing_key = KeyPair::generate()?;
+	let cert = CertificateParams::new(subject_alt_names)?.self_signed(&signing_key)?;
+	Ok(CertifiedKey { cert, signing_key })
 }
 
-struct Issuer<'a> {
-	distinguished_name: &'a DistinguishedName,
-	key_identifier_method: &'a KeyIdMethod,
-	key_usages: &'a [KeyUsagePurpose],
-	key_pair: &'a KeyPair,
+/// An [`Issuer`] wrapper that also contains the issuer's [`Certificate`].
+#[derive(Debug)]
+pub struct CertifiedIssuer<'a, S> {
+	certificate: Certificate,
+	issuer: Issuer<'a, S>,
+}
+
+impl<'a, S: SigningKey> CertifiedIssuer<'a, S> {
+	/// Create a new issuer from the given parameters and key, with a self-signed certificate.
+	pub fn self_signed(params: CertificateParams, signing_key: S) -> Result<Self, Error> {
+		Ok(Self {
+			certificate: params.self_signed(&signing_key)?,
+			issuer: Issuer::new(params, signing_key),
+		})
+	}
+
+	/// Create a new issuer from the given parameters and key, signed by the given `issuer`.
+	pub fn signed_by(
+		params: CertificateParams,
+		signing_key: S,
+		issuer: &Issuer<'_, impl SigningKey>,
+	) -> Result<Self, Error> {
+		Ok(Self {
+			certificate: params.signed_by(&signing_key, issuer)?,
+			issuer: Issuer::new(params, signing_key),
+		})
+	}
+
+	/// Get the certificate in PEM encoded format.
+	#[cfg(feature = "pem")]
+	pub fn pem(&self) -> String {
+		pem::encode_config(&Pem::new("CERTIFICATE", self.der().to_vec()), ENCODE_CONFIG)
+	}
+
+	/// Get the certificate in DER encoded format.
+	///
+	/// See also [`Certificate::der()`]
+	pub fn der(&self) -> &CertificateDer<'static> {
+		self.certificate.der()
+	}
+}
+
+impl<'a, S> Deref for CertifiedIssuer<'a, S> {
+	type Target = Issuer<'a, S>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.issuer
+	}
+}
+
+impl<'a, S> AsRef<Certificate> for CertifiedIssuer<'a, S> {
+	fn as_ref(&self) -> &Certificate {
+		&self.certificate
+	}
+}
+
+/// An issuer that can sign certificates.
+///
+/// Encapsulates the distinguished name, key identifier method, key usages and signing key
+/// of the issuing certificate.
+pub struct Issuer<'a, S> {
+	distinguished_name: Cow<'a, DistinguishedName>,
+	key_identifier_method: Cow<'a, KeyIdMethod>,
+	key_usages: Cow<'a, [KeyUsagePurpose]>,
+	signing_key: S,
+}
+
+impl<'a, S: SigningKey> Issuer<'a, S> {
+	/// Create a new issuer from the given parameters and signing key.
+	pub fn new(params: CertificateParams, signing_key: S) -> Self {
+		Self {
+			distinguished_name: Cow::Owned(params.distinguished_name),
+			key_identifier_method: Cow::Owned(params.key_identifier_method),
+			key_usages: Cow::Owned(params.key_usages),
+			signing_key,
+		}
+	}
+
+	/// Create a new issuer from the given parameters and signing key references.
+	///
+	/// Use [`Issuer::new`] instead if you want to obtain an [`Issuer`] that owns
+	/// its parameters.
+	pub fn from_params(params: &'a CertificateParams, signing_key: S) -> Self {
+		Self {
+			distinguished_name: Cow::Borrowed(&params.distinguished_name),
+			key_identifier_method: Cow::Borrowed(&params.key_identifier_method),
+			key_usages: Cow::Borrowed(&params.key_usages),
+			signing_key,
+		}
+	}
+
+	/// Parses an existing CA certificate from the ASCII PEM format.
+	///
+	/// See [`from_ca_cert_der`](Self::from_ca_cert_der) for more details.
+	#[cfg(all(feature = "pem", feature = "x509-parser"))]
+	pub fn from_ca_cert_pem(pem_str: &str, signing_key: S) -> Result<Self, Error> {
+		let certificate = pem::parse(pem_str).map_err(|_| Error::CouldNotParseCertificate)?;
+		Self::from_ca_cert_der(&certificate.contents().into(), signing_key)
+	}
+
+	/// Parses an existing CA certificate from the DER format.
+	///
+	/// This function assumes the provided certificate is a CA. It will not check
+	/// for the presence of the `BasicConstraints` extension, or perform any other
+	/// validation.
+	///
+	/// If you already have a byte slice containing DER, it can trivially be converted into
+	/// [`CertificateDer`] using the [`Into`] trait.
+	#[cfg(feature = "x509-parser")]
+	pub fn from_ca_cert_der(ca_cert: &CertificateDer<'_>, signing_key: S) -> Result<Self, Error> {
+		let (_remainder, x509) = x509_parser::parse_x509_certificate(ca_cert)
+			.map_err(|_| Error::CouldNotParseCertificate)?;
+
+		Ok(Self {
+			key_usages: Cow::Owned(KeyUsagePurpose::from_x509(&x509)?),
+			key_identifier_method: Cow::Owned(KeyIdMethod::from_x509(&x509)?),
+			distinguished_name: Cow::Owned(DistinguishedName::from_name(
+				&x509.tbs_certificate.subject,
+			)?),
+			signing_key,
+		})
+	}
+
+	/// Allowed key usages for this issuer.
+	pub fn key_usages(&self) -> &[KeyUsagePurpose] {
+		&self.key_usages
+	}
+
+	/// Yield a reference to the signing key.
+	pub fn key(&self) -> &S {
+		&self.signing_key
+	}
+}
+
+impl<'a, S> fmt::Debug for Issuer<'a, S> {
+	/// Formats the issuer information without revealing the key pair.
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		// The key pair is omitted from the debug output as it contains secret information.
+		let Issuer {
+			distinguished_name,
+			key_identifier_method,
+			key_usages,
+			signing_key: _,
+		} = self;
+
+		f.debug_struct("Issuer")
+			.field("distinguished_name", distinguished_name)
+			.field("key_identifier_method", key_identifier_method)
+			.field("key_usages", key_usages)
+			.field("signing_key", &"[elided]")
+			.finish()
+	}
 }
 
 // https://tools.ietf.org/html/rfc5280#section-4.1.1
@@ -161,6 +312,26 @@ pub enum SanType {
 	URI(Ia5String),
 	IpAddress(IpAddr),
 	OtherName((Vec<u64>, OtherNameValue)),
+}
+
+impl SanType {
+	#[cfg(all(test, feature = "x509-parser"))]
+	fn from_x509(x509: &x509_parser::certificate::X509Certificate<'_>) -> Result<Vec<Self>, Error> {
+		let sans = x509
+			.subject_alternative_name()
+			.map_err(|_| Error::CouldNotParseCertificate)?
+			.map(|ext| &ext.value.general_names);
+
+		let Some(sans) = sans else {
+			return Ok(Vec::new());
+		};
+
+		let mut subject_alt_names = Vec::with_capacity(sans.len());
+		for san in sans {
+			subject_alt_names.push(Self::try_from_general(san)?);
+		}
+		Ok(subject_alt_names)
+	}
 }
 
 /// An `OtherName` value, defined in [RFC 5280§4.1.2.4].
@@ -396,6 +567,7 @@ impl DistinguishedName {
 /**
 Iterator over [`DistinguishedName`] entries
 */
+#[derive(Clone, Debug)]
 pub struct DistinguishedNameIterator<'a> {
 	distinguished_name: &'a DistinguishedName,
 	iter: std::slice::Iter<'a, DnType>,
@@ -435,9 +607,20 @@ pub enum KeyUsagePurpose {
 }
 
 impl KeyUsagePurpose {
+	#[cfg(feature = "x509-parser")]
+	fn from_x509(x509: &x509_parser::certificate::X509Certificate<'_>) -> Result<Vec<Self>, Error> {
+		let key_usage = x509
+			.key_usage()
+			.map_err(|_| Error::CouldNotParseCertificate)?
+			.map(|ext| ext.value);
+		// This x509 parser stores flags in reversed bit BIT STRING order
+		let flags = key_usage.map_or(0u16, |k| k.flags).reverse_bits();
+		Ok(Self::from_u16(flags))
+	}
+
 	/// Encode a key usage as the value of a BIT STRING as defined by RFC 5280.
 	/// [`u16`] is sufficient to encode the largest possible key usage value (two bytes).
-	fn to_u16(&self) -> u16 {
+	fn to_u16(self) -> u16 {
 		const FLAG: u16 = 0b1000_0000_0000_0000;
 		FLAG >> match self {
 			KeyUsagePurpose::DigitalSignature => 0,
@@ -505,6 +688,28 @@ pub enum KeyIdMethod {
 }
 
 impl KeyIdMethod {
+	#[cfg(feature = "x509-parser")]
+	fn from_x509(x509: &x509_parser::certificate::X509Certificate<'_>) -> Result<Self, Error> {
+		let key_identifier_method =
+			x509.iter_extensions()
+				.find_map(|ext| match ext.parsed_extension() {
+					x509_parser::extensions::ParsedExtension::SubjectKeyIdentifier(key_id) => {
+						Some(KeyIdMethod::PreSpecified(key_id.0.into()))
+					},
+					_ => None,
+				});
+
+		Ok(match key_identifier_method {
+			Some(method) => method,
+			None => {
+				#[cfg(not(feature = "crypto"))]
+				return Err(Error::UnsupportedSignatureAlgorithm);
+				#[cfg(feature = "crypto")]
+				KeyIdMethod::Sha256
+			},
+		})
+	}
+
 	/// Derive a key identifier for the provided subject public key info using the key ID method.
 	///
 	/// Typically this is a truncated hash over the raw subject public key info, but may
@@ -514,6 +719,7 @@ impl KeyIdMethod {
 	/// X.509v3 extensions.
 	#[allow(unused_variables)]
 	pub(crate) fn derive(&self, subject_public_key_info: impl AsRef<[u8]>) -> Vec<u8> {
+		#[cfg_attr(not(feature = "crypto"), expect(clippy::let_unit_value))]
 		let digest_method = match &self {
 			#[cfg(feature = "crypto")]
 			Self::Sha256 => &digest::SHA256,
@@ -666,6 +872,7 @@ pub struct SerialNumber {
 	inner: Vec<u8>,
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl SerialNumber {
 	/// Create a serial number from the given byte slice.
 	pub fn from_slice(bytes: &[u8]) -> SerialNumber {
@@ -686,7 +893,7 @@ impl SerialNumber {
 
 impl fmt::Display for SerialNumber {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-		let hex: Vec<_> = self.inner.iter().map(|b| format!("{:02x}", b)).collect();
+		let hex: Vec<_> = self.inner.iter().map(|b| format!("{b:02x}")).collect();
 		write!(f, "{}", hex.join(":"))
 	}
 }
@@ -768,9 +975,7 @@ mod tests {
 				assert_eq!(
 					alg_i == alg_j,
 					i == j,
-					"Algorighm relationship mismatch for algorithm index pair {} and {}",
-					i,
-					j
+					"Algorithm relationship mismatch for algorithm index pair {i} and {j}"
 				);
 			}
 		}
@@ -778,9 +983,9 @@ mod tests {
 
 	#[cfg(feature = "x509-parser")]
 	mod test_ip_address_from_octets {
-		use super::super::ip_addr_from_octets;
-		use super::super::Error;
 		use std::net::IpAddr;
+
+		use super::super::{ip_addr_from_octets, Error};
 
 		#[test]
 		fn ipv4() {
@@ -826,9 +1031,11 @@ mod tests {
 
 	#[cfg(feature = "x509-parser")]
 	mod test_san_type_from_general_name {
-		use crate::SanType;
 		use std::net::IpAddr;
+
 		use x509_parser::extensions::GeneralName;
+
+		use crate::SanType;
 
 		#[test]
 		fn with_ipv4() {

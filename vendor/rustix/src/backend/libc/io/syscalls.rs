@@ -8,12 +8,13 @@ use crate::fd::{AsFd as _, BorrowedFd, OwnedFd, RawFd};
 #[cfg(not(any(
     target_os = "aix",
     target_os = "espidf",
+    target_os = "horizon",
     target_os = "nto",
     target_os = "vita",
     target_os = "wasi"
 )))]
 use crate::io::DupFlags;
-#[cfg(linux_kernel)]
+#[cfg(all(linux_kernel, not(target_os = "android")))]
 use crate::io::ReadWriteFlags;
 use crate::io::{self, FdFlags};
 use crate::ioctl::{IoctlOutput, Opcode};
@@ -150,7 +151,7 @@ pub(crate) fn pwritev(fd: BorrowedFd<'_>, bufs: &[IoSlice<'_>], offset: u64) -> 
     }
 }
 
-#[cfg(linux_kernel)]
+#[cfg(all(linux_kernel, not(target_os = "android")))]
 pub(crate) fn preadv2(
     fd: BorrowedFd<'_>,
     bufs: &mut [IoSliceMut<'_>],
@@ -170,7 +171,7 @@ pub(crate) fn preadv2(
     }
 }
 
-#[cfg(linux_kernel)]
+#[cfg(all(linux_kernel, not(target_os = "android")))]
 pub(crate) fn pwritev2(
     fd: BorrowedFd<'_>,
     bufs: &[IoSlice<'_>],

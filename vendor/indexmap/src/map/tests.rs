@@ -43,8 +43,8 @@ fn insert() {
 
 #[test]
 fn insert_full() {
-    let insert = vec![9, 2, 7, 1, 4, 6, 13];
-    let present = vec![1, 6, 2];
+    let insert = [9, 2, 7, 1, 4, 6, 13];
+    let present = [1, 6, 2];
     let mut map = IndexMap::with_capacity(insert.len());
 
     for (i, &elt) in insert.iter().enumerate() {
@@ -207,10 +207,10 @@ fn reserve() {
         assert_eq!(map.capacity(), capacity);
         assert_eq!(map.get(&i), Some(&(i * i)));
     }
-    map.insert(capacity, std::usize::MAX);
+    map.insert(capacity, usize::MAX);
     assert_eq!(map.len(), capacity + 1);
     assert!(map.capacity() > capacity);
-    assert_eq!(map.get(&capacity), Some(&std::usize::MAX));
+    assert_eq!(map.get(&capacity), Some(&usize::MAX));
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn shrink_to_fit() {
         assert_eq!(map.len(), i);
         map.insert(i, i * i);
         assert_eq!(map.len(), i + 1);
-        assert!(map.capacity() >= i + 1);
+        assert!(map.capacity() > i);
         assert_eq!(map.get(&i), Some(&(i * i)));
         map.shrink_to_fit();
         assert_eq!(map.len(), i + 1);
@@ -327,11 +327,11 @@ fn partial_eq_and_eq() {
 #[test]
 fn extend() {
     let mut map = IndexMap::new();
-    map.extend(vec![(&1, &2), (&3, &4)]);
-    map.extend(vec![(5, 6)]);
+    map.extend([(&1, &2), (&3, &4)]);
+    map.extend([(5, 6)]);
     assert_eq!(
         map.into_iter().collect::<Vec<_>>(),
-        vec![(1, 2), (3, 4), (5, 6)]
+        [(1, 2), (3, 4), (5, 6)]
     );
 }
 
@@ -374,16 +374,11 @@ fn entry_and_modify() {
 fn entry_or_default() {
     let mut map = IndexMap::new();
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, Default, PartialEq)]
     enum TestEnum {
+        #[default]
         DefaultValue,
         NonDefaultValue,
-    }
-
-    impl Default for TestEnum {
-        fn default() -> Self {
-            TestEnum::DefaultValue
-        }
     }
 
     map.insert(1, TestEnum::NonDefaultValue);
@@ -485,8 +480,7 @@ fn from_entries() {
 
 #[test]
 fn keys() {
-    let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-    let map: IndexMap<_, _> = vec.into_iter().collect();
+    let map = IndexMap::<_, _>::from_iter([(1, 'a'), (2, 'b'), (3, 'c')]);
     let keys: Vec<_> = map.keys().copied().collect();
     assert_eq!(keys.len(), 3);
     assert!(keys.contains(&1));
@@ -496,8 +490,7 @@ fn keys() {
 
 #[test]
 fn into_keys() {
-    let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-    let map: IndexMap<_, _> = vec.into_iter().collect();
+    let map = IndexMap::<_, _>::from_iter([(1, 'a'), (2, 'b'), (3, 'c')]);
     let keys: Vec<i32> = map.into_keys().collect();
     assert_eq!(keys.len(), 3);
     assert!(keys.contains(&1));
@@ -507,8 +500,7 @@ fn into_keys() {
 
 #[test]
 fn values() {
-    let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-    let map: IndexMap<_, _> = vec.into_iter().collect();
+    let map = IndexMap::<_, _>::from_iter([(1, 'a'), (2, 'b'), (3, 'c')]);
     let values: Vec<_> = map.values().copied().collect();
     assert_eq!(values.len(), 3);
     assert!(values.contains(&'a'));
@@ -518,8 +510,7 @@ fn values() {
 
 #[test]
 fn values_mut() {
-    let vec = vec![(1, 1), (2, 2), (3, 3)];
-    let mut map: IndexMap<_, _> = vec.into_iter().collect();
+    let mut map = IndexMap::<_, _>::from_iter([(1, 1), (2, 2), (3, 3)]);
     for value in map.values_mut() {
         *value *= 2
     }
@@ -532,8 +523,7 @@ fn values_mut() {
 
 #[test]
 fn into_values() {
-    let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-    let map: IndexMap<_, _> = vec.into_iter().collect();
+    let map = IndexMap::<_, _>::from_iter([(1, 'a'), (2, 'b'), (3, 'c')]);
     let values: Vec<char> = map.into_values().collect();
     assert_eq!(values.len(), 3);
     assert!(values.contains(&'a'));
@@ -591,6 +581,222 @@ fn iter_default() {
     assert_default::<Values<'static, K, V>>();
     assert_default::<ValuesMut<'static, K, V>>();
     assert_default::<IntoValues<K, V>>();
+}
+
+#[test]
+fn get_index_mut2() {
+    let mut map: IndexMap<i32, i32> = IndexMap::new();
+    map.insert(1, 2);
+    map.insert(3, 4);
+    map.insert(5, 6);
+
+    {
+        let (key, value) = map.get_index_mut2(0).unwrap();
+        assert_eq!(*key, 1);
+        assert_eq!(*value, 2);
+
+        *value = 7;
+    }
+    assert_eq!(map[0], 7);
+
+    {
+        let (key, _) = map.get_index_mut2(0).unwrap();
+        *key = 8;
+    }
+    assert_eq!(map.get_index(0).unwrap().0, &8);
+}
+
+#[test]
+fn shift_shift_remove_index() {
+    let mut map: IndexMap<i32, i32> = IndexMap::new();
+    map.insert(1, 2);
+    map.insert(3, 4);
+    map.insert(5, 6);
+    map.insert(7, 8);
+    map.insert(9, 10);
+
+    let result = map.shift_remove_index(1);
+    assert_eq!(result, Some((3, 4)));
+    assert_eq!(map.len(), 4);
+    assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8), (9, 10)]);
+
+    let result = map.shift_remove_index(1);
+    assert_eq!(result, Some((5, 6)));
+    assert_eq!(map.len(), 3);
+    assert_eq!(map.as_slice(), &[(1, 2), (7, 8), (9, 10)]);
+
+    let result = map.shift_remove_index(2);
+    assert_eq!(result, Some((9, 10)));
+    assert_eq!(map.len(), 2);
+    assert_eq!(map.as_slice(), &[(1, 2), (7, 8)]);
+
+    let result = map.shift_remove_index(2);
+    assert_eq!(result, None);
+    assert_eq!(map.len(), 2);
+    assert_eq!(map.as_slice(), &[(1, 2), (7, 8)]);
+}
+
+#[test]
+fn shift_remove_entry() {
+    let mut map: IndexMap<i32, i32> = IndexMap::new();
+    map.insert(1, 2);
+    map.insert(3, 4);
+    map.insert(5, 6);
+    map.insert(7, 8);
+    map.insert(9, 10);
+
+    let result = map.shift_remove_entry(&3);
+    assert_eq!(result, Some((3, 4)));
+    assert_eq!(map.len(), 4);
+    assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8), (9, 10)]);
+
+    let result = map.shift_remove_entry(&9);
+    assert_eq!(result, Some((9, 10)));
+    assert_eq!(map.len(), 3);
+    assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8)]);
+
+    let result = map.shift_remove_entry(&9);
+    assert_eq!(result, None);
+    assert_eq!(map.len(), 3);
+    assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8)]);
+}
+
+#[test]
+fn shift_remove_full() {
+    let mut map: IndexMap<i32, i32> = IndexMap::new();
+    map.insert(1, 2);
+    map.insert(3, 4);
+    map.insert(5, 6);
+    map.insert(7, 8);
+    map.insert(9, 10);
+
+    let result = map.shift_remove_full(&3);
+    assert_eq!(result, Some((1, 3, 4)));
+    assert_eq!(map.len(), 4);
+    assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8), (9, 10)]);
+
+    let result = map.shift_remove_full(&9);
+    assert_eq!(result, Some((3, 9, 10)));
+    assert_eq!(map.len(), 3);
+    assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8)]);
+
+    let result = map.shift_remove_full(&9);
+    assert_eq!(result, None);
+    assert_eq!(map.len(), 3);
+    assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8)]);
+}
+
+#[test]
+fn sorted_unstable_by() {
+    let map = IndexMap::<i32, i32>::from_iter([(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]);
+    let sorted = map.sorted_unstable_by(|_a, b, _c, d| d.cmp(&b));
+
+    assert_eq!(
+        sorted.as_slice(),
+        &[(5, 50), (4, 40), (3, 30), (2, 20), (1, 10)]
+    );
+}
+
+#[test]
+fn into_boxed_slice() {
+    let mut map: IndexMap<i32, i32> = IndexMap::new();
+    for i in 0..5 {
+        map.insert(i, i * 10);
+    }
+    let boxed_slice: Box<Slice<i32, i32>> = map.into_boxed_slice();
+    assert_eq!(boxed_slice.len(), 5);
+    assert_eq!(
+        boxed_slice.as_ref(),
+        &[(0, 0), (1, 10), (2, 20), (3, 30), (4, 40)]
+    );
+}
+
+#[test]
+fn last_mut() {
+    let mut map: IndexMap<&str, i32> = IndexMap::new();
+
+    let last_entry = map.last_mut();
+    assert_eq!(last_entry, None);
+
+    map.insert("key1", 1);
+    map.insert("key2", 2);
+    map.insert("key3", 3);
+    let last_entry = map.last_mut();
+    assert_eq!(last_entry, Some((&"key3", &mut 3)));
+
+    *last_entry.unwrap().1 = 4;
+    assert_eq!(map.get("key3"), Some(&4));
+}
+
+#[test]
+#[should_panic = "index out of bounds"]
+fn insert_before_oob() {
+    let mut map: IndexMap<char, ()> = IndexMap::new();
+    let _ = map.insert_before(0, 'a', ());
+    let _ = map.insert_before(1, 'b', ());
+    map.insert_before(3, 'd', ());
+}
+
+#[test]
+fn clear() {
+    let mut map = IndexMap::<i32, i32>::from_iter([(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]);
+    assert_ne!(map.len(), 0);
+    map.clear();
+    assert_eq!(map.len(), 0);
+}
+
+#[test]
+fn get_range() {
+    let map = IndexMap::<i32, i32>::from_iter([(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]);
+
+    let result = map.get_range(2..2);
+    assert!(result.unwrap().is_empty());
+
+    #[expect(clippy::reversed_empty_ranges)]
+    let result = map.get_range(4..2);
+    assert!(result.is_none());
+
+    let result = map.get_range(2..4);
+    let slice: &Slice<i32, i32> = result.unwrap();
+    assert_eq!(slice.len(), 2);
+    assert_eq!(slice, &[(3, 30), (4, 40)]);
+}
+
+#[test]
+fn get_range_mut() {
+    let mut index_map: IndexMap<i32, i32> = IndexMap::new();
+    index_map.insert(1, 10);
+    index_map.insert(2, 20);
+    index_map.insert(3, 30);
+    index_map.insert(4, 40);
+    index_map.insert(5, 50);
+
+    let result = index_map.get_range_mut(2..2);
+    assert!(result.unwrap().is_empty());
+
+    #[expect(clippy::reversed_empty_ranges)]
+    let result = index_map.get_range_mut(4..2);
+    assert!(result.is_none());
+
+    let result = index_map.get_range_mut(2..4);
+    let slice: &mut Slice<i32, i32> = result.unwrap();
+    assert_eq!(slice.len(), 2);
+    assert_eq!(slice, &mut [(3, 30), (4, 40)]);
+
+    for i in 0..slice.len() {
+        slice[i] += 1;
+    }
+    assert_eq!(slice, &mut [(3, 31), (4, 41)]);
+}
+
+#[test]
+#[should_panic = "index out of bounds"]
+fn shift_insert_oob() {
+    let mut map: IndexMap<u32, u32> = IndexMap::new();
+    map.shift_insert(0, 1, 10);
+    map.shift_insert(1, 2, 20);
+    map.shift_insert(2, 3, 30);
+    map.shift_insert(5, 4, 40);
 }
 
 #[test]
@@ -828,3 +1034,265 @@ move_index_oob!(test_move_index_out_of_bounds_0_10, 0, 10);
 move_index_oob!(test_move_index_out_of_bounds_0_max, 0, usize::MAX);
 move_index_oob!(test_move_index_out_of_bounds_10_0, 10, 0);
 move_index_oob!(test_move_index_out_of_bounds_max_0, usize::MAX, 0);
+
+#[test]
+fn disjoint_mut_empty_map() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    assert_eq!(
+        map.get_disjoint_mut([&0, &1, &2, &3]),
+        [None, None, None, None]
+    );
+}
+
+#[test]
+fn disjoint_mut_empty_param() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 10);
+    assert_eq!(map.get_disjoint_mut([] as [&u32; 0]), []);
+}
+
+#[test]
+fn disjoint_mut_single_fail() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 10);
+    assert_eq!(map.get_disjoint_mut([&0]), [None]);
+}
+
+#[test]
+fn disjoint_mut_single_success() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 10);
+    assert_eq!(map.get_disjoint_mut([&1]), [Some(&mut 10)]);
+}
+
+#[test]
+fn disjoint_mut_multi_success() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 100);
+    map.insert(2, 200);
+    map.insert(3, 300);
+    map.insert(4, 400);
+    assert_eq!(
+        map.get_disjoint_mut([&1, &2]),
+        [Some(&mut 100), Some(&mut 200)]
+    );
+    assert_eq!(
+        map.get_disjoint_mut([&1, &3]),
+        [Some(&mut 100), Some(&mut 300)]
+    );
+    assert_eq!(
+        map.get_disjoint_mut([&3, &1, &4, &2]),
+        [
+            Some(&mut 300),
+            Some(&mut 100),
+            Some(&mut 400),
+            Some(&mut 200)
+        ]
+    );
+}
+
+#[test]
+fn disjoint_mut_multi_success_unsized_key() {
+    let mut map: IndexMap<&'static str, u32> = IndexMap::default();
+    map.insert("1", 100);
+    map.insert("2", 200);
+    map.insert("3", 300);
+    map.insert("4", 400);
+
+    assert_eq!(
+        map.get_disjoint_mut(["1", "2"]),
+        [Some(&mut 100), Some(&mut 200)]
+    );
+    assert_eq!(
+        map.get_disjoint_mut(["1", "3"]),
+        [Some(&mut 100), Some(&mut 300)]
+    );
+    assert_eq!(
+        map.get_disjoint_mut(["3", "1", "4", "2"]),
+        [
+            Some(&mut 300),
+            Some(&mut 100),
+            Some(&mut 400),
+            Some(&mut 200)
+        ]
+    );
+}
+
+#[test]
+fn disjoint_mut_multi_success_borrow_key() {
+    let mut map: IndexMap<String, u32> = IndexMap::default();
+    map.insert("1".into(), 100);
+    map.insert("2".into(), 200);
+    map.insert("3".into(), 300);
+    map.insert("4".into(), 400);
+
+    assert_eq!(
+        map.get_disjoint_mut(["1", "2"]),
+        [Some(&mut 100), Some(&mut 200)]
+    );
+    assert_eq!(
+        map.get_disjoint_mut(["1", "3"]),
+        [Some(&mut 100), Some(&mut 300)]
+    );
+    assert_eq!(
+        map.get_disjoint_mut(["3", "1", "4", "2"]),
+        [
+            Some(&mut 300),
+            Some(&mut 100),
+            Some(&mut 400),
+            Some(&mut 200)
+        ]
+    );
+}
+
+#[test]
+fn disjoint_mut_multi_fail_missing() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 100);
+    map.insert(2, 200);
+    map.insert(3, 300);
+    map.insert(4, 400);
+
+    assert_eq!(map.get_disjoint_mut([&1, &5]), [Some(&mut 100), None]);
+    assert_eq!(map.get_disjoint_mut([&5, &6]), [None, None]);
+    assert_eq!(
+        map.get_disjoint_mut([&1, &5, &4]),
+        [Some(&mut 100), None, Some(&mut 400)]
+    );
+}
+
+#[test]
+#[should_panic]
+fn disjoint_mut_multi_fail_duplicate_panic() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 100);
+    map.get_disjoint_mut([&1, &2, &1]);
+}
+
+#[test]
+fn disjoint_indices_mut_fail_oob() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 10);
+    map.insert(321, 20);
+    assert_eq!(
+        map.get_disjoint_indices_mut([1, 3]),
+        Err(crate::GetDisjointMutError::IndexOutOfBounds)
+    );
+}
+
+#[test]
+fn disjoint_indices_mut_empty() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 10);
+    map.insert(321, 20);
+    assert_eq!(map.get_disjoint_indices_mut([]), Ok([]));
+}
+
+#[test]
+fn disjoint_indices_mut_success() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 10);
+    map.insert(321, 20);
+    assert_eq!(map.get_disjoint_indices_mut([0]), Ok([(&1, &mut 10)]));
+
+    assert_eq!(map.get_disjoint_indices_mut([1]), Ok([(&321, &mut 20)]));
+    assert_eq!(
+        map.get_disjoint_indices_mut([0, 1]),
+        Ok([(&1, &mut 10), (&321, &mut 20)])
+    );
+}
+
+#[test]
+fn disjoint_indices_mut_fail_duplicate() {
+    let mut map: IndexMap<u32, u32> = IndexMap::default();
+    map.insert(1, 10);
+    map.insert(321, 20);
+    assert_eq!(
+        map.get_disjoint_indices_mut([1, 0, 1]),
+        Err(crate::GetDisjointMutError::OverlappingIndices)
+    );
+}
+
+#[test]
+fn insert_sorted_by_key() {
+    let mut values = [(-1, 8), (3, 18), (-27, 2), (-2, 5)];
+    let mut map: IndexMap<i32, i32> = IndexMap::new();
+    for (key, value) in values {
+        let (_, old) = map.insert_sorted_by_key(key, value, |k, _| k.abs());
+        assert_eq!(old, None);
+    }
+    values.sort_by_key(|(key, _)| key.abs());
+    assert_eq!(values, *map.as_slice());
+
+    for (key, value) in &mut values {
+        let (_, old) = map.insert_sorted_by_key(*key, -*value, |k, _| k.abs());
+        assert_eq!(old, Some(*value));
+        *value = -*value;
+    }
+    assert_eq!(values, *map.as_slice());
+}
+
+#[test]
+fn insert_sorted_by() {
+    let mut values = [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)];
+    let mut map: IndexMap<i32, i32> = IndexMap::new();
+    for (key, value) in values {
+        let (_, old) = map.insert_sorted_by(key, value, |key1, _, key2, _| key2.cmp(key1));
+        assert_eq!(old, None);
+    }
+    values.reverse();
+    assert_eq!(values, *map.as_slice());
+
+    for (key, value) in &mut values {
+        let (_, old) = map.insert_sorted_by(*key, -*value, |key1, _, key2, _| key2.cmp(key1));
+        assert_eq!(old, Some(*value));
+        *value = -*value;
+    }
+    assert_eq!(values, *map.as_slice());
+}
+
+#[test]
+fn is_sorted() {
+    fn expect(map: &IndexMap<i32, i32>, e: [bool; 7]) {
+        assert_eq!(e[0], map.is_sorted());
+        assert_eq!(e[1], map.is_sorted_by(|k1, _, k2, _| k1 < k2));
+        assert_eq!(e[2], map.is_sorted_by(|k1, _, k2, _| k1 > k2));
+        assert_eq!(e[3], map.is_sorted_by(|_, v1, _, v2| v1 < v2));
+        assert_eq!(e[4], map.is_sorted_by(|_, v1, _, v2| v1 > v2));
+        assert_eq!(e[5], map.is_sorted_by_key(|k, _| k));
+        assert_eq!(e[6], map.is_sorted_by_key(|_, v| v));
+    }
+
+    let mut map = IndexMap::from_iter((0..10).map(|i| (i, i * i)));
+    expect(&map, [true, true, false, true, false, true, true]);
+
+    map[5] = -1;
+    expect(&map, [true, true, false, false, false, true, false]);
+
+    map[5] = 25;
+    map.replace_index(5, -1).unwrap();
+    expect(&map, [false, false, false, true, false, false, true]);
+}
+
+#[test]
+fn is_sorted_trivial() {
+    fn expect(map: &IndexMap<i32, i32>, e: [bool; 5]) {
+        assert_eq!(e[0], map.is_sorted());
+        assert_eq!(e[1], map.is_sorted_by(|_, _, _, _| true));
+        assert_eq!(e[2], map.is_sorted_by(|_, _, _, _| false));
+        assert_eq!(e[3], map.is_sorted_by_key(|_, _| 0f64));
+        assert_eq!(e[4], map.is_sorted_by_key(|_, _| f64::NAN));
+    }
+
+    let mut map = IndexMap::new();
+    expect(&map, [true, true, true, true, true]);
+
+    map.insert(0, 0);
+    expect(&map, [true, true, true, true, true]);
+
+    map.insert(1, 1);
+    expect(&map, [true, true, false, true, false]);
+
+    map.reverse();
+    expect(&map, [false, true, false, true, false]);
+}

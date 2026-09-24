@@ -6,7 +6,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::utils::{self, FieldInfo, ZeroVecAttrs};
-use std::collections::HashSet;
+
 use syn::spanned::Spanned;
 use syn::{parse_quote, Data, DataEnum, DataStruct, DeriveInput, Error, Expr, Fields, Ident, Lit};
 
@@ -30,8 +30,8 @@ pub fn make_ule_impl(ule_name: Ident, mut input: DeriveInput) -> TokenStream2 {
     let name = &input.ident;
 
     let ule_stuff = match input.data {
-        Data::Struct(ref s) => make_ule_struct_impl(name, &ule_name, &input, s, attrs),
-        Data::Enum(ref e) => make_ule_enum_impl(name, &ule_name, &input, e, attrs),
+        Data::Struct(ref s) => make_ule_struct_impl(name, &ule_name, &input, s, &attrs),
+        Data::Enum(ref e) => make_ule_enum_impl(name, &ule_name, &input, e, &attrs),
         _ => {
             return Error::new(input.span(), "#[make_ule] must be applied to a struct")
                 .to_compile_error();
@@ -80,7 +80,7 @@ fn make_ule_enum_impl(
     ule_name: &Ident,
     input: &DeriveInput,
     enu: &DataEnum,
-    attrs: ZeroVecAttrs,
+    attrs: &ZeroVecAttrs,
 ) -> TokenStream2 {
     // We could support more int reprs in the future if needed
     if !utils::ReprInfo::compute(&input.attrs).u8 {
@@ -91,12 +91,14 @@ fn make_ule_enum_impl(
         .to_compile_error();
     }
 
-    // the next discriminant expected
-    let mut next = 0;
-    // Discriminants that have not been found in series (we might find them later)
-    let mut not_found = HashSet::new();
+    if enu.variants.is_empty() {
+        return Error::new(input.span(), "#[make_ule] cannot be applied to empty enums")
+            .to_compile_error();
+    }
 
-    for (i, variant) in enu.variants.iter().enumerate() {
+    let mut discriminants = std::collections::BTreeSet::new();
+
+    for variant in enu.variants.iter() {
         if !matches!(variant.fields, Fields::Unit) {
             // This can be supported in the future, see zerovec/design_doc.md
             return Error::new(
@@ -108,21 +110,17 @@ fn make_ule_enum_impl(
 
         if let Some((_, ref discr)) = variant.discriminant {
             if let Some(n) = get_expr_int(discr) {
-                if n >= next {
-                    for missing in next..n {
-                        not_found.insert(missing);
+                let n = match u8::try_from(n) {
+                    Ok(n) => n,
+                    Err(_) => {
+                        return Error::new(
+                            variant.span(),
+                            "#[make_ule] only supports discriminants from 0 to 255",
+                        )
+                        .to_compile_error();
                     }
-                    next = n + 1;
-                }
-
-                not_found.remove(&n);
-
-                // We require explicit discriminants so that it is clear that reordering
-                // fields would be a breaking change. Furthermore, using explicit discriminants helps ensure that
-                // platform-specific C ABI choices do not matter.
-                // We could potentially add in explicit discriminants on the user's behalf in the future, or support
-                // more complicated sets of explicit discriminant values.
-                if n != i as u64 {}
+                };
+                discriminants.insert(n);
             } else {
                 return Error::new(
                     discr.span(),
@@ -139,15 +137,10 @@ fn make_ule_enum_impl(
         }
     }
 
-    let not_found = not_found.iter().collect::<Vec<_>>();
-
-    if !not_found.is_empty() {
-        return Error::new(input.span(), format!("#[make_ule] must be applied to enums with discriminants \
-                                                  filling the range from 0 to a maximum; could not find {not_found:?}"))
-            .to_compile_error();
-    }
-
-    let max = next as u8;
+    let match_arms = discriminants
+        .iter()
+        .map(|d| quote::quote!(#d))
+        .collect::<Vec<_>>();
 
     let maybe_ord_derives = if attrs.skip_ord {
         quote!()
@@ -164,9 +157,9 @@ fn make_ule_enum_impl(
     //     (achieved by `#[repr(transparent)]` on a type that satisfies this invariant
     //  2. ULE type is aligned to 1 byte.
     //     (achieved by `#[repr(transparent)]` on a type that satisfies this invariant)
-    //  3. The impl of validate_byte_slice() returns an error if any byte is not valid.
+    //  3. The impl of validate_bytes() returns an error if any byte is not valid.
     //     (Guarantees that the byte is in range of the corresponding enum.)
-    //  4. The impl of validate_byte_slice() returns an error if there are extra bytes.
+    //  4. The impl of validate_bytes() returns an error if there are extra bytes.
     //     (This does not happen since we are backed by 1 byte.)
     //  5. The other ULE methods use the default impl.
     //  6. ULE type byte equality is semantic equality
@@ -179,10 +172,11 @@ fn make_ule_enum_impl(
 
         unsafe impl zerovec::ule::ULE for #ule_name {
             #[inline]
-            fn validate_byte_slice(bytes: &[u8]) -> Result<(), zerovec::ZeroVecError> {
+            fn validate_bytes(bytes: &[u8]) -> Result<(), zerovec::ule::UleError> {
                 for byte in bytes {
-                    if *byte >= #max {
-                        return Err(zerovec::ZeroVecError::parse::<Self>())
+                    match *byte {
+                        #( #match_arms )|* => {}
+                        _ => return Err(zerovec::ule::UleError::parse::<Self>())
                     }
                 }
                 Ok(())
@@ -193,17 +187,14 @@ fn make_ule_enum_impl(
             type ULE = #ule_name;
 
             fn to_unaligned(self) -> Self::ULE {
-                // safety: the enum is repr(u8) and can be cast to a u8
-                unsafe {
-                    ::core::mem::transmute(self)
-                }
+                #ule_name(self as u8)
             }
 
             fn from_unaligned(other: Self::ULE) -> Self {
                 // safety: the enum is repr(u8) and can be cast from a u8,
                 // and `#ule_name` guarantees a valid value for this enum.
                 unsafe {
-                    ::core::mem::transmute(other)
+                    ::core::mem::transmute::<u8, Self>(other.0)
                 }
             }
         }
@@ -212,10 +203,8 @@ fn make_ule_enum_impl(
             /// Attempt to construct the value from its corresponding integer,
             /// returning `None` if not possible
             pub(crate) fn new_from_u8(value: u8) -> Option<Self> {
-                if value <= #max {
-                    unsafe {
-                        Some(::core::mem::transmute(value))
-                    }
+                if <#ule_name as zerovec::ule::ULE>::validate_bytes(&[value]).is_ok() {
+                    Some(zerovec::ule::AsULE::from_unaligned(#ule_name(value)))
                 } else {
                     None
                 }
@@ -237,7 +226,7 @@ fn make_ule_struct_impl(
     ule_name: &Ident,
     input: &DeriveInput,
     struc: &DataStruct,
-    attrs: ZeroVecAttrs,
+    attrs: &ZeroVecAttrs,
 ) -> TokenStream2 {
     if struc.fields.iter().next().is_none() {
         return Error::new(
@@ -321,10 +310,10 @@ fn make_ule_struct_impl(
 
     let maybe_hash = if attrs.hash {
         quote!(
-            #[allow(clippy::derive_hash_xor_eq)]
+            #[expect(clippy::derive_hash_xor_eq)]
             impl core::hash::Hash for #ule_name {
                 fn hash<H>(&self, state: &mut H) where H: core::hash::Hasher {
-                    state.write(<#ule_name as zerovec::ule::ULE>::as_byte_slice(&[*self]));
+                    state.write(<#ule_name as zerovec::ule::ULE>::slice_as_bytes(&[*self]));
                 }
             }
         )

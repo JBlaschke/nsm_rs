@@ -1,5 +1,10 @@
 # cfg-if
 
+> [!WARNING]
+> This crate has been "replaced" by the [`cfg_select!`] macro, which is stable since Rust 1.95.0 with a slightly different syntax. Barring breakages and security fixes, this crate will no longer be updated.
+
+[`cfg_select!`]: https://doc.rust-lang.org/std/macro.cfg_select.html
+
 [Documentation](https://docs.rs/cfg-if)
 
 A macro to ergonomically define an item depending on a large number of #[cfg]
@@ -8,7 +13,7 @@ item that gets emitted.
 
 ```toml
 [dependencies]
-cfg-if = "0.1"
+cfg-if = "1.0"
 ```
 
 ## Example
@@ -28,15 +33,24 @@ fn main() {
     foo();
 }
 ```
+The `cfg_if!` block above is expanded to:
+```rust
+#[cfg(unix)]
+fn foo() { /* unix specific functionality */ }
+#[cfg(all(target_pointer_width = "32", not(unix)))]
+fn foo() { /* non-unix, 32-bit functionality */ }
+#[cfg(not(any(unix, target_pointer_width = "32")))]
+fn foo() { /* fallback implementation */ }
+```
 
 # License
 
 This project is licensed under either of
 
  * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
-   http://www.apache.org/licenses/LICENSE-2.0)
+   https://www.apache.org/licenses/LICENSE-2.0)
  * MIT license ([LICENSE-MIT](LICENSE-MIT) or
-   http://opensource.org/licenses/MIT)
+   https://opensource.org/licenses/MIT)
 
 at your option.
 

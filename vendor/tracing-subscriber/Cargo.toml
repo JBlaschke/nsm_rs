@@ -13,7 +13,7 @@
 edition = "2018"
 rust-version = "1.65.0"
 name = "tracing-subscriber"
-version = "0.3.20"
+version = "0.3.23"
 authors = [
     "Eliza Weisman <eliza@buoyant.io>",
     "David Barsky <me@davidbarsky.com>",
@@ -157,6 +157,10 @@ name = "multiple_layer_filter_interests_cached"
 path = "tests/multiple_layer_filter_interests_cached.rs"
 
 [[test]]
+name = "on_register_dispatch_is_called"
+path = "tests/on_register_dispatch_is_called.rs"
+
+[[test]]
 name = "option"
 path = "tests/option.rs"
 
@@ -167,6 +171,10 @@ path = "tests/option_filter_interest_caching.rs"
 [[test]]
 name = "registry_max_level_hint"
 path = "tests/registry_max_level_hint.rs"
+
+[[test]]
+name = "registry_span_instrument_drop"
+path = "tests/registry_span_instrument_drop.rs"
 
 [[test]]
 name = "registry_with_subscriber"
@@ -277,12 +285,12 @@ features = ["formatting"]
 optional = true
 
 [dependencies.tracing]
-version = "0.1.41"
+version = "0.1.43"
 optional = true
 default-features = false
 
 [dependencies.tracing-core]
-version = "0.1.33"
+version = "0.1.35"
 default-features = false
 
 [dependencies.tracing-log]
@@ -321,11 +329,12 @@ features = [
 version = "1"
 features = [
     "rt",
+    "rt-multi-thread",
     "macros",
 ]
 
 [dev-dependencies.tracing]
-version = "0.1.41"
+version = "0.1.43"
 
 [dev-dependencies.tracing-futures]
 version = "0.2.0"

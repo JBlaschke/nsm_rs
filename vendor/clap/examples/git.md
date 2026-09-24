@@ -85,12 +85,12 @@ git[EXE] stash push:
   -h, --help               Print help
 
 git[EXE] stash pop:
-  -h, --help   Print help
-  [STASH]  
+  -h, --help  Print help
+  [STASH]     
 
 git[EXE] stash apply:
-  -h, --help   Print help
-  [STASH]  
+  -h, --help  Print help
+  [STASH]     
 
 git[EXE] stash help:
 Print this message or the help of the given subcommand(s)
@@ -130,6 +130,19 @@ External subcommands:
 ```console
 $ git custom-tool arg1 --foo bar
 Calling out to "custom-tool" with ["arg1", "--foo", "bar"]
+
+```
+
+Configurable aliases:
+Aliases loaded from application configuration can expand into built-in commands
+and arguments. Built-in commands take precedence over configured aliases.
+
+```console
+$ git last ./src
+Diffing HEAD~..HEAD ./src (color=auto)
+
+$ git stage Cargo.toml Cargo.lock
+Adding ["Cargo.toml", "Cargo.lock"]
 
 ```
 

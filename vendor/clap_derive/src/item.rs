@@ -16,12 +16,12 @@ use std::env;
 
 use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{self, Span, TokenStream};
-use quote::{format_ident, quote, quote_spanned, ToTokens};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::DeriveInput;
-use syn::{self, ext::IdentExt, spanned::Spanned, Attribute, Field, Ident, LitStr, Type, Variant};
+use syn::{self, Attribute, Field, Ident, LitStr, Type, Variant, ext::IdentExt, spanned::Spanned};
 
 use crate::attr::{AttrKind, AttrValue, ClapAttr, MagicAttrName};
-use crate::utils::{extract_doc_comment, format_doc_comment, inner_type, is_simple_ty, Sp, Ty};
+use crate::utils::{Sp, Ty, extract_doc_comment, format_doc_comment, inner_type, is_simple_ty};
 
 /// Default casing style for generated arguments.
 pub(crate) const DEFAULT_CASING: CasingStyle = CasingStyle::Kebab;
@@ -50,6 +50,7 @@ pub(crate) struct Item {
     group_id: Name,
     group_methods: Vec<Method>,
     kind: Sp<Kind>,
+    defer: Option<Sp<bool>>,
 }
 
 impl Item {
@@ -65,6 +66,7 @@ impl Item {
         let parsed_attrs = ClapAttr::parse_all(attrs)?;
         res.infer_kind(&parsed_attrs)?;
         res.push_attrs(&parsed_attrs)?;
+        res.assert_no_defer()?;
         res.push_doc_comment(attrs, "about", Some("long_about"));
 
         Ok(res)
@@ -102,6 +104,7 @@ impl Item {
         let parsed_attrs = ClapAttr::parse_all(attrs)?;
         res.infer_kind(&parsed_attrs)?;
         res.push_attrs(&parsed_attrs)?;
+        res.assert_no_defer()?;
         // Ignoring `push_doc_comment` as there is no top-level clap builder to add documentation
         // to
 
@@ -144,6 +147,7 @@ impl Item {
         let parsed_attrs = ClapAttr::parse_all(&variant.attrs)?;
         res.infer_kind(&parsed_attrs)?;
         res.push_attrs(&parsed_attrs)?;
+        res.assert_no_defer()?;
         if matches!(&*res.kind, Kind::Command(_) | Kind::Subcommand(_)) {
             res.push_doc_comment(&variant.attrs, "about", Some("long_about"));
         }
@@ -189,6 +193,7 @@ impl Item {
         let parsed_attrs = ClapAttr::parse_all(&variant.attrs)?;
         res.infer_kind(&parsed_attrs)?;
         res.push_attrs(&parsed_attrs)?;
+        res.assert_no_defer()?;
         if matches!(&*res.kind, Kind::Value) {
             res.push_doc_comment(&variant.attrs, "help", None);
         }
@@ -217,6 +222,7 @@ impl Item {
         let parsed_attrs = ClapAttr::parse_all(&field.attrs)?;
         res.infer_kind(&parsed_attrs)?;
         res.push_attrs(&parsed_attrs)?;
+        res.assert_no_defer()?;
         if matches!(&*res.kind, Kind::Arg(_)) {
             res.push_doc_comment(&field.attrs, "help", Some("long_help"));
         }
@@ -279,6 +285,7 @@ impl Item {
             group_id,
             group_methods: vec![],
             kind,
+            defer: None,
         }
     }
 
@@ -435,7 +442,7 @@ impl Item {
                 _ if attr.kind != expected_attr_kind => {
                     abort!(
                         attr.kind.span(),
-                        "Expected `{}` attribute instead of `{}`",
+                        "expected `{}` attribute instead of `{}`",
                         expected_attr_kind.as_str(),
                         actual_attr_kind.as_str()
                     );
@@ -561,7 +568,7 @@ impl Item {
                             only on field level\n\n= note: {note}\n\n",
 
                             note = "see \
-                                https://github.com/clap-rs/clap/blob/master/examples/derive_ref/README.md#magic-attributes")
+                                https://docs.rs/clap/latest/clap/_derive/index.html#arg-attributes")
                     };
 
                     let val = if let Some(expr) = &attr.value {
@@ -611,7 +618,7 @@ impl Item {
                             only on field level\n\n= note: {note}\n\n",
 
                             note = "see \
-                                https://github.com/clap-rs/clap/blob/master/examples/derive_ref/README.md#magic-attributes")
+                                https://docs.rs/clap/latest/clap/_derive/index.html#arg-attributes")
                     };
                     let expr = attr.value_or_abort()?;
 
@@ -622,7 +629,7 @@ impl Item {
                             "#[arg(default_values_t)] can be used only on Vec types\n\n= note: {note}\n\n",
 
                             note = "see \
-                                https://github.com/clap-rs/clap/blob/master/examples/derive_ref/README.md#magic-attributes")
+                                https://docs.rs/clap/latest/clap/_derive/index.html#arg-attributes")
                     }
                     let inner_type = inner_type(ty);
 
@@ -689,7 +696,7 @@ impl Item {
                             only on field level\n\n= note: {note}\n\n",
 
                             note = "see \
-                                https://github.com/clap-rs/clap/blob/master/examples/derive_ref/README.md#magic-attributes")
+                                https://docs.rs/clap/latest/clap/_derive/index.html#arg-attributes")
                     };
 
                     let val = if let Some(expr) = &attr.value {
@@ -739,7 +746,7 @@ impl Item {
                             only on field level\n\n= note: {note}\n\n",
 
                             note = "see \
-                                https://github.com/clap-rs/clap/blob/master/examples/derive_ref/README.md#magic-attributes")
+                                https://docs.rs/clap/latest/clap/_derive/index.html#arg-attributes")
                     };
                     let expr = attr.value_or_abort()?;
 
@@ -750,7 +757,7 @@ impl Item {
                             "#[arg(default_values_os_t)] can be used only on Vec types\n\n= note: {note}\n\n",
 
                             note = "see \
-                                https://github.com/clap-rs/clap/blob/master/examples/derive_ref/README.md#magic-attributes")
+                                https://docs.rs/clap/latest/clap/_derive/index.html#arg-attributes")
                     }
                     let inner_type = inner_type(ty);
 
@@ -835,6 +842,11 @@ impl Item {
                     self.skip_group = true;
                 }
 
+                Some(MagicAttrName::Defer) => {
+                    assert_attr_kind(attr, &[AttrKind::Command])?;
+                    self.defer = Some(Sp::new(attr.lit_bool_or_abort()?, attr.name.span()));
+                }
+
                 None
                 // Magic only for the default, otherwise just forward to the builder
                 | Some(MagicAttrName::Short)
@@ -901,13 +913,26 @@ impl Item {
             let (short_help, long_help) =
                 format_doc_comment(&lines, !self.verbatim_doc_comment, self.force_long_help);
             let short_name = format_ident!("{short_name}");
-            let short = Method::new(
-                short_name,
-                short_help
-                    .map(|h| quote!(#h))
-                    .unwrap_or_else(|| quote!(None)),
-            );
-            self.doc_comment.push(short);
+
+            let is_value_kind = matches!(self.kind.get(), Kind::Value);
+            let short_method = if is_value_kind && cfg!(feature = "unstable-v5") {
+                Method::new(
+                    short_name,
+                    long_help
+                        .clone()
+                        .or(short_help)
+                        .map(|h| quote!(#h))
+                        .unwrap_or_else(|| quote!(None)),
+                )
+            } else {
+                Method::new(
+                    short_name,
+                    short_help
+                        .map(|h| quote!(#h))
+                        .unwrap_or_else(|| quote!(None)),
+                )
+            };
+            self.doc_comment.push(short_method);
             if let Some(long_name) = long_name {
                 let long_name = format_ident!("{long_name}");
                 let long = Method::new(
@@ -1077,6 +1102,23 @@ impl Item {
     pub(crate) fn skip_group(&self) -> bool {
         self.skip_group
     }
+
+    pub(crate) fn defer(&self) -> bool {
+        self.defer
+            .as_ref()
+            .map(|defer| **defer)
+            .unwrap_or(cfg!(feature = "unstable-v5"))
+    }
+
+    fn assert_no_defer(&self) -> Result<(), syn::Error> {
+        if let Some(defer) = &self.defer {
+            abort!(
+                defer.span(),
+                "`defer` is only supported on `Parser` and `Subcommand` enums"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -1223,7 +1265,7 @@ pub(crate) struct Method {
 
 impl Method {
     pub(crate) fn new(name: Ident, args: TokenStream) -> Self {
-        Method { name, args }
+        Self { name, args }
     }
 
     fn from_env(ident: Ident, env_var: &str) -> Result<Option<Self>, syn::Error> {
@@ -1250,7 +1292,14 @@ impl Method {
             lit = LitStr::new(&edited, lit.span());
         }
 
-        Ok(Some(Method::new(ident, quote!(#lit))))
+        let env_var_lit = LitStr::new(env_var, ident.span());
+        Ok(Some(Self::new(
+            ident,
+            quote!({
+                let _ = ::core::env!(#env_var_lit);
+                #lit
+            }),
+        )))
     }
 
     pub(crate) fn args(&self) -> &TokenStream {
@@ -1260,7 +1309,7 @@ impl Method {
 
 impl ToTokens for Method {
     fn to_tokens(&self, ts: &mut TokenStream) {
-        let Method { ref name, ref args } = self;
+        let Self { name, args } = self;
 
         let tokens = quote!( .#name(#args) );
 
@@ -1294,7 +1343,7 @@ impl Deprecation {
 impl ToTokens for Deprecation {
     fn to_tokens(&self, ts: &mut TokenStream) {
         let tokens = if cfg!(feature = "deprecated") {
-            let Deprecation {
+            let Self {
                 span,
                 id,
                 version,
@@ -1326,7 +1375,7 @@ fn assert_attr_kind(attr: &ClapAttr, possible_kind: &[AttrKind]) -> Result<(), s
             .collect::<Vec<_>>();
         abort!(
             attr.name,
-            "Unknown `#[{}({})]` attribute ({} exists)",
+            "unknown `#[{}({})]` attribute ({} exists)",
             attr.kind.as_str(),
             attr.name,
             options.join(", ")
@@ -1341,7 +1390,7 @@ fn assert_attr_kind(attr: &ClapAttr, possible_kind: &[AttrKind]) -> Result<(), s
 /// `"author1 <http://website1.com>:author2" => "author1 <http://website1.com>, author2"`
 fn process_author_str(author: &str) -> String {
     let mut res = String::with_capacity(author.len());
-    let mut inside_angle_braces = 0usize;
+    let mut inside_angle_braces = 0_usize;
 
     for ch in author.chars() {
         if inside_angle_braces > 0 && ch == '>' {
@@ -1416,8 +1465,8 @@ impl Name {
         use CasingStyle::{Camel, Kebab, Lower, Pascal, ScreamingSnake, Snake, Upper, Verbatim};
 
         match self {
-            Name::Assigned(tokens) => tokens,
-            Name::Derived(ident) => {
+            Self::Assigned(tokens) => tokens,
+            Self::Derived(ident) => {
                 let s = ident.unraw().to_string();
                 let s = match style {
                     Pascal => s.to_upper_camel_case(),
@@ -1438,8 +1487,8 @@ impl Name {
         use CasingStyle::{Camel, Kebab, Lower, Pascal, ScreamingSnake, Snake, Upper, Verbatim};
 
         match self {
-            Name::Assigned(tokens) => quote!( (#tokens).chars().next().unwrap() ),
-            Name::Derived(ident) => {
+            Self::Assigned(tokens) => quote!( (#tokens).chars().next().unwrap() ),
+            Self::Derived(ident) => {
                 let s = ident.unraw().to_string();
                 let s = match style {
                     Pascal => s.to_upper_camel_case(),
@@ -1462,8 +1511,8 @@ impl Name {
 impl ToTokens for Name {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
-            Name::Assigned(t) => t.to_tokens(tokens),
-            Name::Derived(ident) => {
+            Self::Assigned(t) => t.to_tokens(tokens),
+            Self::Derived(ident) => {
                 let s = ident.unraw().to_string();
                 quote_spanned!(ident.span()=> #s).to_tokens(tokens);
             }

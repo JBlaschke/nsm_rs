@@ -740,7 +740,7 @@ impl AddressFamily {
     #[cfg(target_os = "freebsd")]
     pub const SLOW: Self = Self(c::AF_SLOW as _);
     /// `AF_SYS_CONTROL`
-    #[cfg(apple)]
+    #[cfg(target_os = "macos")]
     pub const SYS_CONTROL: Self = Self(c::AF_SYS_CONTROL as _);
     /// `AF_SYSTEM`
     #[cfg(apple)]
@@ -752,7 +752,7 @@ impl AddressFamily {
     #[cfg(apple)]
     pub const UTUN: Self = Self(c::AF_UTUN as _);
     /// `AF_VSOCK`
-    #[cfg(any(apple, target_os = "emscripten", target_os = "fuchsia"))]
+    #[cfg(any(apple, linux_kernel, target_os = "emscripten", target_os = "fuchsia"))]
     pub const VSOCK: Self = Self(c::AF_VSOCK as _);
     /// `AF_XDP`
     #[cfg(target_os = "linux")]
@@ -1116,6 +1116,7 @@ pub mod ipproto {
 }
 
 /// `SYSPROTO_*` constants.
+#[cfg(target_os = "macos")]
 pub mod sysproto {
     #[cfg(apple)]
     use {
@@ -1124,11 +1125,9 @@ pub mod sysproto {
     };
 
     /// `SYSPROTO_EVENT`
-    #[cfg(apple)]
     pub const EVENT: Protocol = Protocol(new_raw_protocol(c::SYSPROTO_EVENT as _));
 
     /// `SYSPROTO_CONTROL`
-    #[cfg(apple)]
     pub const CONTROL: Protocol = Protocol(new_raw_protocol(c::SYSPROTO_CONTROL as _));
 }
 
@@ -1321,10 +1320,10 @@ pub mod eth {
     #[cfg(linux_kernel)]
     pub const PUPAT: Protocol = Protocol(new_raw_protocol((c::ETH_P_PUPAT as u16).to_be() as u32));
     /// `ETH_P_TSN`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const TSN: Protocol = Protocol(new_raw_protocol((c::ETH_P_TSN as u16).to_be() as u32));
     /// `ETH_P_ERSPAN2`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const ERSPAN2: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_ERSPAN2 as u16).to_be() as u32));
     /// `ETH_P_IP`
@@ -1395,7 +1394,7 @@ pub mod eth {
     pub const P_8021Q: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_8021Q as u16).to_be() as u32));
     /// `ETH_P_ERSPAN`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const ERSPAN: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_ERSPAN as u16).to_be() as u32));
     /// `ETH_P_IPX`
@@ -1445,18 +1444,18 @@ pub mod eth {
     #[cfg(linux_kernel)]
     pub const PAE: Protocol = Protocol(new_raw_protocol((c::ETH_P_PAE as u16).to_be() as u32));
     /// `ETH_P_PROFINET`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const PROFINET: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_PROFINET as u16).to_be() as u32));
     /// `ETH_P_REALTEK`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const REALTEK: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_REALTEK as u16).to_be() as u32));
     /// `ETH_P_AOE`
     #[cfg(linux_kernel)]
     pub const AOE: Protocol = Protocol(new_raw_protocol((c::ETH_P_AOE as u16).to_be() as u32));
     /// `ETH_P_ETHERCAT`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const ETHERCAT: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_ETHERCAT as u16).to_be() as u32));
     /// `ETH_P_8021AD`
@@ -1468,17 +1467,17 @@ pub mod eth {
     pub const P_802_EX1: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_802_EX1 as u16).to_be() as u32));
     /// `ETH_P_PREAUTH`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const PREAUTH: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_PREAUTH as u16).to_be() as u32));
     /// `ETH_P_TIPC`
     #[cfg(linux_kernel)]
     pub const TIPC: Protocol = Protocol(new_raw_protocol((c::ETH_P_TIPC as u16).to_be() as u32));
     /// `ETH_P_LLDP`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const LLDP: Protocol = Protocol(new_raw_protocol((c::ETH_P_LLDP as u16).to_be() as u32));
     /// `ETH_P_MRP`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const MRP: Protocol = Protocol(new_raw_protocol((c::ETH_P_MRP as u16).to_be() as u32));
     /// `ETH_P_MACSEC`
     #[cfg(linux_kernel)]
@@ -1495,19 +1494,19 @@ pub mod eth {
     #[cfg(linux_kernel)]
     pub const P_1588: Protocol = Protocol(new_raw_protocol((c::ETH_P_1588 as u16).to_be() as u32));
     /// `ETH_P_NCSI`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const NCSI: Protocol = Protocol(new_raw_protocol((c::ETH_P_NCSI as u16).to_be() as u32));
     /// `ETH_P_PRP`
     #[cfg(linux_kernel)]
     pub const PRP: Protocol = Protocol(new_raw_protocol((c::ETH_P_PRP as u16).to_be() as u32));
     /// `ETH_P_CFM`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const CFM: Protocol = Protocol(new_raw_protocol((c::ETH_P_CFM as u16).to_be() as u32));
     /// `ETH_P_FCOE`
     #[cfg(linux_kernel)]
     pub const FCOE: Protocol = Protocol(new_raw_protocol((c::ETH_P_FCOE as u16).to_be() as u32));
     /// `ETH_P_IBOE`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const IBOE: Protocol = Protocol(new_raw_protocol((c::ETH_P_IBOE as u16).to_be() as u32));
     /// `ETH_P_TDLS`
     #[cfg(linux_kernel)]
@@ -1520,10 +1519,10 @@ pub mod eth {
     pub const P_80221: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_80221 as u16).to_be() as u32));
     /// `ETH_P_HSR`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const HSR: Protocol = Protocol(new_raw_protocol((c::ETH_P_HSR as u16).to_be() as u32));
     /// `ETH_P_NSH`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const NSH: Protocol = Protocol(new_raw_protocol((c::ETH_P_NSH as u16).to_be() as u32));
     /// `ETH_P_LOOPBACK`
     #[cfg(linux_kernel)]
@@ -1542,15 +1541,15 @@ pub mod eth {
     #[cfg(linux_kernel)]
     pub const EDSA: Protocol = Protocol(new_raw_protocol((c::ETH_P_EDSA as u16).to_be() as u32));
     /// `ETH_P_DSA_8021Q`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const DSA_8021Q: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_DSA_8021Q as u16).to_be() as u32));
     /// `ETH_P_DSA_A5PSW`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const DSA_A5PSW: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_DSA_A5PSW as u16).to_be() as u32));
     /// `ETH_P_IFE`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const IFE: Protocol = Protocol(new_raw_protocol((c::ETH_P_IFE as u16).to_be() as u32));
     /// `ETH_P_AF_IUCV`
     #[cfg(linux_kernel)]
@@ -1568,7 +1567,7 @@ pub mod eth {
     #[cfg(linux_kernel)]
     pub const AX25: Protocol = Protocol(new_raw_protocol((c::ETH_P_AX25 as u16).to_be() as u32));
     /// `ETH_P_ALL`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const ALL: Protocol = Protocol(new_raw_protocol((c::ETH_P_ALL as u16).to_be() as u32));
     /// `ETH_P_802_2`
     #[cfg(linux_kernel)]
@@ -1593,13 +1592,13 @@ pub mod eth {
     pub const LOCALTALK: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_LOCALTALK as u16).to_be() as u32));
     /// `ETH_P_CAN`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const CAN: Protocol = Protocol(new_raw_protocol((c::ETH_P_CAN as u16).to_be() as u32));
     /// `ETH_P_CANFD`
     #[cfg(linux_kernel)]
     pub const CANFD: Protocol = Protocol(new_raw_protocol((c::ETH_P_CANFD as u16).to_be() as u32));
     /// `ETH_P_CANXL`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const CANXL: Protocol = Protocol(new_raw_protocol((c::ETH_P_CANXL as u16).to_be() as u32));
     /// `ETH_P_PPPTALK`
     #[cfg(linux_kernel)]
@@ -1632,7 +1631,7 @@ pub mod eth {
     pub const ARCNET: Protocol =
         Protocol(new_raw_protocol((c::ETH_P_ARCNET as u16).to_be() as u32));
     /// `ETH_P_DSA`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const DSA: Protocol = Protocol(new_raw_protocol((c::ETH_P_DSA as u16).to_be() as u32));
     /// `ETH_P_TRAILER`
     #[cfg(linux_kernel)]
@@ -1650,13 +1649,13 @@ pub mod eth {
     #[cfg(linux_kernel)]
     pub const CAIF: Protocol = Protocol(new_raw_protocol((c::ETH_P_CAIF as u16).to_be() as u32));
     /// `ETH_P_XDSA`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const XDSA: Protocol = Protocol(new_raw_protocol((c::ETH_P_XDSA as u16).to_be() as u32));
     /// `ETH_P_MAP`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const MAP: Protocol = Protocol(new_raw_protocol((c::ETH_P_MAP as u16).to_be() as u32));
     /// `ETH_P_MCTP`
-    #[cfg(linux_kernel)]
+    #[cfg(linux_raw_dep)]
     pub const MCTP: Protocol = Protocol(new_raw_protocol((c::ETH_P_MCTP as u16).to_be() as u32));
 }
 
@@ -1719,6 +1718,21 @@ bitflags! {
         // This deliberately lacks a `const _ = !0`, so that users can use
         // `from_bits_truncate` to extract the `SocketFlags` from a flags
         // value that also includes a `SocketType`.
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "time"))]
+bitflags! {
+    /// Flags for use with [`set_txtime`].
+    ///
+    /// [`set_txtime`]: crate::net::sockopt::set_txtime
+    #[repr(transparent)]
+    #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+    pub struct TxTimeFlags: u32 {
+        /// `SOF_TXTIME_DEADLINE_MODE`
+        const DEADLINE_MODE = bitcast!(c::SOF_TXTIME_DEADLINE_MODE);
+        /// `SOF_TXTIME_REPORT_ERRORS`
+        const REPORT_ERRORS = bitcast!(c::SOF_TXTIME_REPORT_ERRORS);
     }
 }
 
@@ -2099,14 +2113,14 @@ mod tests {
 
         // Backend code needs to cast these to `c_int` so make sure that cast isn't
         // lossy.
-        assert_eq_size!(RawProtocol, c_int);
-        assert_eq_size!(Protocol, c_int);
-        assert_eq_size!(Option<RawProtocol>, c_int);
-        assert_eq_size!(Option<Protocol>, c_int);
-        assert_eq_size!(RawSocketType, c_int);
-        assert_eq_size!(SocketType, c_int);
-        assert_eq_size!(SocketFlags, c_int);
-        assert_eq_size!(SocketAddrStorage, c::sockaddr_storage);
+        static_assertions::assert_eq_size!(RawProtocol, c_int);
+        static_assertions::assert_eq_size!(Protocol, c_int);
+        static_assertions::assert_eq_size!(Option<RawProtocol>, c_int);
+        static_assertions::assert_eq_size!(Option<Protocol>, c_int);
+        static_assertions::assert_eq_size!(RawSocketType, c_int);
+        static_assertions::assert_eq_size!(SocketType, c_int);
+        static_assertions::assert_eq_size!(SocketFlags, c_int);
+        static_assertions::assert_eq_size!(SocketAddrStorage, c::sockaddr_storage);
 
         // Rustix doesn't depend on `Option<Protocol>` matching the ABI of a raw
         // integer for correctness, but it should work nonetheless.
@@ -2120,13 +2134,13 @@ mod tests {
         }
 
         #[cfg(linux_kernel)]
-        assert_eq_size!(UCred, libc::ucred);
+        static_assertions::assert_eq_size!(UCred, libc::ucred);
 
         #[cfg(target_os = "linux")]
-        assert_eq_size!(super::xdp::XdpUmemReg, c::xdp_umem_reg);
+        static_assertions::assert_eq_size!(super::xdp::XdpUmemReg, c::xdp_umem_reg);
         #[cfg(target_os = "linux")]
-        assert_eq_size!(super::xdp::XdpOptions, c::xdp_options);
+        static_assertions::assert_eq_size!(super::xdp::XdpOptions, c::xdp_options);
         #[cfg(target_os = "linux")]
-        assert_eq_size!(super::xdp::XdpDesc, c::xdp_desc);
+        static_assertions::assert_eq_size!(super::xdp::XdpDesc, c::xdp_desc);
     }
 }

@@ -192,7 +192,6 @@
 // permissive licensing, and of not having licensing issues being an
 // obstacle to adoption, that text has been removed.
 
-
 use std::fmt;
 
 /// A date/time type which exists primarily to convert `SystemTime` timestamps into an ISO 8601
@@ -333,7 +332,10 @@ impl From<std::time::SystemTime> for DateTime {
 #[cfg(test)]
 mod tests {
     use i32;
-    use std::time::{Duration, UNIX_EPOCH};
+    use std::{
+        format,
+        time::{Duration, UNIX_EPOCH},
+    };
 
     use super::*;
 
@@ -399,12 +401,18 @@ mod tests {
 
         case("1900-01-01T00:00:00.000000Z", -2208988800, 0);
         case("1899-12-31T23:59:59.000000Z", -2208988801, 0);
-        case("0000-01-01T00:00:00.000000Z", -62167219200, 0);
-        case("-0001-12-31T23:59:59.000000Z", -62167219201, 0);
-
-        case("1234-05-06T07:08:09.000000Z", -23215049511, 0);
-        case("-1234-05-06T07:08:09.000000Z", -101097651111, 0);
         case("2345-06-07T08:09:01.000000Z", 11847456541, 0);
-        case("-2345-06-07T08:09:01.000000Z", -136154620259, 0);
+
+        // Skipping pre-1601 dates on Windows: as of Rust 1.94, SystemTime
+        // subtraction panics when the result would be before the Windows
+        // FILETIME epoch (1601-01-01). See Rust 1.94.0 compatibility notes.
+        #[cfg(not(target_os = "windows"))]
+        {
+            case("1234-05-06T07:08:09.000000Z", -23215049511, 0);
+            case("0000-01-01T00:00:00.000000Z", -62167219200, 0);
+            case("-0001-12-31T23:59:59.000000Z", -62167219201, 0);
+            case("-1234-05-06T07:08:09.000000Z", -101097651111, 0);
+            case("-2345-06-07T08:09:01.000000Z", -136154620259, 0);
+        }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "colorchoice"
-version = "1.0.3"
+version = "1.0.5"
 description = "Global override of color control"
 categories = ["command-line-interface"]
 keywords = ["cli", "color", "no-std", "terminal", "ansi"]
@@ -12,7 +12,7 @@ include.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
 
 [package.metadata.release]
 pre-release-replacements = [

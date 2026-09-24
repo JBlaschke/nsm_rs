@@ -29,19 +29,19 @@ const DATA: [(&str, &str); 16] = [
     ("zh", "Chinese"),
 ];
 
-const POSTCARD: [u8; 282] = [
-    102, 16, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4, 0, 0, 0, 7, 0, 0, 0, 10, 0, 0, 0, 12, 0, 0, 0, 14,
-    0, 0, 0, 16, 0, 0, 0, 18, 0, 0, 0, 20, 0, 0, 0, 22, 0, 0, 0, 24, 0, 0, 0, 26, 0, 0, 0, 28, 0,
-    0, 0, 30, 0, 0, 0, 32, 0, 0, 0, 97, 114, 98, 110, 99, 99, 112, 99, 104, 114, 101, 108, 101,
-    110, 101, 111, 101, 115, 102, 114, 105, 117, 106, 97, 114, 117, 115, 114, 116, 104, 116, 114,
-    122, 104, 177, 1, 16, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 12, 0, 0, 0, 18, 0, 0, 0, 26, 0, 0, 0,
-    31, 0, 0, 0, 38, 0, 0, 0, 47, 0, 0, 0, 54, 0, 0, 0, 60, 0, 0, 0, 69, 0, 0, 0, 77, 0, 0, 0, 84,
-    0, 0, 0, 91, 0, 0, 0, 95, 0, 0, 0, 102, 0, 0, 0, 65, 114, 97, 98, 105, 99, 66, 97, 110, 103,
-    108, 97, 67, 104, 97, 107, 109, 97, 67, 104, 101, 114, 111, 107, 101, 101, 71, 114, 101, 101,
-    107, 69, 110, 103, 108, 105, 115, 104, 69, 115, 112, 101, 114, 97, 110, 116, 111, 83, 112, 97,
-    110, 105, 115, 104, 70, 114, 101, 110, 99, 104, 73, 110, 117, 107, 116, 105, 116, 117, 116, 74,
-    97, 112, 97, 110, 101, 115, 101, 82, 117, 115, 115, 105, 97, 110, 83, 101, 114, 98, 105, 97,
-    110, 84, 104, 97, 105, 84, 117, 114, 107, 105, 115, 104, 67, 104, 105, 110, 101, 115, 101,
+const POSTCARD: [u8; 274] = [
+    98, 16, 0, 0, 0, 2, 0, 0, 0, 4, 0, 0, 0, 7, 0, 0, 0, 10, 0, 0, 0, 12, 0, 0, 0, 14, 0, 0, 0, 16,
+    0, 0, 0, 18, 0, 0, 0, 20, 0, 0, 0, 22, 0, 0, 0, 24, 0, 0, 0, 26, 0, 0, 0, 28, 0, 0, 0, 30, 0,
+    0, 0, 32, 0, 0, 0, 97, 114, 98, 110, 99, 99, 112, 99, 104, 114, 101, 108, 101, 110, 101, 111,
+    101, 115, 102, 114, 105, 117, 106, 97, 114, 117, 115, 114, 116, 104, 116, 114, 122, 104, 173,
+    1, 16, 0, 0, 0, 6, 0, 0, 0, 12, 0, 0, 0, 18, 0, 0, 0, 26, 0, 0, 0, 31, 0, 0, 0, 38, 0, 0, 0,
+    47, 0, 0, 0, 54, 0, 0, 0, 60, 0, 0, 0, 69, 0, 0, 0, 77, 0, 0, 0, 84, 0, 0, 0, 91, 0, 0, 0, 95,
+    0, 0, 0, 102, 0, 0, 0, 65, 114, 97, 98, 105, 99, 66, 97, 110, 103, 108, 97, 67, 104, 97, 107,
+    109, 97, 67, 104, 101, 114, 111, 107, 101, 101, 71, 114, 101, 101, 107, 69, 110, 103, 108, 105,
+    115, 104, 69, 115, 112, 101, 114, 97, 110, 116, 111, 83, 112, 97, 110, 105, 115, 104, 70, 114,
+    101, 110, 99, 104, 73, 110, 117, 107, 116, 105, 116, 117, 116, 74, 97, 112, 97, 110, 101, 115,
+    101, 82, 117, 115, 115, 105, 97, 110, 83, 101, 114, 98, 105, 97, 110, 84, 104, 97, 105, 84,
+    117, 114, 107, 105, 115, 104, 67, 104, 105, 110, 101, 115, 101,
 ];
 
 const POSTCARD_HASHMAP: [u8; 176] = [
@@ -56,23 +56,23 @@ const POSTCARD_HASHMAP: [u8; 176] = [
     114, 97, 98, 105, 99,
 ];
 
-const POSTCARD_ZEROHASHMAP: [u8; 412] = [
+const POSTCARD_ZEROHASHMAP: [u8; 404] = [
     128, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
     0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1,
-    0, 0, 0, 102, 16, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0, 10, 0,
-    0, 0, 13, 0, 0, 0, 15, 0, 0, 0, 17, 0, 0, 0, 19, 0, 0, 0, 21, 0, 0, 0, 24, 0, 0, 0, 26, 0, 0,
-    0, 28, 0, 0, 0, 30, 0, 0, 0, 32, 0, 0, 0, 115, 114, 101, 111, 116, 114, 97, 114, 105, 117, 99,
-    99, 112, 102, 114, 101, 115, 106, 97, 122, 104, 99, 104, 114, 98, 110, 101, 110, 101, 108, 114,
-    117, 116, 104, 177, 1, 16, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 16, 0, 0, 0, 23, 0, 0, 0, 29, 0, 0,
-    0, 38, 0, 0, 0, 44, 0, 0, 0, 50, 0, 0, 0, 57, 0, 0, 0, 65, 0, 0, 0, 72, 0, 0, 0, 80, 0, 0, 0,
-    86, 0, 0, 0, 93, 0, 0, 0, 98, 0, 0, 0, 105, 0, 0, 0, 83, 101, 114, 98, 105, 97, 110, 69, 115,
-    112, 101, 114, 97, 110, 116, 111, 84, 117, 114, 107, 105, 115, 104, 65, 114, 97, 98, 105, 99,
-    73, 110, 117, 107, 116, 105, 116, 117, 116, 67, 104, 97, 107, 109, 97, 70, 114, 101, 110, 99,
-    104, 83, 112, 97, 110, 105, 115, 104, 74, 97, 112, 97, 110, 101, 115, 101, 67, 104, 105, 110,
-    101, 115, 101, 67, 104, 101, 114, 111, 107, 101, 101, 66, 97, 110, 103, 108, 97, 69, 110, 103,
-    108, 105, 115, 104, 71, 114, 101, 101, 107, 82, 117, 115, 115, 105, 97, 110, 84, 104, 97, 105,
+    0, 0, 0, 98, 16, 0, 0, 0, 2, 0, 0, 0, 4, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0, 10, 0, 0, 0, 13, 0,
+    0, 0, 15, 0, 0, 0, 17, 0, 0, 0, 19, 0, 0, 0, 21, 0, 0, 0, 24, 0, 0, 0, 26, 0, 0, 0, 28, 0, 0,
+    0, 30, 0, 0, 0, 32, 0, 0, 0, 115, 114, 101, 111, 116, 114, 97, 114, 105, 117, 99, 99, 112, 102,
+    114, 101, 115, 106, 97, 122, 104, 99, 104, 114, 98, 110, 101, 110, 101, 108, 114, 117, 116,
+    104, 173, 1, 16, 0, 0, 0, 7, 0, 0, 0, 16, 0, 0, 0, 23, 0, 0, 0, 29, 0, 0, 0, 38, 0, 0, 0, 44,
+    0, 0, 0, 50, 0, 0, 0, 57, 0, 0, 0, 65, 0, 0, 0, 72, 0, 0, 0, 80, 0, 0, 0, 86, 0, 0, 0, 93, 0,
+    0, 0, 98, 0, 0, 0, 105, 0, 0, 0, 83, 101, 114, 98, 105, 97, 110, 69, 115, 112, 101, 114, 97,
+    110, 116, 111, 84, 117, 114, 107, 105, 115, 104, 65, 114, 97, 98, 105, 99, 73, 110, 117, 107,
+    116, 105, 116, 117, 116, 67, 104, 97, 107, 109, 97, 70, 114, 101, 110, 99, 104, 83, 112, 97,
+    110, 105, 115, 104, 74, 97, 112, 97, 110, 101, 115, 101, 67, 104, 105, 110, 101, 115, 101, 67,
+    104, 101, 114, 111, 107, 101, 101, 66, 97, 110, 103, 108, 97, 69, 110, 103, 108, 105, 115, 104,
+    71, 114, 101, 101, 107, 82, 117, 115, 115, 105, 97, 110, 84, 104, 97, 105,
 ];
 
 /// Run this function to print new data to the console.
@@ -113,10 +113,8 @@ fn bench_zeromap(c: &mut Criterion) {
     // generate_hashmap();
 
     bench_deserialize(c);
-    #[cfg(feature = "bench")]
     bench_deserialize_large(c);
     bench_lookup(c);
-    #[cfg(feature = "bench")]
     bench_lookup_large(c);
 }
 
@@ -154,7 +152,6 @@ fn bench_deserialize(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "bench")]
 fn bench_deserialize_large(c: &mut Criterion) {
     let buf = large_zeromap_postcard_bytes();
     c.bench_function("zeromap/deserialize/large", |b| {
@@ -179,7 +176,6 @@ fn bench_lookup(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "bench")]
 fn bench_lookup_large(c: &mut Criterion) {
     let buf = large_zeromap_postcard_bytes();
     let map: ZeroMap<Index32Str, Index32Str> = postcard::from_bytes(&buf).unwrap();
@@ -194,7 +190,6 @@ fn bench_lookup_large(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "bench")]
 fn large_zeromap_postcard_bytes() -> Vec<u8> {
     postcard::to_stdvec(&build_zeromap(true)).unwrap()
 }
@@ -204,10 +199,8 @@ fn bench_hashmap(c: &mut Criterion) {
     // generate_hashmap();
 
     bench_deserialize_hashmap(c);
-    #[cfg(feature = "bench")]
     bench_deserialize_large_hashmap(c);
     bench_lookup_hashmap(c);
-    #[cfg(feature = "bench")]
     bench_lookup_large_hashmap(c);
 }
 
@@ -235,7 +228,6 @@ fn bench_deserialize_hashmap(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "bench")]
 fn bench_deserialize_large_hashmap(c: &mut Criterion) {
     let buf = large_hashmap_postcard_bytes();
     c.bench_function("zeromap/deserialize/large/hashmap", |b| {
@@ -256,7 +248,6 @@ fn bench_lookup_hashmap(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "bench")]
 fn bench_lookup_large_hashmap(c: &mut Criterion) {
     let buf = large_hashmap_postcard_bytes();
     let map: HashMap<String, String> = postcard::from_bytes(&buf).unwrap();
@@ -268,7 +259,6 @@ fn bench_lookup_large_hashmap(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "bench")]
 fn large_hashmap_postcard_bytes() -> Vec<u8> {
     postcard::to_stdvec(&build_hashmap(true)).unwrap()
 }
@@ -278,10 +268,8 @@ fn bench_zerohashmap(c: &mut Criterion) {
     // generate_zerohashmap();
 
     bench_deserialize_zerohashmap(c);
-    #[cfg(feature = "bench")]
     bench_deserialize_large_zerohashmap(c);
     bench_zerohashmap_lookup(c);
-    #[cfg(feature = "bench")]
     bench_zerohashmap_lookup_large(c);
 }
 
@@ -340,7 +328,6 @@ fn bench_zerohashmap_lookup(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "bench")]
 fn bench_zerohashmap_lookup_large(c: &mut Criterion) {
     let buf = large_zerohashmap_postcard_bytes();
     let zero_hashmap: ZeroHashMap<Index32Str, Index32Str> = postcard::from_bytes(&buf).unwrap();
@@ -359,7 +346,6 @@ fn bench_zerohashmap_lookup_large(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "bench")]
 fn large_zerohashmap_postcard_bytes() -> Vec<u8> {
     postcard::to_stdvec(&build_zerohashmap(true)).unwrap()
 }
@@ -367,15 +353,15 @@ fn large_zerohashmap_postcard_bytes() -> Vec<u8> {
 criterion_group!(benches, overview_bench);
 criterion_main!(benches);
 
-/// This type lets us use a u32-index-format VarZeroVec with the ZeroMap.
+/// This type lets us use a u32-index-format `VarZeroVec` with the `ZeroMap`.
 ///
-/// Eventually we will have a FormatSelector type that lets us do `ZeroMap<FormatSelector<K, Index32>, V>`
-/// (https://github.com/unicode-org/icu4x/issues/2312)
+/// Eventually we will have a `FormatSelector` type that lets us do `ZeroMap<FormatSelector<K, Index32>, V>`
+/// (<https://github.com/unicode-org/icu4x/issues/2312>)
 ///
-/// ,  isn't actually important; it's just more convenient to use make_varule to get the
+/// ,  isn't actually important; it's just more convenient to use `make_varule` to get the
 /// full suite of traits instead of `#[derive(VarULE)]`. (With `#[derive(VarULE)]` we would have to manually
 /// define a Serialize implementation, and that would be gnarly)
-/// https://github.com/unicode-org/icu4x/issues/2310 tracks being able to do this with derive(ULE)
+/// <https://github.com/unicode-org/icu4x/issues/2310> tracks being able to do this with derive(ULE)
 #[zerovec::make_varule(Index32Str)]
 #[zerovec::skip_derive(ZeroMapKV)]
 #[derive(Eq, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize)]
