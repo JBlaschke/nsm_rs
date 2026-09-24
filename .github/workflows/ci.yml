@@ -37,6 +37,22 @@ jobs:
       - run: cargo test --locked --all-targets --no-default-features --features ${{ matrix.provider }}
       - run: cargo test --locked --doc --no-default-features --features ${{ matrix.provider }}
 
+  msrv:
+    name: build and test on the minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - run: cargo build --locked --all-targets
+      - run: cargo test --locked
+
   stress:
     name: stress test (50 services, 50 clients)
     runs-on: ubuntu-latest

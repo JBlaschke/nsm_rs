@@ -17,11 +17,8 @@ all-features = true
 
 [advisories]
 version = 2
-yanked = "warn"
-ignore = [
-    { id = "RUSTSEC-2026-0007", reason = "bytes 1.9.0 BytesMut::reserve overflow; fixed by the dependency bump in cleanup/07-deps" },
-    { id = "RUSTSEC-2025-0009", reason = "ring 0.17.8 AES panic with overflow checks; fixed by the dependency bump in cleanup/07-deps" },
-]
+yanked = "deny"
+ignore = []
 
 [licenses]
 version = 2
@@ -33,7 +30,6 @@ allow = [
     "Apache-2.0",
     "BSD-3-Clause",
     "ISC",
-    "OpenSSL",
     "Unicode-3.0",
     "BSL-1.0",
     "CC0-1.0",
@@ -42,11 +38,6 @@ allow = [
 # `nsm` itself carries no license field yet (`publish = false`; choosing a
 # LICENSE is on the maintainer's list in docs/PLAN.md section 2).
 private = { ignore = true }
-
-[[licenses.clarify]]
-crate = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [bans]
 multiple-versions = "warn"
