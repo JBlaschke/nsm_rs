@@ -7,11 +7,12 @@
 //!   first) and `key` (the matching PEM private key). A process can only act
 //!   as a TLS server when both are configured ([`TlsPaths::has_server_identity`]).
 //! - **Peer verification** uses the trust anchors in `root_ca`, a PEM bundle
-//!   chosen by the operator. Only when `root_ca` is `None` does the client fall
-//!   back to the platform trust store, and a store that is missing or empty is
-//!   a configuration error, never a panic. Trust anchors never arrive over the
-//!   wire: the old protocol let the party being verified ship the CA that
-//!   verified it, which authenticated nobody (audit S21, decision D10).
+//!   chosen by the operator. The platform trust store is used only when
+//!   `system_roots` is set explicitly (`--system-roots`); with neither, dialling
+//!   a TLS peer is a configuration error, never a silent fallback or a panic.
+//!   Trust anchors never arrive over the wire: the old protocol let the party
+//!   being verified ship the CA that verified it, which authenticated nobody
+//!   (audit S21, decision D10).
 //! - **No downgrade.** A connector produced here speaks TLS on every
 //!   connection. Transports must never pair it with a plaintext fallback such
 //!   as hyper's `https_or_http` (audit S20); whether a peer is dialled with TLS
@@ -29,7 +30,7 @@
 //! [`install_default_provider`]; `main` calls it before anything else.
 //!
 //! HPC compute nodes and minimal container images frequently have no system
-//! trust store at all. On such hosts [`root_store`] with `None` fails with
+//! trust store at all. On such hosts `--system-roots` fails with
 //! [`Error::Config`], and the operator must pass `--root-ca` (or `ROOT_PATH`)
 //! pointing at the CA that issued the broker's and parties' certificates.
 
@@ -144,13 +145,15 @@ pub fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
 /// counted and logged at `warn`, and it is an [`Error::Config`] when none
 /// remain.
 ///
-/// With `None` the platform trust store is loaded through
-/// [`rustls_native_certs::load_native_certs`]. Each problem it reports is
-/// logged at `warn` and an empty result is an [`Error::Config`]: HPC compute
+/// With `None` and `system_roots` set, the platform trust store is loaded
+/// through [`rustls_native_certs::load_native_certs`]. Each problem it reports
+/// is logged at `warn` and an empty result is an [`Error::Config`]: HPC compute
 /// nodes and minimal container images often have no system store, and
 /// operators there must pass `--root-ca` instead. Note that with the platform
 /// store *any* public CA can issue a certificate the mesh will accept, so an
 /// explicit `--root-ca` is the recommended configuration for mesh traffic.
+/// With `None` and `system_roots` off there is nothing to trust, which is an
+/// [`Error::Config`] naming both flags.
 pub fn root_store(root_ca: Option<&Path>, system_roots: bool) -> Result<RootCertStore> {
     let mut store = RootCertStore::empty();
     match root_ca {

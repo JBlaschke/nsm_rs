@@ -4,8 +4,8 @@
 //! result. The filter comes from, in order of precedence, an explicit
 //! override (the `--log-level` flag), the `NSM_LOG_LEVEL` environment variable,
 //! or `warn`. `NSM_LOG_STYLE` controls colour: `auto` (default), `always` or
-//! `never`. Records emitted through the `log` crate by dependencies (and by the
-//! legacy modules) are bridged into the same subscriber.
+//! `never`. Records emitted through the `log` crate by dependencies are
+//! bridged into the same subscriber.
 
 use std::io::IsTerminal;
 

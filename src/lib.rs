@@ -1,12 +1,6 @@
-//! # NSM: NERSC Service Mesh
+#![doc = include_str!("../README.md")]
 //!
-//! A connection broker for environments where compute nodes cannot accept
-//! inbound connections. Services *publish* themselves to a broker with a fixed
-//! address; clients *claim* a service by a shared key and receive its address;
-//! the broker keeps both sides alive with heartbeats and re-pairs clients when
-//! a service disappears.
-//!
-//! ## Layout
+//! ## Crate layout
 //!
 //! | Module | Role |
 //! |---|---|
@@ -26,9 +20,10 @@
 //! Import direction is strictly downward: `main` → [`cli`] → [`rest`]/[`ops`]
 //! → [`broker`]/[`party`] → [`transport`] → [`protocol`]/[`net`]/[`tls`] →
 //! [`config`]/[`error`]. Nothing below `main` prints to stdout, panics on peer
-//! input or exits the process.
+//! input or exits the process. The guides in `docs/` (architecture, protocol,
+//! REST API) and `CONTRIBUTING.md` live in the repository next to this README.
 
-#![deny(clippy::let_underscore_future, unused_must_use)]
+#![deny(clippy::let_underscore_future, unused_must_use, missing_docs)]
 #![cfg_attr(
     not(test),
     deny(
@@ -40,7 +35,7 @@
         clippy::unimplemented
     )
 )]
-#![warn(missing_docs, rustdoc::broken_intra_doc_links)]
+#![warn(rustdoc::broken_intra_doc_links)]
 
 pub mod broker;
 pub mod cli;
