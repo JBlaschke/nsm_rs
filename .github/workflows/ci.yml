@@ -17,22 +17,25 @@ env:
 
 jobs:
   build-test:
-    name: build and test (${{ matrix.os }})
+    name: build and test (${{ matrix.os }}, ${{ matrix.provider }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        provider: [aws-lc-rs, ring]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --locked --all-targets
-      - run: cargo test --locked --all-targets
-      - run: cargo test --locked --doc
+        with:
+          key: ${{ matrix.provider }}
+      - run: cargo build --locked --all-targets --no-default-features --features ${{ matrix.provider }}
+      - run: cargo test --locked --all-targets --no-default-features --features ${{ matrix.provider }}
+      - run: cargo test --locked --doc --no-default-features --features ${{ matrix.provider }}
 
   lint:
-    name: clippy and rustdoc
+    name: fmt, clippy and rustdoc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,8 +43,11 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      # Warnings are reported but not yet fatal: the pre-cleanup tree has ~160.
-      # The foundation branch (cleanup/02) turns this into `-D warnings` and adds
-      # `cargo fmt --check` once the new module tree exists.
-      - run: cargo clippy --locked --all-targets
+      # src/legacy is excluded from formatting (#[rustfmt::skip]) and from
+      # lints (#[allow(warnings, clippy::all)]) until it is deleted.
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --all-targets --no-default-features --features ring -- -D warnings
       - run: cargo doc --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings

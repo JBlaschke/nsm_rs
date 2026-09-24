@@ -9,8 +9,6 @@ services:
     build:
       context: .
       target: final
-      args:
-        APP_NAME: api
     ports:
       - "12000:12000"
     environment:
@@ -20,4 +18,4 @@ services:
       # KEY_PATH: /certs/key.pem
     # volumes:
     #   - ./certs:/certs:ro
-    # command: ["listen", "-n", "eth0", "--ip-version", "4", "--bind-port", "12000", "--tls"]
+    # command: ["listen", "--transport", "http", "--bind-port", "12000", "-n", "eth0", "--ip-version", "4", "--tls"]

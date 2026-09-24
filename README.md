@@ -6,11 +6,10 @@ themselves to a broker that has a fixed address; jobs *claim* a service by a
 shared key and receive its address; the broker keeps both sides alive with
 heartbeats and re-pairs clients when a service disappears.
 
-> **Status: mid-cleanup.** This repository is being restructured; see
-> [`docs/PLAN.md`](docs/PLAN.md) for the plan and [`docs/audit/`](docs/audit/README.md)
-> for the audit that motivates it. The description below is of the code as it is
-> today, including its rough edges. The command line will change in the next
-> stage (single `nsm` binary with subcommands).
+> **Status: mid-cleanup.** See [`docs/PLAN.md`](docs/PLAN.md) for the plan and
+> [`docs/audit/`](docs/audit/README.md) for the audit behind it. The command
+> line below is final; the backend behind it is being rewritten, so protocol
+> details (timeouts, wire format) will change in the next stage.
 
 ## Building
 
@@ -20,69 +19,68 @@ cargo build --release
 
 Dependencies are vendored under `vendor/` and `.cargo/config.toml` points Cargo
 at them, so a clean checkout builds without network access
-(`cargo build --offline`). Rust 1.83 or newer is required today.
+(`cargo build --offline`). One binary is produced: `target/release/nsm`.
 
-Two binaries are produced:
+TLS uses [rustls](https://github.com/rustls/rustls) with the `aws-lc-rs` crypto
+provider by default. For a static musl build, or on hosts without a C toolchain
+and cmake, use the pure-Rust provider instead:
 
-| Binary | Transport between broker and parties |
-|---|---|
-| `target/release/tcp` | raw TCP, JSON messages |
-| `target/release/api` | HTTP(S), JSON bodies (`--tls` enables TLS on the server side) |
-
-Both accept the same command line.
+```bash
+cargo build --release --no-default-features --features ring
+```
 
 ## Usage
 
 ```
-<binary> <OPERATION> [HOST] [OPTIONS]
+nsm [--log-level FILTER] <COMMAND>
 ```
 
-Operations: `list_interfaces`, `list_ips`, `listen`, `publish`, `claim`,
-`collect`, `send`. `HOST` is the broker or party to talk to, written as
-`host:port`, `http://host:port` or `https://host:port`.
+| Command | Purpose |
+|---|---|
+| `nsm list-interfaces` | interfaces on this host |
+| `nsm list-ips [-n IFACE] [-i PREFIX] [--ip-version 4\|6]` | addresses on this host |
+| `nsm listen --bind-port PORT [--transport tcp\|http] [--tls]` | run the broker |
+| `nsm publish BROKER --bind-port PORT --service-port PORT --key KEY` | register a service |
+| `nsm claim BROKER --bind-port PORT --key KEY` | pair with a service |
+| `nsm collect PARTY` | read what a party holds |
+| `nsm send PARTY --msg TEXT` | send a message to a client for relay to its service |
+| `nsm serve [--bind ADDR]` | REST control plane (loopback by default) |
 
-A minimal session on one machine (replace `en0` with your interface and pick an
-IPv4 address with `--ip-version 4`):
+`BROKER` and `PARTY` are addresses of the form `host:port` (raw TCP),
+`http://host:port` or `https://host:port`; the transport follows from the
+scheme. `listen` has no peer, so it takes `--transport`. The old snake_case
+spellings `list_interfaces` and `list_ips` are accepted as aliases.
+
+Every party needs one local address to advertise. When the host has several,
+narrow the choice with `-n/--name IFACE`, `-i/--ip-start PREFIX` and
+`--ip-version 4|6`; an ambiguous selection is reported with the candidates.
+
+A minimal session on one machine (macOS loopback is `lo0`, Linux `lo`):
 
 ```bash
 # Broker
-./target/release/tcp listen -n en0 --ip-version 4 --bind-port 12000
+nsm listen --bind-port 12000 -n lo0 --ip-version 4
 
-# A service announcing that it listens on port 9000, with heartbeats on 12010
-./target/release/tcp publish 10.0.0.5:12000 -n en0 --ip-version 4 \
-    --bind-port 12010 --service-port 9000 --key 1234
+# A service that listens on port 9000, with heartbeats on 12010
+nsm publish 127.0.0.1:12000 --bind-port 12010 --service-port 9000 --key 1234 -n lo0 --ip-version 4
 
 # A client asking for a service with the same key; heartbeats on 12020
-./target/release/tcp claim 10.0.0.5:12000 -n en0 --ip-version 4 \
-    --bind-port 12020 --key 1234
+nsm claim 127.0.0.1:12000 --bind-port 12020 --key 1234 -n lo0 --ip-version 4
 ```
 
-Common options:
-
-| Option | Meaning |
-|---|---|
-| `-n, --name <NAME>` | interface to take the local address from |
-| `-i, --ip-start <OCTETS>` | pick the local address whose text starts with these octets |
-| `--ip-version <4\|6>` | address family |
-| `--bind-port <PORT>` | port this party listens on for heartbeats |
-| `--service-port <PORT>` | (publish) port the actual service listens on |
-| `--key <KEY>` | rendezvous key shared by a service and its clients |
-| `--msg <MSG>` | (send) message to deliver |
-| `--tls` | (api) serve TLS; needs `CERT_PATH` and `KEY_PATH` |
-| `--root_ca <PEM>` | root CA bundle for verifying the peer |
-| `--ping` | one-sided heartbeats from the party to the broker |
-| `-v, --verbose` | print section headers in `list_*` output |
+`nsm <command> --help` lists every option.
 
 ## Environment
 
 | Variable | Purpose |
 |---|---|
-| `NSM_LOG_LEVEL` | `trace`, `debug`, `info`, `warn` (default), `error` |
-| `NSM_LOG_STYLE` | `auto`, `always` (default), `never` |
+| `NSM_LOG_LEVEL` | log filter: `trace`, `debug`, `info`, `warn` (default), `error`, or a `tracing` directive such as `nsm=debug` |
+| `NSM_LOG_STYLE` | `auto` (default; colour only on a terminal), `always`, `never` |
 | `CERT_PATH`, `KEY_PATH` | PEM certificate and private key for `--tls` |
-| `ROOT_PATH` | PEM root CA bundle for TLS clients (platform store when unset) |
+| `ROOT_PATH` | PEM root CA bundle for verifying peers (same as `--root-ca`); platform store when unset |
 
-A template is in [`.env.example`](.env.example).
+Logs go to stderr; stdout carries only a command's result. A template is in
+[`.env.example`](.env.example).
 
 ## Docker
 
@@ -90,9 +88,8 @@ A template is in [`.env.example`](.env.example).
 docker compose up --build
 ```
 
-builds the `api` binary and runs a broker on port 12000; see
-[`compose.yaml`](compose.yaml) for the TLS variant. Kubernetes RBAC notes are in
-[`deploy/k8s/`](deploy/k8s/README.md).
+runs a broker on port 12000 over HTTP; see [`compose.yaml`](compose.yaml) for
+the TLS variant. Kubernetes RBAC notes are in [`deploy/k8s/`](deploy/k8s/README.md).
 
 ## Documentation
 

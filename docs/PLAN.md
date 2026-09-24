@@ -2,6 +2,20 @@
 
 Written 2026-09-24 against `main` at `edd23a33`. Companion document: [the audit](audit/README.md), which holds every finding this plan responds to.
 
+## 0. Status
+
+| Branch | State | Notes |
+|---|---|---|
+| `cleanup/01-repo-hygiene` | done | 5 commits; tracked files 23,449 → 11,914 |
+| `cleanup/02-foundation` | done | single `nsm` binary, lib crate, typed protocol, rustls module, 77 unit tests; legacy code runs under `src/legacy/` |
+| `cleanup/03-common-backend` | next | |
+| `cleanup/04-hardening` | planned | |
+| `cleanup/05-tests-ci` | planned | |
+| `cleanup/06-docs` | planned | |
+| `cleanup/07-deps` | planned | |
+
+Commits inside a branch group changes by topic for reading; only the branch tip is guaranteed to build. Vendor updates are always their own commit (`chore: re-vendor`) so they can be skipped in review.
+
 ## 1. Why this plan exists
 
 NSM started as a TCP-only broker. A second, HTTP-based mode was added alongside it, and the two were never merged into one backend. Today the same seven operations exist in two hand-written variants each, selected partly by which binary you run (`tcp` or `api`), partly by a `ComType` argument threaded through every function, and partly by `(Option<TcpStream>, Option<Request>)` pairs that panic on the combinations nobody intended. The audit found 216 issues across seven lenses; the headline ones are:
