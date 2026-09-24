@@ -162,6 +162,24 @@ docker compose up --build
 runs a broker on port 12000 over HTTP; see [`compose.yaml`](compose.yaml) for
 the TLS variant. Kubernetes RBAC notes are in [`deploy/k8s/`](deploy/k8s/README.md).
 
+## Testing
+
+```bash
+cargo test --offline                                 # unit, integration and doc tests
+cargo test --offline --test stress -- --ignored      # 50 services and 50 clients on one broker
+cargo deny --all-features check                      # advisories, licenses, sources, duplicates
+cargo llvm-cov --offline --summary-only              # line coverage (CI enforces a floor)
+```
+
+Unit tests live next to the code; the randomized address and framing tests
+draw from a seeded generator in `src/testing.rs`, so a failure names the
+iteration that produced it. Under `tests/`, `e2e.rs` runs a broker with
+services and clients over all four transports, `rest.rs` exercises every
+control-plane route, `cli.rs` drives the built binary through complete
+sessions, and `stress.rs` is the load test. CI runs all of this on Linux and
+macOS with both crypto providers, plus rustfmt, clippy, rustdoc, cargo-deny,
+cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
+
 ## Documentation
 
 API documentation is built by CI with `cargo doc` and published to

@@ -10,8 +10,8 @@ Written 2026-09-24 against `main` at `edd23a33`. Companion document: [the audit]
 | `cleanup/02-foundation` | done | single `nsm` binary, lib crate, typed protocol, rustls module, 77 unit tests; legacy code runs under `src/legacy/` |
 | `cleanup/03-common-backend` | done | backend written once (transport trait; TCP, TLS, HTTP, HTTPS), registry actor with per-party monitors, party sessions, typed ops, REST control plane with jobs; legacy deleted; 129 unit + 11 end-to-end tests over all four transports |
 | `cleanup/04-hardening` | done | platform trust store opt-in (`--system-roots`), broker admission policy (matching-host check, per-host registration cap), CLI overrides for every timing and limit, `deny(unwrap_used, expect_used, panic)` outside tests, release overflow checks; security review of the branch found 4 items (unauthenticated `Ping`/`Deliver`, forgeable party heartbeats, the rendezvous key inside `ServiceHandle` and job views), all fixed with per-registration tokens |
-| `cleanup/05-tests-ci` | next | |
-| `cleanup/06-docs` | planned | |
+| `cleanup/05-tests-ci` | done | randomized address/framing tests, monitor decision tables, REST and CLI integration suites, 50-party stress test; CI adds cargo-deny, cargo-machete, a Docker build and a coverage floor; two fixes the new tests found (IP literals canonicalised, TLS configuration checked before dialling) |
+| `cleanup/06-docs` | next | |
 | `cleanup/07-deps` | planned | |
 
 Commits inside a branch group changes by topic for reading; only the branch tip is guaranteed to build. Vendor updates are always their own commit (`chore: re-vendor`) so they can be skipped in review.
@@ -168,6 +168,7 @@ Behaviour-changing safety limits and the remaining audit items.
 - Property tests for `Addr` and framing; table tests for the monitor's decisions; the 50-party stress test behind `#[ignore]`; `assert_cmd` CLI tests; malformed-input tests for both transports.
 - CI: fmt, clippy `-D warnings` for both provider features, tests on Linux and macOS at stable and MSRV, `cargo doc -D warnings`, `cargo deny` (advisories, licenses, sources, duplicate versions), `cargo machete`, Docker build smoke test, coverage with `cargo llvm-cov` and a floor that ratchets up.
 - Acceptance: CI green; coverage floor set from the measured value.
+- Outcome (2026-09-24): done without new dependencies. The property tests use a seeded generator (`src/testing.rs`) instead of `proptest`, and the CLI tests drive the binary through `std::process` with `CARGO_BIN_EXE_nsm` instead of `assert_cmd`; both keep `vendor/` unchanged. `cargo audit` is covered by cargo-deny's advisories check (same RustSec database); two advisories against `bytes 1.9.0` and `ring 0.17.8` are listed in `deny.toml` as ignored until the bump in 07 removes them. The MSRV job waits for 07, which sets `rust-version`. The Docker smoke test runs in CI only (no Docker on the development machine). The new tests found two small defects, fixed here: `Addr` kept IPv6 literals as typed, so `::1` and `0::1` were different hosts; and the TCP client dialled before checking its TLS configuration, so a missing `--root-ca` surfaced as a connection error. Coverage measured at 96.3% of lines; the CI floor is 94%.
 
 ### 06 `cleanup/06-docs`
 
