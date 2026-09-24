@@ -173,21 +173,30 @@ where
 /// One framed request/reply exchange with `to`.
 pub(super) async fn call(client: &Client, to: &Addr, msg: Message) -> Result<Message> {
     let t = client.timing();
+    // Local configuration problems (no trust root, bad server name) are
+    // reported before anything is dialled, as the HTTP client does.
+    let tls = if to.transport.is_tls() {
+        Some((
+            TlsConnector::from(client.tls_config()?),
+            crate::tls::server_name(&to.host)?,
+        ))
+    } else {
+        None
+    };
     let sock = to.resolve().await?;
     let stream = timeout(t.connect_timeout, TcpStream::connect(sock))
         .await
         .map_err(|_| Error::Timeout(t.connect_timeout))??;
     let _ = stream.set_nodelay(true);
     let max = client.limits().max_frame_bytes;
-    if to.transport.is_tls() {
-        let connector = TlsConnector::from(client.tls_config()?);
-        let name = crate::tls::server_name(&to.host)?;
-        let tls_stream = timeout(t.connect_timeout, connector.connect(name, stream))
-            .await
-            .map_err(|_| Error::Timeout(t.connect_timeout))??;
-        roundtrip(tls_stream, msg, max, t.request_timeout).await
-    } else {
-        roundtrip(stream, msg, max, t.request_timeout).await
+    match tls {
+        Some((connector, name)) => {
+            let tls_stream = timeout(t.connect_timeout, connector.connect(name, stream))
+                .await
+                .map_err(|_| Error::Timeout(t.connect_timeout))??;
+            roundtrip(tls_stream, msg, max, t.request_timeout).await
+        }
+        None => roundtrip(stream, msg, max, t.request_timeout).await,
     }
 }
 
