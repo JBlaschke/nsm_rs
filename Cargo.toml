@@ -1,7 +1,8 @@
 [package]
 name = "nsm"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.88"
 description = "NERSC Service Mesh: an HPC-aware connection broker that pairs published services with claiming clients"
 repository = "https://github.com/JBlaschke/nsm_rs"
 readme = "README.md"
@@ -30,7 +31,7 @@ ring = ["rustls/ring", "tokio-rustls/ring"]
 
 [dependencies]
 # CLI, logging, errors
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 thiserror = "2"
@@ -44,10 +45,10 @@ if-addrs = "0.15"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "tracing"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "sync"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 hyper = { version = "1", features = ["http1", "server", "client"] }
-hyper-util = { version = "0.1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "http1", "service"] }
 
 # TLS (provider selected by the features above; defaults disabled on purpose)
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging"] }
@@ -59,5 +60,5 @@ rustls-native-certs = "0.8"  # platform trust store fallback in src/tls.rs
 overflow-checks = true
 
 [dev-dependencies]
-rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"] }
 tempfile = "3"

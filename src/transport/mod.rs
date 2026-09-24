@@ -237,11 +237,11 @@ pub(crate) mod testing {
     use std::future::Future;
     use std::sync::Arc;
 
-    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
-    use super::{serve, Client, Handler, PeerInfo, Server};
+    use super::{Client, Handler, PeerInfo, Server, serve};
     use crate::config::{Limits, Timing, TlsPaths};
     use crate::net::{Addr, Transport};
     use crate::protocol::Message;
@@ -300,7 +300,7 @@ pub(crate) mod testing {
             .distinguished_name
             .push(DnType::CommonName, "localhost");
         let leaf_cert = leaf_params
-            .signed_by(&leaf_key, &ca_cert, &ca_key)
+            .signed_by(&leaf_key, &Issuer::from_params(&ca_params, &ca_key))
             .expect("leaf certificate");
         let ca = dir.path().join("ca.pem");
         let cert = dir.path().join("cert.pem");

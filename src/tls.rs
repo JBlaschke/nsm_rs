@@ -298,7 +298,7 @@ mod tests {
     use std::io;
     use std::time::Duration;
 
-    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
     use tempfile::TempDir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
@@ -330,7 +330,7 @@ mod tests {
             .distinguished_name
             .push(DnType::CommonName, "localhost");
         let leaf_cert = leaf_params
-            .signed_by(&leaf_key, &ca_cert, &ca_key)
+            .signed_by(&leaf_key, &Issuer::from_params(&ca_params, &ca_key))
             .expect("leaf certificate");
 
         let ca = dir.path().join("ca.pem");

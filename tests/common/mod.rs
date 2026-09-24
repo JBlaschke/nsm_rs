@@ -8,19 +8,19 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use nsm::broker::listen::{listen, BrokerHandle, ListenOpts};
+use nsm::Result;
+use nsm::broker::listen::{BrokerHandle, ListenOpts, listen};
 use nsm::broker::monitor::{Broker, PartySummary};
 use nsm::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use nsm::net::{Addr, Transport};
 use nsm::ops::NetOpts;
 use nsm::party::{ClaimOpts, PartyOpts, PublishOpts, Session};
 use nsm::protocol::{Key, PartyId, RegToken, ServiceHandle};
-use nsm::Result;
 
 /// Every transport the suite runs over.
 pub const TRANSPORTS: &[Transport] = &[
@@ -52,7 +52,7 @@ pub fn test_certs() -> (TempDir, TlsPaths) {
         .distinguished_name
         .push(DnType::CommonName, "localhost");
     let leaf_cert = leaf_params
-        .signed_by(&leaf_key, &ca_cert, &ca_key)
+        .signed_by(&leaf_key, &Issuer::from_params(&ca_params, &ca_key))
         .expect("leaf certificate");
 
     let ca = dir.path().join("ca.pem");
