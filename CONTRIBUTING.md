@@ -88,7 +88,7 @@ Any change to `protocol::Message`, the records it carries or the framing:
 
 ## Changing dependencies
 
-Dependencies are vendored (decision D1 in [`docs/PLAN.md`](docs/PLAN.md)).
+Dependencies are vendored (decision D1 in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
 
 1. Edit `Cargo.toml` or run `cargo update -p <crate>`; keep features narrow.
 2. Re-vendor: `cargo vendor` (this rewrites every `.cargo-checksum.json`, so

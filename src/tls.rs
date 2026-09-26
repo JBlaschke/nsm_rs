@@ -23,7 +23,7 @@
 //!   non-existent `http/1.0` any more (audit S23).
 //! - **No client authentication yet.** Servers accept any client and clients
 //!   present no certificate. Mutual TLS, with authorisation bound to the client
-//!   certificate, is a listed follow-up (`docs/PLAN.md`, D10).
+//!   certificate, is a listed follow-up (decision D10 in `docs/ARCHITECTURE.md`).
 //!
 //! The rustls [`CryptoProvider`] is selected by the crate features
 //! (`aws-lc-rs`, the default, or `ring`) and installed once per process by

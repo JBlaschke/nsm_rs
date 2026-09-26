@@ -3,8 +3,9 @@
 This document describes how the `nsm` crate is put together: the roles, the
 modules, the rules every module follows, and why. For the wire format see
 [`PROTOCOL.md`](PROTOCOL.md); for the control plane see
-[`REST_API.md`](REST_API.md); for the reasoning behind the current design see
-[`PLAN.md`](PLAN.md) and [the audit](audit/README.md) of the code it replaced.
+[`REST_API.md`](REST_API.md); the reasoning behind the current design is in
+section 11 (Design decisions), and the record of the 2026 refactor that produced
+it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PLAN.md).
 
 ## 1. Roles
 
@@ -240,10 +241,32 @@ static musl builds and the Docker image). Dependencies are vendored;
 `.cargo/config.toml` makes every build offline. Release builds keep overflow
 checks on.
 
-## 11. History
+## 11. Design decisions
 
-The code before 2026-09 had two binaries (`tcp` and `api`) that re-declared
-the same operations, a wire format that ended a message on a short read, no
-tests and no library target. The audit in [`audit/`](audit/README.md) lists
-216 findings; [`PLAN.md`](PLAN.md) records the decisions taken (D1 to D12)
-and the branch-by-branch path from that code to this one.
+Numbered as in the 2026 refactor plan, because the code and the changelog
+cite them by number (`decision D7` in the registry, `D9` in the control
+plane, `D10` in the TLS module). Each is a fact about the current code.
+
+| # | Decision |
+|---|---|
+| D1 | Dependencies are vendored: `vendor/` is tracked, `.cargo/config.toml` replaces crates.io with it, and every build is offline. A change to `Cargo.lock` is followed by `cargo vendor` in its own commit, with nothing under `vendor/` left untracked. |
+| D2 | One binary, `nsm`, with one subcommand per operation. The transport comes from the address scheme (`host:port`, `tls://`, `http://`, `https://`); `listen` and `serve` have no peer address and take `--transport` or `--bind`. |
+| D3 | The wire format is versioned (`PROTOCOL_VERSION`): a tagged JSON message in length-prefixed frames on TCP and TLS or as the body of `POST /v1/message` on HTTP; every reply has one shape; registration replies carry the server-assigned id and a registration token. There is no compatibility with the pre-2026 `tcp` and `api` binaries. |
+| D4 | HTTP servers are axum and HTTP clients are reqwest, both on hyper 1 with rustls. |
+| D5 | Logging is `tracing`, configured by `NSM_LOG_LEVEL`, `NSM_LOG_STYLE` and `--log-level`; stdout carries only a command's result. |
+| D6 | Interface enumeration uses `if-addrs`. |
+| D7 | A claim is exclusive from the moment it is granted until the client is removed. There is no time-based lease. Services and clients are separate record types. |
+| D8 | Liveness is one heartbeat task per two-sided party and a sweeper for ping-mode parties; a party is removed after `fail_threshold` consecutive failures. Every interval and threshold lives in `Timing`, overridable from the CLI; broker and parties should agree on the values. |
+| D9 | The control plane binds loopback by default, requires a bearer token elsewhere, answers long-running operations with a job, and never takes file paths from a request. |
+| D10 | Trust anchors are operator configuration (`--root-ca`, or `--system-roots` as an explicit opt-in) and never travel on the wire; a connection configured for TLS never falls back to plaintext. Mutual TLS is a follow-up ([#7](https://github.com/JBlaschke/nsm_rs/issues/7)). |
+| D11 | The rustls crypto provider is a feature: `aws-lc-rs` (default) or `ring` (pure Rust, used for static musl builds and the container image); exactly one is installed per process. |
+| D12 | Edition 2024 and `rust-version = "1.88"`, the minimum the current dependencies need; CI builds and tests on that toolchain as well as on stable. |
+
+## 12. History
+
+The code before September 2026 had two binaries (`tcp` and `api`) that
+re-declared the same operations, a wire format that ended a message on a
+short read, no tests and no library target. The refactor that replaced it is
+recorded under [`history/2026-refactor/`](history/2026-refactor/PLAN.md): the
+plan with its branch-by-branch status, and the audit of the old code with its
+216 findings, which the code still cites by id (`audit S31`, `S20`, ...).

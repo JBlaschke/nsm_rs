@@ -112,7 +112,7 @@ version: 1 (the first versioned format).
   every function and the `(Option<TcpStream>, Option<Request>)` pairs.
 - Generated rustdoc, `target*/` directories, the Docker tarball and the
   committed `.env` from the repository (they remain in history; see
-  `docs/PLAN.md` section 2).
+  [#3](https://github.com/JBlaschke/nsm_rs/issues/3)).
 - Direct dependencies `pnet`, `hyper-rustls`, `lazy_static`, `base64`, `url`
   and friends that the new backend does not need.
 
