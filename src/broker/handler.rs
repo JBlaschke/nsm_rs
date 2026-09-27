@@ -400,114 +400,119 @@ mod tests {
         use crate::protocol::message::store_key;
         use crate::protocol::{StoreEntry, StoreOp, Stored};
 
-        crate::tls::install_default_provider();
-        let h = handler(BrokerPolicy::default());
-        // A ping-mode service and a two-sided client: the relay does not
-        // depend on the liveness mode. (Nothing here yields to the runtime,
-        // so the client's heartbeat task never runs and cannot remove it.)
-        let (service, service_token) =
-            registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
-        let relay = |from, token, op| Message::StoreRelay { from, token, op };
-        let put = |value: &str| StoreOp::Put {
-            key: store_key("step"),
-            value: value.into(),
-        };
-        let nack = |reason: &str| Message::nack(reason);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            crate::tls::install_default_provider();
+            let h = handler(BrokerPolicy::default());
+            // A ping-mode service and a two-sided client: the relay does not
+            // depend on the liveness mode. (Nothing here yields to the runtime,
+            // so the client's heartbeat task never runs and cannot remove it.)
+            let (service, service_token) =
+                registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
+            let relay = |from, token, op| Message::StoreRelay { from, token, op };
+            let put = |value: &str| StoreOp::Put {
+                key: store_key("step"),
+                value: value.into(),
+            };
+            let nack = |reason: &str| Message::nack(reason);
 
-        // Wrong token and unknown id: one text for both, before anything
-        // else is looked at.
-        let wrong_token = h
-            .handle(relay(service, wrong(), StoreOp::List), peer())
-            .await
-            .unwrap();
-        let unknown = h
-            .handle(relay(PartyId(99), wrong(), put("5")), peer())
-            .await
-            .unwrap();
-        assert_eq!(wrong_token, nack("unknown party or wrong token"));
-        assert_eq!(unknown, wrong_token);
+            // Wrong token and unknown id: one text for both, before anything
+            // else is looked at.
+            let wrong_token = h
+                .handle(relay(service, wrong(), StoreOp::List), peer())
+                .await
+                .unwrap();
+            let unknown = h
+                .handle(relay(PartyId(99), wrong(), put("5")), peer())
+                .await
+                .unwrap();
+            assert_eq!(wrong_token, nack("unknown party or wrong token"));
+            assert_eq!(unknown, wrong_token);
 
-        // Right token, but nobody holds the service: it reads an empty
-        // store and may not write.
-        assert_eq!(
-            h.handle(relay(service, service_token, StoreOp::List), peer())
-                .await
-                .unwrap(),
-            Message::Stored(Stored {
-                client: None,
-                revision: 0,
-                entries: vec![],
-            })
-        );
-        assert_eq!(
-            h.handle(relay(service, service_token, put("5")), peer())
-                .await
-                .unwrap(),
-            nack(&format!("service {service} is not claimed"))
-        );
+            // Right token, but nobody holds the service: it reads an empty
+            // store and may not write.
+            assert_eq!(
+                h.handle(relay(service, service_token, StoreOp::List), peer())
+                    .await
+                    .unwrap(),
+                Message::Stored(Stored {
+                    client: None,
+                    revision: 0,
+                    entries: vec![],
+                })
+            );
+            assert_eq!(
+                h.handle(relay(service, service_token, put("5")), peer())
+                    .await
+                    .unwrap(),
+                nack(&format!("service {service} is not claimed"))
+            );
 
-        let claim = Message::Claim {
-            key: 1,
-            bind_addr: Addr::tcp("127.0.0.1", 2),
-            ping: false,
-        };
-        let (client, client_token, paired_with) = paired(h.handle(claim, peer()).await.unwrap());
-        assert_eq!(paired_with, service);
-        let written = StoreEntry {
-            key: store_key("step"),
-            value: "5".into(),
-            version: 1,
-        };
-        assert_eq!(
-            h.handle(relay(client, client_token, put("5")), peer())
+            let claim = Message::Claim {
+                key: 1,
+                bind_addr: Addr::tcp("127.0.0.1", 2),
+                ping: false,
+            };
+            let (client, client_token, paired_with) =
+                paired(h.handle(claim, peer()).await.unwrap());
+            assert_eq!(paired_with, service);
+            let written = StoreEntry {
+                key: store_key("step"),
+                value: "5".into(),
+                version: 1,
+            };
+            assert_eq!(
+                h.handle(relay(client, client_token, put("5")), peer())
+                    .await
+                    .unwrap(),
+                Message::Stored(Stored {
+                    client: Some(client),
+                    revision: 1,
+                    entries: vec![written.clone()],
+                })
+            );
+            assert_eq!(
+                h.handle(
+                    relay(
+                        service,
+                        service_token,
+                        StoreOp::Get {
+                            key: store_key("step")
+                        }
+                    ),
+                    peer()
+                )
                 .await
                 .unwrap(),
-            Message::Stored(Stored {
-                client: Some(client),
-                revision: 1,
-                entries: vec![written.clone()],
-            })
-        );
-        assert_eq!(
-            h.handle(
-                relay(
-                    service,
-                    service_token,
-                    StoreOp::Get {
-                        key: store_key("step")
-                    }
-                ),
-                peer()
-            )
-            .await
-            .unwrap(),
-            Message::Stored(Stored {
-                client: Some(client),
-                revision: 1,
-                entries: vec![written],
-            }),
-            "the service reads the client's write"
-        );
-        // A party's token is its own: the client's does not work for the
-        // service.
-        assert_eq!(
-            h.handle(relay(service, client_token, StoreOp::List), peer())
+                Message::Stored(Stored {
+                    client: Some(client),
+                    revision: 1,
+                    entries: vec![written],
+                }),
+                "the service reads the client's write"
+            );
+            // A party's token is its own: the client's does not work for the
+            // service.
+            assert_eq!(
+                h.handle(relay(service, client_token, StoreOp::List), peer())
+                    .await
+                    .unwrap(),
+                nack("unknown party or wrong token")
+            );
+            // A write that does not fit is refused with the budget's numbers.
+            match h
+                .handle(
+                    relay(client, client_token, put(&"x".repeat(20_000))),
+                    peer(),
+                )
                 .await
-                .unwrap(),
-            nack("unknown party or wrong token")
-        );
-        // A write that does not fit is refused with the budget's numbers.
-        match h
-            .handle(
-                relay(client, client_token, put(&"x".repeat(20_000))),
-                peer(),
-            )
-            .await
-            .unwrap()
-        {
-            Message::Nack { reason } => assert!(reason.starts_with("store full"), "{reason}"),
-            other => panic!("{other:?}"),
-        }
+                .unwrap()
+            {
+                Message::Nack { reason } => assert!(reason.starts_with("store full"), "{reason}"),
+                other => panic!("{other:?}"),
+            }
+        })
+        .await
+        .expect("the store relay test finished in time");
     }
 
     #[tokio::test]
