@@ -353,6 +353,146 @@ async fn errors_map_to_statuses() {
 }
 
 #[tokio::test]
+async fn store_through_the_api() {
+    with_deadline(async {
+        let cluster = Cluster::start(Transport::Http).await;
+        let api = Api::start(cluster.net().clone(), None).await;
+        let service = cluster.publish(7, 9100).await;
+        let client = cluster.claim(7).await;
+        let (client_hb, service_hb) = (client.bound().to_string(), service.bound().to_string());
+        let owner = json!(client.id());
+
+        // A put at the client answers with the entry as written.
+        let (status, put) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": client_hb, "op": "put", "key": "step", "value": "5" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{put}");
+        assert_eq!(put["client"], owner, "{put}");
+        let version = put["entries"][0]["version"].as_u64().expect("version");
+        assert_eq!(put["revision"], json!(version), "{put}");
+        assert_eq!(
+            put["entries"],
+            json!([{ "key": "step", "value": "5", "version": version }])
+        );
+
+        // The service reads it; the reply names the client, not the service.
+        let (status, got) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": service_hb, "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{got}");
+        assert_eq!(got, put, "the service reads the client's write");
+
+        // The service writes a second entry; either party lists both.
+        let (status, second) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": service_hb, "op": "put", "key": "input/path", "value": "/scratch/in 1.h5" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{second}");
+        assert_eq!(second["client"], owner, "{second}");
+        for party in [&client_hb, &service_hb] {
+            let (status, listed) = api
+                .post("/v1/store", &json!({ "party": party, "op": "list" }))
+                .await;
+            assert_eq!(status, StatusCode::OK, "{listed}");
+            assert_eq!(listed["client"], owner, "{party}: {listed}");
+            assert_eq!(listed["revision"], second["revision"], "{party}: {listed}");
+            let keys: Vec<&str> = listed["entries"]
+                .as_array()
+                .expect("entries")
+                .iter()
+                .filter_map(|e| e["key"].as_str())
+                .collect();
+            assert_eq!(keys, ["input/path", "step"], "{party}: {listed}");
+            assert_eq!(listed["entries"][0]["value"], json!("/scratch/in 1.h5"));
+        }
+
+        // A delete answers with the removed entry, then with none; an unset
+        // key is still 200, with no entries.
+        let delete = json!({ "party": client_hb, "op": "delete", "key": "step" });
+        let (status, removed) = api.post("/v1/store", &delete).await;
+        assert_eq!(status, StatusCode::OK, "{removed}");
+        assert_eq!(removed["entries"], put["entries"], "{removed}");
+        let (status, again) = api.post("/v1/store", &delete).await;
+        assert_eq!(status, StatusCode::OK, "{again}");
+        assert_eq!(again["entries"], json!([]), "{again}");
+        assert_eq!(again["revision"], removed["revision"], "no write, no version");
+        let (status, unset) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": service_hb, "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{unset}");
+        assert_eq!(unset["entries"], json!([]), "{unset}");
+        assert_eq!(unset["client"], owner, "{unset}");
+
+        // A service nobody holds reads an empty store and may not write.
+        let lonely = cluster.publish(8, 9101).await;
+        let lonely_hb = lonely.bound().to_string();
+        let (status, empty) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": lonely_hb, "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(
+            empty,
+            json!({ "client": null, "revision": 0, "entries": [] })
+        );
+        let (status, body) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": lonely_hb, "op": "put", "key": "step", "value": "5" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"].as_str().unwrap_or("").contains("not claimed"),
+            "{body}"
+        );
+
+        // Malformed bodies are the caller's fault.
+        for bad in [
+            json!({ "party": client_hb, "op": "get", "key": "two words" }),
+            json!({ "party": client_hb, "op": "get", "key": "-x" }),
+            json!({ "party": client_hb, "op": "get" }),
+            json!({ "party": client_hb, "op": "frobnicate", "key": "step" }),
+            json!({ "party": client_hb, "op": "put", "key": "step" }),
+            json!({ "party": client_hb, "key": "step" }),
+            json!({ "op": "list" }),
+        ] {
+            let (status, body) = api.post("/v1/store", &bad).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+            assert!(body["error"].is_string(), "{bad}: {body}");
+        }
+
+        // An unreachable party is upstream trouble.
+        let dead = Addr::new(Transport::Http, "127.0.0.1", unused_port());
+        let (status, body) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": dead.to_string(), "op": "list" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+        assert!(body["error"].is_string(), "{body}");
+
+        api.stop().await;
+        cluster.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn bearer_token_guards_every_route() {
     with_deadline(async {
         let api = Api::start(NetOpts::default(), Some("s3cret")).await;
@@ -361,6 +501,7 @@ async fn bearer_token_guards_every_route() {
             (Method::GET, "/v1/interfaces"),
             (Method::GET, "/v1/jobs"),
             (Method::POST, "/v1/send"),
+            (Method::POST, "/v1/store"),
             (Method::DELETE, "/v1/jobs/1"),
         ] {
             let (status, body) = api.send(api.bare(method.clone(), path)).await;
