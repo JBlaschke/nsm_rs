@@ -538,14 +538,18 @@ impl Registry {
     /// service uses the store of the client holding it. A service nobody
     /// holds has no store: a get or a list answers an empty one with
     /// `client: None` and revision 0, and nothing is created. Writes take
-    /// their numbers from the broker-wide version counter. Tokens are not
-    /// checked here; the handler verifies them first.
+    /// their numbers from the broker-wide version counter. A put or a delete
+    /// whose `if_version` does not hold is answered with `applied: false`
+    /// and the key's current entry, changing nothing and taking no number;
+    /// that is an answer, not an error. Tokens are not checked here; the
+    /// handler verifies them first.
     ///
     /// # Errors
     ///
     /// [`Error::Rejected`] when `from` is not a registered party
     /// (`"unknown party <id>"`), when a service nobody holds tries to write
-    /// (`"service <id> is not claimed"`), when a put does not fit
+    /// (`"service <id> is not claimed"`, whatever the write's condition),
+    /// when a put does not fit
     /// [`Limits::max_store_bytes`] (`"store full: ..."`), and when the
     /// version counter is exhausted (`"store versions exhausted"`). A
     /// refused operation changes nothing.
@@ -560,6 +564,7 @@ impl Registry {
                     return Ok(Stored {
                         client: None,
                         revision: 0,
+                        applied: true,
                         entries: Vec::new(),
                     });
                 }
@@ -571,13 +576,14 @@ impl Registry {
             return Err(Error::Rejected(format!("unknown party {from}")));
         };
         let versions = &mut self.versions;
-        let (revision, entries) = entry
+        let outcome = entry
             .store
             .apply(op, self.limits.max_store_bytes, || versions.next())?;
         Ok(Stored {
             client: Some(client),
-            revision,
-            entries,
+            revision: outcome.revision,
+            applied: outcome.applied,
+            entries: outcome.entries,
         })
     }
 
@@ -1502,11 +1508,15 @@ mod tests {
         StoreOp::Put {
             key: skey(k),
             value: value.into(),
+            if_version: None,
         }
     }
 
     fn delete(k: &str) -> StoreOp {
-        StoreOp::Delete { key: skey(k) }
+        StoreOp::Delete {
+            key: skey(k),
+            if_version: None,
+        }
     }
 
     fn entry(k: &str, value: &str, version: u64) -> StoreEntry {
@@ -1521,6 +1531,7 @@ mod tests {
         Stored {
             client: Some(client),
             revision,
+            applied: true,
             entries,
         }
     }
@@ -1529,6 +1540,7 @@ mod tests {
         Stored {
             client: None,
             revision: 0,
+            applied: true,
             entries: vec![],
         }
     }
@@ -1609,6 +1621,95 @@ mod tests {
             r.store(c, put("step", "5")).unwrap(),
             stored(c, 1, vec![entry("step", "5", 1)])
         );
+    }
+
+    #[test]
+    fn an_unclaimed_service_cannot_write_whatever_the_condition() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let not_claimed = format!("service {s} is not claimed");
+        for if_version in [None, Some(0), Some(1), Some(u64::MAX)] {
+            let writes = [
+                StoreOp::Put {
+                    key: skey("step"),
+                    value: "5".into(),
+                    if_version,
+                },
+                StoreOp::Delete {
+                    key: skey("step"),
+                    if_version,
+                },
+            ];
+            for op in writes {
+                assert_eq!(
+                    store_refusal(&mut r, s, op),
+                    not_claimed,
+                    "{if_version:?}: a refusal, not a missed condition"
+                );
+            }
+        }
+        // Nothing was written and no number was taken.
+        let (c, _) = claim(&mut r, KEY, false, t);
+        assert_eq!(
+            r.store(c, put("step", "5")).unwrap(),
+            stored(c, 1, vec![entry("step", "5", 1)])
+        );
+    }
+
+    #[test]
+    fn a_missed_condition_answers_with_the_current_entry_and_takes_no_number() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+        let cas = |value: &str, if_version| StoreOp::Put {
+            key: skey("counter"),
+            value: value.into(),
+            if_version: Some(if_version),
+        };
+        // Create-only: the first wins, the second learns the winner's entry.
+        assert_eq!(
+            r.store(c, cas("1", 0)).unwrap(),
+            stored(c, 1, vec![entry("counter", "1", 1)])
+        );
+        let lost = r.store(s, cas("1", 0)).unwrap();
+        assert_eq!(
+            lost,
+            Stored {
+                client: Some(c),
+                revision: 1,
+                applied: false,
+                entries: vec![entry("counter", "1", 1)],
+            }
+        );
+        // The loser retries against the version it was told about.
+        assert_eq!(
+            r.store(s, cas("2", 1)).unwrap(),
+            stored(c, 2, vec![entry("counter", "2", 2)]),
+            "the missed write took no number"
+        );
+        // A stale delete misses; a current one removes the entry.
+        let del = |if_version| StoreOp::Delete {
+            key: skey("counter"),
+            if_version: Some(if_version),
+        };
+        assert!(!r.store(c, del(1)).unwrap().applied);
+        assert_eq!(
+            r.store(c, del(2)).unwrap(),
+            stored(c, 3, vec![entry("counter", "2", 2)])
+        );
+        assert_eq!(
+            r.store(c, del(3)).unwrap(),
+            Stored {
+                client: Some(c),
+                revision: 3,
+                applied: false,
+                entries: vec![],
+            },
+            "a delete of an absent key at a version misses"
+        );
+        assert_eq!(r.store(c, del(0)).unwrap(), stored(c, 3, vec![]));
     }
 
     #[test]
@@ -1862,11 +1963,12 @@ mod tests {
                                     let op = StoreOp::Put {
                                         key: rng.pick(&keys).clone(),
                                         value: rng.text(20),
+                                        if_version: None,
                                     };
                                     let m = model.get_mut(&orphan).unwrap();
                                     match r.store(orphan, op.clone()) {
                                         Ok(reply) => {
-                                            let (StoreOp::Put { key, value }, [written]) =
+                                            let (StoreOp::Put { key, value, .. }, [written]) =
                                                 (op, reply.entries.as_slice())
                                             else {
                                                 panic!("iteration {i}: {reply:?}");
@@ -1910,8 +2012,12 @@ mod tests {
                         1 | 2 => StoreOp::Put {
                             key,
                             value: rng.text(60),
+                            if_version: None,
                         },
-                        3 => StoreOp::Delete { key },
+                        3 => StoreOp::Delete {
+                            key,
+                            if_version: None,
+                        },
                         _ => StoreOp::List,
                     };
                     let owner = match r.get(from) {
@@ -1942,7 +2048,7 @@ mod tests {
                             let expected = match op {
                                 StoreOp::Get { key } => Ok(m.get(&key)),
                                 StoreOp::List => Ok(m.list()),
-                                StoreOp::Put { key, value } => {
+                                StoreOp::Put { key, value, .. } => {
                                     let old =
                                         m.entries.get(&key).map_or(0, |(v, _)| entry_cost(&key, v));
                                     if m.bytes() - old + entry_cost(&key, &value) > BUDGET {
@@ -1961,7 +2067,7 @@ mod tests {
                                         Ok(vec![written])
                                     }
                                 }
-                                StoreOp::Delete { key } => {
+                                StoreOp::Delete { key, .. } => {
                                     let removed = m.get(&key);
                                     if m.entries.remove(&key).is_some() {
                                         m.revision = next_version;

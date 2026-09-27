@@ -67,6 +67,7 @@ async fn fifty_services_and_fifty_clients_pair_exchange_and_survive_churn() {
             let op = ops::StoreOp::Put {
                 key: step.clone(),
                 value: format!("step {i}"),
+                if_version: None,
             };
             ops::store(&cl.bound(), op, c.net()).await.unwrap();
         }

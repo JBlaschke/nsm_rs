@@ -338,8 +338,20 @@ impl fmt::Display for StoreKey {
 ///
 /// On the wire the operation's name is the `op` field and its own fields sit
 /// next to it, inside the message that carries it:
-/// `{"op":"put","key":"step","value":"5"}`, `{"op":"get","key":"step"}`,
-/// `{"op":"delete","key":"step"}` and `{"op":"list"}`.
+/// `{"op":"put","key":"step","value":"5","if_version":null}`,
+/// `{"op":"get","key":"step"}`,
+/// `{"op":"delete","key":"step","if_version":null}` and `{"op":"list"}`.
+///
+/// # Conditional writes
+///
+/// A put or a delete may state a condition in `if_version`, checked against
+/// the key's current state in the same step that applies the write:
+/// `Some(0)` means the key must not be set, `Some(n)` means the key's
+/// current version must be `n`, and `None` (the default, also when the field
+/// is left out) means no condition. Versions start at 1, so 0 never names an
+/// entry. A write whose condition does not hold is not an error: the reply is
+/// a [`Stored`] with `applied: false` carrying the key's current entry (or
+/// none when it is not set), and nothing changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum StoreOp {
@@ -356,12 +368,22 @@ pub enum StoreOp {
         key: StoreKey,
         /// The new value: any UTF-8 text, including empty text and newlines.
         value: String,
+        /// Write only if the key is at this version (0: only if it is not
+        /// set); `None` writes unconditionally. See [conditional
+        /// writes](StoreOp#conditional-writes).
+        #[serde(default)]
+        if_version: Option<u64>,
     },
     /// Remove one entry. Removing a key that is not set succeeds and changes
     /// nothing. The reply carries the removed entry, or no entry.
     Delete {
         /// The entry to remove.
         key: StoreKey,
+        /// Remove only if the key is at this version (0: only if it is not
+        /// set, which removes nothing); `None` removes unconditionally. See
+        /// [conditional writes](StoreOp#conditional-writes).
+        #[serde(default)]
+        if_version: Option<u64>,
     },
     /// Read every entry at once: one consistent snapshot, in ascending byte
     /// order of key.
@@ -383,8 +405,20 @@ impl StoreOp {
     /// The key the operation names; `None` for [`StoreOp::List`].
     pub fn key(&self) -> Option<&StoreKey> {
         match self {
-            StoreOp::Get { key } | StoreOp::Put { key, .. } | StoreOp::Delete { key } => Some(key),
+            StoreOp::Get { key } | StoreOp::Put { key, .. } | StoreOp::Delete { key, .. } => {
+                Some(key)
+            }
             StoreOp::List => None,
+        }
+    }
+
+    /// The condition a put or a delete states (see [conditional
+    /// writes](StoreOp#conditional-writes)); `None` for an unconditional
+    /// write and for the reads.
+    pub fn if_version(&self) -> Option<u64> {
+        match self {
+            StoreOp::Put { if_version, .. } | StoreOp::Delete { if_version, .. } => *if_version,
+            StoreOp::Get { .. } | StoreOp::List => None,
         }
     }
 
@@ -415,7 +449,8 @@ pub struct StoreEntry {
 /// operations layer returns it as is. What `entries` holds depends on the
 /// operation: for get, the entry or nothing; for put, the entry as written;
 /// for delete, the removed entry or nothing; for list, every entry in
-/// ascending byte order of key.
+/// ascending byte order of key; and for a conditional write whose condition
+/// did not hold (`applied: false`), the key's current entry or nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stored {
     /// Id of the client whose claim owns the store, so that a service whose
@@ -425,8 +460,20 @@ pub struct Stored {
     /// The number of the last write to this store, 0 for a store never
     /// written. A delete that removed something counts as a write.
     pub revision: u64,
+    /// False when a put or a delete stated an `if_version` that did not
+    /// match, so nothing changed; true for every other answer. Always sent;
+    /// a reply without it (from a broker that predates conditional writes)
+    /// decodes as true.
+    #[serde(default = "applied_by_default")]
+    pub applied: bool,
     /// The entries the operation returns.
     pub entries: Vec<StoreEntry>,
+}
+
+/// What a [`Stored`] reply without `applied` means: the operation was
+/// applied, as every operation was before conditional writes existed.
+fn applied_by_default() -> bool {
+    true
 }
 
 impl Stored {
@@ -440,6 +487,16 @@ impl Stored {
     /// (ascending for a list).
     pub fn keys(&self) -> impl Iterator<Item = &StoreKey> {
         self.entries.iter().map(|e| &e.key)
+    }
+
+    /// What the reply says about `key`: `step is at version 7` when it
+    /// carries the key's entry, `step is not set` when it does not. This is
+    /// how the front-ends explain a conditional write that was not applied.
+    pub fn key_state(&self, key: &StoreKey) -> String {
+        match self.get(key) {
+            Some(entry) => format!("{key} is at version {}", entry.version),
+            None => format!("{key} is not set"),
+        }
     }
 }
 
@@ -681,23 +738,52 @@ mod tests {
     fn store_op_names_and_keys() {
         let k = key("step");
         let ops = [
-            (StoreOp::Get { key: k.clone() }, "get", Some(&k), false),
+            (
+                StoreOp::Get { key: k.clone() },
+                "get",
+                Some(&k),
+                false,
+                None,
+            ),
             (
                 StoreOp::Put {
                     key: k.clone(),
                     value: "5".into(),
+                    if_version: None,
                 },
                 "put",
                 Some(&k),
                 true,
+                None,
             ),
-            (StoreOp::Delete { key: k.clone() }, "delete", Some(&k), true),
-            (StoreOp::List, "list", None, false),
+            (
+                StoreOp::Put {
+                    key: k.clone(),
+                    value: "5".into(),
+                    if_version: Some(0),
+                },
+                "put",
+                Some(&k),
+                true,
+                Some(0),
+            ),
+            (
+                StoreOp::Delete {
+                    key: k.clone(),
+                    if_version: Some(7),
+                },
+                "delete",
+                Some(&k),
+                true,
+                Some(7),
+            ),
+            (StoreOp::List, "list", None, false, None),
         ];
-        for (op, kind, named, write) in &ops {
+        for (op, kind, named, write, condition) in &ops {
             assert_eq!(op.kind(), *kind);
             assert_eq!(op.key(), *named, "{kind}");
             assert_eq!(op.is_write(), *write, "{kind}");
+            assert_eq!(op.if_version(), *condition, "{kind}");
             let json = serde_json::to_value(op).unwrap();
             assert_eq!(json["op"], *kind, "{json}");
         }
@@ -705,13 +791,46 @@ mod tests {
 
     #[test]
     fn store_op_json_shape() {
-        let put = StoreOp::Put {
+        let put = |if_version| StoreOp::Put {
             key: key("step"),
             value: "5".into(),
+            if_version,
         };
+        let delete = |if_version| StoreOp::Delete {
+            key: key("step"),
+            if_version,
+        };
+        // Like every `Option`, an absent condition is sent as null.
+        for (op, json) in [
+            (
+                put(None),
+                r#"{"op":"put","key":"step","value":"5","if_version":null}"#,
+            ),
+            (
+                put(Some(0)),
+                r#"{"op":"put","key":"step","value":"5","if_version":0}"#,
+            ),
+            (
+                delete(None),
+                r#"{"op":"delete","key":"step","if_version":null}"#,
+            ),
+            (
+                delete(Some(u64::MAX)),
+                r#"{"op":"delete","key":"step","if_version":18446744073709551615}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&op).unwrap(), json);
+            assert_eq!(serde_json::from_str::<StoreOp>(json).unwrap(), op, "{json}");
+        }
+        // A write without the field is unconditional, as before conditions
+        // existed.
         assert_eq!(
-            serde_json::to_string(&put).unwrap(),
-            r#"{"op":"put","key":"step","value":"5"}"#
+            serde_json::from_str::<StoreOp>(r#"{"op":"put","key":"step","value":"5"}"#).unwrap(),
+            put(None)
+        );
+        assert_eq!(
+            serde_json::from_str::<StoreOp>(r#"{"op":"delete","key":"step"}"#).unwrap(),
+            delete(None)
         );
         assert_eq!(
             serde_json::to_string(&StoreOp::List).unwrap(),
@@ -729,6 +848,9 @@ mod tests {
             r#"{"op":"increment","key":"step"}"#,
             r#"{"key":"step"}"#,
             r#"{"op":"put","key":"step","value":5}"#,
+            r#"{"op":"put","key":"step","value":"5","if_version":-1}"#,
+            r#"{"op":"put","key":"step","value":"5","if_version":"3"}"#,
+            r#"{"op":"delete","key":"step","if_version":1.5}"#,
         ] {
             assert!(serde_json::from_str::<StoreOp>(bad).is_err(), "{bad}");
         }
@@ -739,6 +861,7 @@ mod tests {
         let stored = Stored {
             client: Some(PartyId(2)),
             revision: 7,
+            applied: true,
             entries: vec![
                 StoreEntry {
                     key: key("a"),
@@ -757,12 +880,14 @@ mod tests {
         assert_eq!(stored.get(&key("c")), None);
         let keys: Vec<&str> = stored.keys().map(StoreKey::as_str).collect();
         assert_eq!(keys, ["a", "b"]);
+        assert_eq!(stored.key_state(&key("b")), "b is at version 7");
+        assert_eq!(stored.key_state(&key("c")), "c is not set");
 
         let json = serde_json::to_string(&stored).unwrap();
         assert_eq!(
             json,
             concat!(
-                r#"{"client":2,"revision":7,"entries":["#,
+                r#"{"client":2,"revision":7,"applied":true,"entries":["#,
                 r#"{"key":"a","value":"","version":3},"#,
                 r#"{"key":"b","value":"two\nlines","version":7}]}"#
             )
@@ -772,12 +897,44 @@ mod tests {
         let unclaimed = Stored {
             client: None,
             revision: 0,
+            applied: true,
             entries: vec![],
         };
         assert_eq!(
             serde_json::to_string(&unclaimed).unwrap(),
-            r#"{"client":null,"revision":0,"entries":[]}"#
+            r#"{"client":null,"revision":0,"applied":true,"entries":[]}"#
         );
         assert_eq!(unclaimed.keys().count(), 0);
+    }
+
+    #[test]
+    fn stored_says_whether_a_write_was_applied_and_defaults_to_yes() {
+        let refused = Stored {
+            client: Some(PartyId(2)),
+            revision: 9,
+            applied: false,
+            entries: vec![StoreEntry {
+                key: key("step"),
+                value: "5".into(),
+                version: 7,
+            }],
+        };
+        let json = r#"{"client":2,"revision":9,"applied":false,"entries":[{"key":"step","value":"5","version":7}]}"#;
+        assert_eq!(serde_json::to_string(&refused).unwrap(), json);
+        assert_eq!(serde_json::from_str::<Stored>(json).unwrap(), refused);
+        assert_eq!(refused.key_state(&key("step")), "step is at version 7");
+
+        // A reply from a broker that predates conditional writes has no
+        // `applied`: every operation it answered was applied.
+        let old: Stored =
+            serde_json::from_str(r#"{"client":2,"revision":9,"entries":[]}"#).unwrap();
+        assert!(old.applied);
+        for bad in [
+            r#"{"client":2,"revision":9,"applied":null,"entries":[]}"#,
+            r#"{"client":2,"revision":9,"applied":"false","entries":[]}"#,
+            r#"{"client":2,"revision":9,"applied":0,"entries":[]}"#,
+        ] {
+            assert!(serde_json::from_str::<Stored>(bad).is_err(), "{bad}");
+        }
     }
 }

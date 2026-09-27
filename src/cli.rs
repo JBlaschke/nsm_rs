@@ -522,14 +522,33 @@ impl StoreCommand {
                 json,
                 tls,
                 timing,
-            } => (party, StoreOp::Put { key, value }, tls, timing, json),
+            } => (
+                party,
+                StoreOp::Put {
+                    key,
+                    value,
+                    if_version: None,
+                },
+                tls,
+                timing,
+                json,
+            ),
             StoreCommand::Delete {
                 party,
                 key,
                 json,
                 tls,
                 timing,
-            } => (party, StoreOp::Delete { key }, tls, timing, json),
+            } => (
+                party,
+                StoreOp::Delete {
+                    key,
+                    if_version: None,
+                },
+                tls,
+                timing,
+                json,
+            ),
             StoreCommand::List {
                 party,
                 json,
@@ -649,7 +668,8 @@ mod tests {
             op,
             StoreOp::Put {
                 key: store_key("step"),
-                value: "5".into()
+                value: "5".into(),
+                if_version: None,
             }
         );
         assert!(json);
@@ -659,7 +679,8 @@ mod tests {
         assert_eq!(
             op,
             StoreOp::Delete {
-                key: store_key("step")
+                key: store_key("step"),
+                if_version: None,
             }
         );
         assert!(json);
@@ -681,7 +702,8 @@ mod tests {
                 op,
                 StoreOp::Put {
                     key: store_key("step"),
-                    value: value.into()
+                    value: value.into(),
+                    if_version: None,
                 },
                 "{value:?}"
             );

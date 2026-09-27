@@ -329,6 +329,7 @@ mod tests {
         Message::Stored(Stored {
             client: Some(PartyId(4)),
             revision: 9,
+            applied: true,
             entries: vec![StoreEntry {
                 key: store_key("step"),
                 value: "5 \"quoted\"\n".into(),
@@ -367,6 +368,7 @@ mod tests {
                     StoreOp::Put {
                         key: store_key("step"),
                         value: "5".into(),
+                        if_version: Some(0),
                     },
                 ] {
                     assert_eq!(
@@ -403,12 +405,15 @@ mod tests {
                 let get = StoreOp::Get {
                     key: store_key("step"),
                 };
+                // Conditions travel to the broker unchanged, like the rest.
                 let put = StoreOp::Put {
                     key: store_key("step"),
                     value: "6".into(),
+                    if_version: Some(9),
                 };
                 let delete = StoreOp::Delete {
                     key: store_key("step"),
+                    if_version: Some(0),
                 };
 
                 // `stored` comes back exactly as the broker sent it.
@@ -507,6 +512,7 @@ mod tests {
             Message::Stored(Stored {
                 client: None,
                 revision: 0,
+                applied: true,
                 entries: vec![],
             }),
         ] {

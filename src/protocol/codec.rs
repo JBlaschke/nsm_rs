@@ -424,9 +424,11 @@ mod tests {
             1 => StoreOp::Put {
                 key: rng.store_key(),
                 value: rng.text(300),
+                if_version: rng.if_version(),
             },
             2 => StoreOp::Delete {
                 key: rng.store_key(),
+                if_version: rng.if_version(),
             },
             _ => StoreOp::List,
         }
@@ -503,6 +505,7 @@ mod tests {
             14 => Message::Stored(Stored {
                 client: rng.chance(2).then(|| PartyId(rng.next_u64())),
                 revision: rng.next_u64(),
+                applied: rng.chance(2),
                 entries: (0..rng.below(4))
                     .map(|_| StoreEntry {
                         key: rng.store_key(),

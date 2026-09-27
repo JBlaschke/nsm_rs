@@ -143,6 +143,17 @@ impl Rng {
         }
     }
 
+    /// A condition for a conditional store write: none, "not set" (0), a
+    /// small version or any version, each a quarter of the time.
+    pub(crate) fn if_version(&mut self) -> Option<u64> {
+        match self.below(4) {
+            0 => None,
+            1 => Some(0),
+            2 => Some(self.range(1, 8) as u64),
+            _ => Some(self.next_u64()),
+        }
+    }
+
     pub(crate) fn token(&mut self) -> RegToken {
         let mut bytes = [0u8; 16];
         bytes[..8].copy_from_slice(&self.next_u64().to_le_bytes());

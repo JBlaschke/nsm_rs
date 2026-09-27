@@ -257,6 +257,8 @@ pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
 ///
 /// The answer names the claim's client and carries what the operation
 /// returns; a key that is not set is an answer with no entry, not an error.
+/// So is a put or a delete whose `if_version` did not match: the answer has
+/// `applied: false` and the key's current entry, or none when it is not set.
 /// A refusal (the party is not registered yet, a service nobody holds tried
 /// to write, the store is full, the party's registration is gone) is an
 /// [`Error::Rejected`] with the reason.

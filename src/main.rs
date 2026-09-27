@@ -326,7 +326,7 @@ async fn store(command: StoreCommand) -> Result<ExitCode> {
             })?;
             lines.push(entry.version.to_string());
         }
-        StoreOp::Delete { key } => match stored.get(key) {
+        StoreOp::Delete { key, .. } => match stored.get(key) {
             Some(_) => eprintln!("nsm: deleted {key}"),
             None => eprintln!("nsm: {key} was not set"),
         },

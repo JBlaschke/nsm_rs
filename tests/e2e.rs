@@ -504,12 +504,14 @@ fn put(key: &str, value: &str) -> StoreOp {
     StoreOp::Put {
         key: store_key(key),
         value: value.into(),
+        if_version: None,
     }
 }
 
 fn delete(key: &str) -> StoreOp {
     StoreOp::Delete {
         key: store_key(key),
+        if_version: None,
     }
 }
 
@@ -690,6 +692,7 @@ async fn unclaimed_service_reads_an_empty_store_and_may_not_write() {
         let empty = Stored {
             client: None,
             revision: 0,
+            applied: true,
             entries: vec![],
         };
         assert_eq!(store(&c, &service, get("step")).await, empty);

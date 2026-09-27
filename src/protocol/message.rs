@@ -58,7 +58,9 @@ use crate::net::Addr;
 ///
 /// Version 3 also carries [`Store`](Message::Store),
 /// [`StoreRelay`](Message::StoreRelay) and [`Stored`](Message::Stored), added
-/// later as new variants, which needs no bump.
+/// later as new variants, and the optional `if_version` of a put or a delete
+/// with `applied` on `stored`, added later still as fields that decode when
+/// absent; neither needs a bump.
 pub const PROTOCOL_VERSION: u16 = 3;
 
 /// One wire message: a request to the broker or to a party, or a reply.
@@ -185,9 +187,11 @@ pub enum Message {
     /// a service uses the store of the client holding it. A service nobody
     /// holds reads an empty store (`client: null`) and may not write.
     ///
-    /// Reply: [`Message::Stored`], or [`Message::Nack`] when `from`/`token`
-    /// do not name a registered party, a service nobody holds tries to
-    /// write, or a put does not fit the store's budget.
+    /// Reply: [`Message::Stored`], with `applied: false` when a put or a
+    /// delete stated an `if_version` that did not match (see
+    /// [`StoreOp`]), or [`Message::Nack`] when `from`/`token` do not name a
+    /// registered party, a service nobody holds tries to write, or a put
+    /// does not fit the store's budget.
     StoreRelay {
         /// Id of the relaying party.
         from: PartyId,
@@ -299,9 +303,10 @@ pub enum Message {
     },
 
     /// Reply to [`Message::StoreRelay`] and [`Message::Store`]: whose store
-    /// it is, its revision and the entries the operation returns. The
-    /// fields of the [`Stored`] record sit next to `type` on the wire:
-    /// `{"type":"stored","client":2,"revision":3,"entries":[...]}`.
+    /// it is, its revision, whether a write was applied and the entries the
+    /// operation returns. The fields of the [`Stored`] record sit next to
+    /// `type` on the wire:
+    /// `{"type":"stored","client":2,"revision":3,"applied":true,"entries":[...]}`.
     Stored(Stored),
 
     /// Negative reply to any request: the request was understood but cannot
@@ -439,16 +444,19 @@ pub(crate) fn all_variants() -> Vec<Message> {
             op: StoreOp::Put {
                 key: store_key("step"),
                 value: "5 \"quoted\"\n".into(),
+                if_version: Some(8),
             },
         },
         Message::Store {
             op: StoreOp::Delete {
                 key: store_key("input/path"),
+                if_version: Some(0),
             },
         },
         Message::Stored(Stored {
             client: Some(PartyId(4)),
             revision: 9,
+            applied: false,
             entries: vec![StoreEntry {
                 key: store_key("step"),
                 value: String::new(),
@@ -764,8 +772,17 @@ mod tests {
                 StoreOp::Put {
                     key: store_key("step"),
                     value: "5".into(),
+                    if_version: None,
                 },
-                r#"{"type":"store","op":"put","key":"step","value":"5"}"#,
+                r#"{"type":"store","op":"put","key":"step","value":"5","if_version":null}"#,
+            ),
+            (
+                StoreOp::Put {
+                    key: store_key("step"),
+                    value: "5".into(),
+                    if_version: Some(0),
+                },
+                r#"{"type":"store","op":"put","key":"step","value":"5","if_version":0}"#,
             ),
             (
                 StoreOp::Get {
@@ -776,8 +793,16 @@ mod tests {
             (
                 StoreOp::Delete {
                     key: store_key("step"),
+                    if_version: None,
                 },
-                r#"{"type":"store","op":"delete","key":"step"}"#,
+                r#"{"type":"store","op":"delete","key":"step","if_version":null}"#,
+            ),
+            (
+                StoreOp::Delete {
+                    key: store_key("step"),
+                    if_version: Some(7),
+                },
+                r#"{"type":"store","op":"delete","key":"step","if_version":7}"#,
             ),
             (StoreOp::List, r#"{"type":"store","op":"list"}"#),
         ];
@@ -788,14 +813,36 @@ mod tests {
         }
         // Field order does not matter, and the tag may come last.
         assert_eq!(
-            decode(r#"{"value":"","key":"k","op":"put","type":"store"}"#).unwrap(),
+            decode(r#"{"value":"","if_version":3,"key":"k","op":"put","type":"store"}"#).unwrap(),
             Message::Store {
                 op: StoreOp::Put {
                     key: store_key("k"),
                     value: String::new(),
+                    if_version: Some(3),
                 },
             }
         );
+        // Like every `Option`, a missing condition decodes as `None`: a write
+        // from a peer that predates conditional writes is unconditional.
+        for (json, op) in [
+            (
+                r#"{"type":"store","op":"put","key":"k","value":"v"}"#,
+                StoreOp::Put {
+                    key: store_key("k"),
+                    value: "v".into(),
+                    if_version: None,
+                },
+            ),
+            (
+                r#"{"type":"store","op":"delete","key":"k"}"#,
+                StoreOp::Delete {
+                    key: store_key("k"),
+                    if_version: None,
+                },
+            ),
+        ] {
+            assert_eq!(decode(json).unwrap(), Message::Store { op }, "{json}");
+        }
     }
 
     #[test]
@@ -807,13 +854,34 @@ mod tests {
             op: StoreOp::Put {
                 key: store_key("step"),
                 value: "5".into(),
+                if_version: Some(4),
             },
         };
         let json = format!(
-            r#"{{"type":"store_relay","from":2,"token":"{hex}","op":"put","key":"step","value":"5"}}"#
+            r#"{{"type":"store_relay","from":2,"token":"{hex}","op":"put","key":"step","value":"5","if_version":4}}"#
         );
         assert_eq!(serde_json::to_string(&msg).unwrap(), json);
         assert_eq!(decode(&json).unwrap(), msg);
+        let unconditional = Message::StoreRelay {
+            from: PartyId(2),
+            token: test_token(),
+            op: StoreOp::Delete {
+                key: store_key("step"),
+                if_version: None,
+            },
+        };
+        let json = format!(
+            r#"{{"type":"store_relay","from":2,"token":"{hex}","op":"delete","key":"step","if_version":null}}"#
+        );
+        assert_eq!(serde_json::to_string(&unconditional).unwrap(), json);
+        assert_eq!(decode(&json).unwrap(), unconditional);
+        assert_eq!(
+            decode(&format!(
+                r#"{{"type":"store_relay","from":2,"token":"{hex}","op":"delete","key":"step"}}"#
+            ))
+            .unwrap(),
+            unconditional
+        );
         let list = Message::StoreRelay {
             from: PartyId(2),
             token: test_token(),
@@ -831,20 +899,38 @@ mod tests {
         let msg = Message::from(Stored {
             client: Some(PartyId(2)),
             revision: 3,
+            applied: true,
             entries: vec![StoreEntry {
                 key: store_key("step"),
                 value: "5".into(),
                 version: 3,
             }],
         });
-        let json = r#"{"type":"stored","client":2,"revision":3,"entries":[{"key":"step","value":"5","version":3}]}"#;
+        let json = r#"{"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"step","value":"5","version":3}]}"#;
         assert_eq!(serde_json::to_string(&msg).unwrap(), json);
         assert_eq!(decode(json).unwrap(), msg);
+        // `applied` is always sent, and a reply without it decodes as
+        // applied: the field was added compatibly.
+        assert_eq!(
+            decode(r#"{"type":"stored","client":2,"revision":3,"entries":[{"key":"step","value":"5","version":3}]}"#)
+                .unwrap(),
+            msg
+        );
+        let refused = Message::from(Stored {
+            client: Some(PartyId(2)),
+            revision: 5,
+            applied: false,
+            entries: vec![],
+        });
+        let json = r#"{"type":"stored","client":2,"revision":5,"applied":false,"entries":[]}"#;
+        assert_eq!(serde_json::to_string(&refused).unwrap(), json);
+        assert_eq!(decode(json).unwrap(), refused);
 
-        let empty = r#"{"type":"stored","client":null,"revision":0,"entries":[]}"#;
+        let empty = r#"{"type":"stored","client":null,"revision":0,"applied":true,"entries":[]}"#;
         let unclaimed = Message::Stored(Stored {
             client: None,
             revision: 0,
+            applied: true,
             entries: vec![],
         });
         assert_eq!(serde_json::to_string(&unclaimed).unwrap(), empty);
@@ -902,6 +988,9 @@ mod tests {
                 r#"{"type":"stored","client":1,"revision":-1,"entries":[]}"#,
                 r#"{"type":"stored","client":1,"revision":0,"entries":[{"key":"k","value":"v"}]}"#,
                 r#"{"type":"stored","client":1,"revision":0,"entries":[{"key":"-k","value":"v","version":1}]}"#,
+                r#"{"type":"stored","client":1,"revision":0,"applied":"yes","entries":[]}"#,
+                r#"{"type":"store","op":"put","key":"k","value":"v","if_version":-1}"#,
+                r#"{"type":"store","op":"delete","key":"k","if_version":"1"}"#,
             ]
             .map(str::to_owned),
         );
@@ -938,10 +1027,10 @@ mod tests {
                 },
             }
         );
-        match decode(r#"{"type":"stored","client":1,"revision":0,"entries":[],"applied":true}"#)
+        match decode(r#"{"type":"stored","client":1,"revision":0,"entries":[],"writer":"client"}"#)
             .unwrap()
         {
-            Message::Stored(stored) => assert!(stored.entries.is_empty()),
+            Message::Stored(stored) => assert!(stored.entries.is_empty() && stored.applied),
             other => panic!("{other:?}"),
         }
     }

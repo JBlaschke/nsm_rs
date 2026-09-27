@@ -412,6 +412,7 @@ mod tests {
             let put = |value: &str| StoreOp::Put {
                 key: store_key("step"),
                 value: value.into(),
+                if_version: None,
             };
             let nack = |reason: &str| Message::nack(reason);
 
@@ -437,6 +438,7 @@ mod tests {
                 Message::Stored(Stored {
                     client: None,
                     revision: 0,
+                    applied: true,
                     entries: vec![],
                 })
             );
@@ -467,6 +469,7 @@ mod tests {
                 Message::Stored(Stored {
                     client: Some(client),
                     revision: 1,
+                    applied: true,
                     entries: vec![written.clone()],
                 })
             );
@@ -486,6 +489,7 @@ mod tests {
                 Message::Stored(Stored {
                     client: Some(client),
                     revision: 1,
+                    applied: true,
                     entries: vec![written],
                 }),
                 "the service reads the client's write"
@@ -651,6 +655,7 @@ mod tests {
             Message::Stored(crate::protocol::Stored {
                 client: None,
                 revision: 0,
+                applied: true,
                 entries: vec![],
             }),
         ] {
