@@ -10,12 +10,6 @@ One binary, `nsm`, is the broker, the service side, the client side and a REST
 control plane. It speaks four transports (raw TCP, TCP+TLS, HTTP, HTTPS) with
 one protocol.
 
-> **Status: mid-cleanup.** The backend was rewritten in 2026-09 (see
-> [`docs/PLAN.md`](docs/PLAN.md) and [the audit](docs/audit/README.md)). The
-> wire format, the binary name and several defaults changed; parties and
-> brokers must run the same version. [`CHANGELOG.md`](./CHANGELOG.md) lists
-> every breaking change.
-
 ## Contents
 
 - [Building](#building)
@@ -260,8 +254,8 @@ is reported as such.
 Certificates must name the host the peers dial (`127.0.0.1` and `localhost`
 for local tests; the node's DNS name or IP on a cluster). TLS 1.2 and 1.3 are
 accepted; HTTP transports negotiate `http/1.1` through ALPN. Mutual TLS
-(authenticating parties to the broker by certificate) is not implemented yet;
-see the plan.
+(authenticating parties to the broker by certificate) is not implemented yet
+([#7](https://github.com/JBlaschke/nsm_rs/issues/7)).
 
 ## REST control plane
 
@@ -372,7 +366,7 @@ cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 | [`docs/REST_API.md`](docs/REST_API.md) | the control plane's routes, bodies and status codes |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | building, testing, dependency and protocol changes |
 | [`CHANGELOG.md`](./CHANGELOG.md) | what changed, including every breaking change |
-| [`docs/PLAN.md`](docs/PLAN.md), [`docs/audit/`](docs/audit/README.md) | the cleanup plan and the audit behind it |
+| [`docs/history/2026-refactor/`](docs/history/2026-refactor/PLAN.md) | the 2026 refactor: its plan, its audit of the previous code, and the decisions D1 to D12 the code cites |
 
 API documentation (`cargo doc`) and these pages are published by CI to
 <https://jblaschke.github.io/nsm_rs/> (the repository's Pages source must be

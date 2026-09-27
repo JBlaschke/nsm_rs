@@ -1,6 +1,13 @@
-# NSM cleanup plan
+# The 2026 refactor: plan and record
 
-Written 2026-09-24 against `main` at `edd23a33`. Companion document: [the audit](audit/README.md), which holds every finding this plan responds to.
+> This is the plan that drove the September 2026 refactor, kept as a record.
+> It was written on 2026-09-24 against `main` at `edd23a33`, executed on the
+> branches `cleanup/01` to `cleanup/09`, and merged through
+> [#1](https://github.com/JBlaschke/nsm_rs/pull/1). The status table in
+> section 0 is final. The decisions in section 3 live on in
+> [`ARCHITECTURE.md`](../../ARCHITECTURE.md) under "Design decisions"; the
+> items in sections 2 and 7 became issues. The audit this plan answers is in
+> [`audit/`](audit/README.md).
 
 ## 0. Status
 
@@ -30,13 +37,13 @@ The way out is not to tidy the two copies but to write the backend once, against
 
 ## 2. Things that need your action, independent of the code
 
-These are outside what a branch can fix.
+These were outside what a branch could fix. Where they are still open they are issues now.
 
-1. **Rotate the TLS key.** `server.key` and `server.csr` were committed in `01a90972` (2025-01-03) and deleted in `ca85e236`, but the blobs remain reachable from `origin/main`, `origin/jpb/sync` and `origin/jpb/sync1`. Treat the certificate that key backs as compromised.
-2. **Decide on a history rewrite.** The pack is 330 MB, dominated by `target 2/` and `target 3/` debug binaries (20 to 32 MB each), the Docker tarball, `docs/` and `vendor/`. A one-time `git filter-repo` pass would shrink it to single-digit megabytes and remove the key, but it changes every commit hash and requires collaborators to re-clone. This plan does not perform the rewrite; branch 01 removes the files from the tip so a rewrite later is a pure history operation.
-3. **Switch GitHub Pages to "GitHub Actions".** Pages currently serves the stale rustdoc from `main:/docs` in legacy mode. Branch 01 deletes `docs/` (generated HTML) and adds a Pages workflow; the docs site will be empty until the repository setting is flipped (Settings, Pages, Source).
-4. **Choose a license.** Done 2026-09-24: the BSD 3-Clause License, in `LICENSE` and the `license` field of `Cargo.toml` (branch `cleanup/08-license`). The copyright line names Johannes Blaschke for 2024 to 2026; if the work belongs to an institution (NERSC software is often held by The Regents of the University of California through LBNL), that line is the one to change.
-5. **Delete stale remote branches** once you have confirmed nothing on them is wanted: `condvar` (one broken experiment), `sofia_nsm_rs` (one commit deleting a script), and the fully merged `rest_api`, `jpb/code_cleanup`, `jpb/sync`, `jpb/sync1`, `merge`.
+1. **The TLS key committed in `01a90972`.** The maintainer confirmed the material was test-only; whether a CA ever issued a certificate for its CSR (`nsm-dev.lbl.gov`) decides if anything needs rotating: [#5](https://github.com/JBlaschke/nsm_rs/issues/5).
+2. **History rewrite** of the 345 MiB pack: [#3](https://github.com/JBlaschke/nsm_rs/issues/3).
+3. **GitHub Pages source.** The Docs workflow deploys the rendered guides and rustdoc; switching the repository's Pages source to "GitHub Actions" retires the legacy Jekyll build of `docs/` that still runs alongside it.
+4. **License.** Done: the BSD 3-Clause License (`cleanup/08-license`); the copyright holder line is [#6](https://github.com/JBlaschke/nsm_rs/issues/6).
+5. **Stale remote branches:** [#4](https://github.com/JBlaschke/nsm_rs/issues/4).
 
 ## 3. Decisions taken in this plan
 
@@ -119,7 +126,7 @@ Branches are stacked: each is based on the previous one, so PR *n+1* reviews as 
 
 Behaviour-neutral. Makes the repository reviewable and gives later branches a CI gate.
 
-- Add `docs/PLAN.md` (this file) and `docs/audit/`.
+- Add `docs/history/2026-refactor/PLAN.md` (this file) and `docs/audit/`.
 - Remove from the tip: `nsm-dev-buildx-latest.tar`, `src/.DS_Store`, `.env` (replaced by `.env.example`), the generated rustdoc under `docs/`, `src/test_event_monitor.sh` (targets a binary and CLI syntax that no longer exist), `README.Docker.md` (folded into `README.md`).
 - Rewrite `.gitignore` (fix the `server.keyl` and `.yam` typos; ignore `.env`, `.DS_Store`, key material, archives, `target*/`).
 - Move `view-events-rolebinding.yaml` to `deploy/k8s/` with a note about the ignored `Role` it pairs with.
@@ -197,7 +204,7 @@ The dependency bump you asked for, last, with tests in place to catch regression
 
 ## 7. Out of scope (follow-ups after 07)
 
-- Peer authentication (mTLS or per-key secrets) and authorisation of `publish`/`claim` by identity. The audit rates the missing authentication critical; this plan removes the ways it can crash the broker and stops trust anchors travelling in the payload, but does not add identity.
-- Message queueing semantics beyond "last message wins" for `send`/`collect`.
-- Kubernetes deployment manifests beyond the moved RoleBinding.
+- Peer authentication (mTLS or per-key secrets) and authorisation of `publish`/`claim` by identity: [#7](https://github.com/JBlaschke/nsm_rs/issues/7). The audit rates the missing authentication critical; this plan removed the ways it can crash the broker and stopped trust anchors travelling in the payload, but did not add identity.
+- Message queueing semantics beyond "last message wins" for `send`/`collect`: [#8](https://github.com/JBlaschke/nsm_rs/issues/8).
+- Kubernetes deployment manifests beyond the moved RoleBinding: [#9](https://github.com/JBlaschke/nsm_rs/issues/9).
 - The git history rewrite and remote branch deletion (section 2).

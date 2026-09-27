@@ -13,5 +13,5 @@ Before reusing it:
 - Prefer a dedicated ServiceAccount for the broker pod over `default`, and set
   `automountServiceAccountToken: false` unless the pod needs the API.
 
-Deployment and Service manifests for the broker are a follow-up item in
-[the cleanup plan](../../docs/PLAN.md).
+Deployment and Service manifests for the broker are a follow-up:
+[#9](https://github.com/JBlaschke/nsm_rs/issues/9).
