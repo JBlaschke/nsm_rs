@@ -240,12 +240,14 @@ pub enum Message {
 
     /// Apply `op` to the store a party shares with its peer.
     ///
-    /// Sent by the store operations to either party's bind address. The
-    /// party keeps no copy: it relays the operation to the broker as
-    /// [`Message::StoreRelay`] and passes the broker's answer back.
+    /// Meant for either party's bind address. The party keeps no copy: it
+    /// relays the operation to the broker as [`Message::StoreRelay`] and
+    /// passes the broker's answer back.
     ///
     /// Reply: [`Message::Stored`], or [`Message::Nack`] when the party has
-    /// not registered yet or the broker refused the operation.
+    /// not registered yet or the broker refused the operation. Parties do
+    /// not relay it yet: in this version a party answers it with the
+    /// [`Message::Nack`] `unexpected store at a service` (or `client`).
     Store {
         /// The operation, its fields next to `type` on the wire.
         #[serde(flatten)]

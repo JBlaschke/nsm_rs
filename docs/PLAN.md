@@ -89,7 +89,9 @@ that knows who is paired with whom.
   (sharing, re-pairing, the claim ending, an unclaimed service, tokens,
   concurrent writers, a full store, "write, then send"); stress traffic.
 - Docs: `docs/ARCHITECTURE.md` (roles, components, security model),
-  `docs/PROTOCOL.md` (sequences), `CHANGELOG.md`.
+  `docs/PROTOCOL.md` (sequences), `CHANGELOG.md`; remove the "parties do
+  not relay `store` yet" caveat from `docs/PROTOCOL.md` and from the rustdoc
+  of `Message::Store`.
 
 ### `store/03-cli-and-rest`
 
