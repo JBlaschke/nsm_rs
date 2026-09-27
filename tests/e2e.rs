@@ -104,15 +104,20 @@ async fn dead_service_is_removed_and_its_client_repaired() {
         let client = c.claim(5).await;
         let first = client.service().unwrap();
         assert_eq!(first.id, s1.id(), "lowest id first");
+        let mut pairings = client.pairings();
+        assert_eq!(pairings.borrow_and_update().clone(), Some(first.clone()));
 
         // Kill the first service without telling the broker.
         c.kill(s1).await;
         c.wait_until(|snap| !snap.iter().any(|p| p.id == first.id))
             .await;
 
-        // The client learns its new service on the next heartbeat.
-        c.wait_until_true(|| client.service().map(|h| h.id) == Some(s2.id()))
-            .await;
+        // The client learns its new service on the next heartbeat; the
+        // pairing receiver wakes up with it.
+        pairings.changed().await.unwrap();
+        let repaired = pairings.borrow_and_update().clone();
+        assert_eq!(repaired.map(|h| h.id), Some(s2.id()));
+        assert_eq!(client.service().map(|h| h.id), Some(s2.id()));
         let collected = ops::collect(&client.bound(), c.net()).await.unwrap();
         assert!(
             matches!(&collected, ops::Collected::Client { service: Some(h) } if h.id == s2.id()),

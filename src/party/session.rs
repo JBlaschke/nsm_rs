@@ -10,6 +10,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use tokio::sync::watch;
 use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -181,6 +182,14 @@ impl Session {
     /// For a client: the service it is paired with (updated on re-pairing).
     pub fn service(&self) -> Option<ServiceHandle> {
         self.state.service()
+    }
+
+    /// For a client: a receiver of its pairings. `borrow` is the current
+    /// service and `changed` resolves when the broker re-pairs the client
+    /// after its service went away, so a caller can follow the pairing
+    /// instead of polling [`Session::service`].
+    pub fn pairings(&self) -> watch::Receiver<Option<ServiceHandle>> {
+        self.state.pairings()
     }
 
     /// Shared state, for inspection.

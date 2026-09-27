@@ -531,6 +531,58 @@ fn full_session_over_tcp() {
     full_session("tcp");
 }
 
+/// A client prints one stdout line per pairing: when its service dies and
+/// the broker re-pairs it, the new address follows the first one, so a
+/// script that keeps reading always holds the current service.
+#[test]
+fn claim_prints_a_line_for_every_pairing() {
+    let mut broker = Proc::spawn(
+        "listen",
+        &argv(&[&["listen", "--bind-port", "0"], IFACE, FAST]),
+    );
+    let line = broker.stderr_line_containing("broker listening on ");
+    let broker_addr = line.rsplit(' ').next().unwrap().to_owned();
+    let publish = |name: &'static str, port: &str| {
+        let mut service = Proc::spawn(
+            name,
+            &argv(&[
+                &[
+                    "publish",
+                    &broker_addr,
+                    "--bind-port",
+                    "0",
+                    "--service-port",
+                    port,
+                    "--key",
+                    "77",
+                ],
+                IFACE,
+                FAST,
+            ]),
+        );
+        // Registered in order, so the first one has the lowest id.
+        service.stderr_line_containing("service registered as ");
+        service
+    };
+    let mut first = publish("publish-1", "9001");
+    let _second = publish("publish-2", "9002");
+
+    let mut client = Proc::spawn(
+        "claim",
+        &argv(&[
+            &["claim", &broker_addr, "--bind-port", "0", "--key", "77"],
+            IFACE,
+            FAST,
+        ]),
+    );
+    assert_eq!(client.stdout_line(), "127.0.0.1:9001", "lowest id first");
+
+    // The first service dies without a word. The broker notices, re-pairs
+    // the client with the spare, and the client reports the new address.
+    first.kill();
+    assert_eq!(client.stdout_line(), "127.0.0.1:9002");
+}
+
 #[test]
 fn full_session_over_http() {
     full_session("http");

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
 use tempfile::TempDir;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -98,6 +99,9 @@ impl Party {
     }
     pub fn service(&self) -> Option<ServiceHandle> {
         self.state.service()
+    }
+    pub fn pairings(&self) -> watch::Receiver<Option<ServiceHandle>> {
+        self.state.pairings()
     }
     pub fn take_session(&self) -> Session {
         self.session

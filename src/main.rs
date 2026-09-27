@@ -178,7 +178,9 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
                 net: net_opts(&tls, &timing, &LimitsOpts::default()),
             })
             .await?;
-            match session.service() {
+            let mut pairings = session.pairings();
+            let first = pairings.borrow_and_update().clone();
+            match first {
                 // The service address is the one line of stdout a script needs.
                 Some(service) => println!("{service}"),
                 None => eprintln!("nsm: paired, but the broker sent no service handle"),
@@ -188,6 +190,16 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
                 session.id(),
                 session.bound()
             );
+            // Every re-pairing is one more line, so a script that keeps
+            // reading always holds the current service.
+            tokio::spawn(async move {
+                while pairings.changed().await.is_ok() {
+                    let current = pairings.borrow_and_update().clone();
+                    if let Some(service) = current {
+                        println!("{service}");
+                    }
+                }
+            });
             run_session(session, shutdown).await?;
         }
         Command::Collect {
