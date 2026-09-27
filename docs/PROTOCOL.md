@@ -470,4 +470,11 @@ one interval; a re-paired client learns its new service within one interval.
   status 400 with a `nack` (see section 1). A broker that has the store but
   predates conditional writes ignores `if_version` like any unknown field and
   applies the write unconditionally; its `stored` has no `applied`, which
-  decodes as true.
+  decodes as true. A party that has the store but predates conditional
+  writes does the same on the way through: it decodes `store` without
+  `if_version`, relays it without one, and passes the broker's `stored` on
+  without `applied`. Either way a conditional write becomes an unconditional
+  one that is answered as applied, and nothing reports it, so conditions
+  need both the broker and the party that relays them to have conditional
+  writes. Parties run for as long as their jobs do, so restart them on the
+  new binary before relying on `if_version`.

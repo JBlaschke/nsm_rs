@@ -218,6 +218,10 @@ options](#limit-options)); a put that does not fit is refused.
   through. When the condition does not hold, nothing changes, stdout stays
   empty, stderr says `nsm: KEY is at version V` or `nsm: KEY is not set`,
   and the exit status is 4. Without `--if-version` the last writer wins.
+  The broker and the party the command goes through must both have
+  conditional writes: one that predates them drops the condition, applies
+  the write anyway and answers as if it held, so restart long-running
+  parties on the new binary before relying on `--if-version`.
 - `list` prints the keys, one per line, in sorted order, and nothing for an
   empty store (exit 0).
 - `--json` prints the broker's reply instead, as one line:

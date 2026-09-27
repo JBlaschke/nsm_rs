@@ -462,8 +462,10 @@ pub struct Stored {
     pub revision: u64,
     /// False when a put or a delete stated an `if_version` that did not
     /// match, so nothing changed; true for every other answer. Always sent;
-    /// a reply without it (from a broker that predates conditional writes)
-    /// decodes as true.
+    /// a reply without it decodes as true. Such a reply comes from a broker,
+    /// or passed through a relaying party, that predates conditional
+    /// writes; that broker or party also dropped `if_version`, so the write
+    /// was applied unconditionally. Conditions need both to have them.
     #[serde(default = "applied_by_default")]
     pub applied: bool,
     /// The entries the operation returns.
