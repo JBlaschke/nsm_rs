@@ -25,6 +25,7 @@
 //! | `DELETE /v1/jobs/{id}` | | [`JobView`] (state `cancelled`) or `404` |
 //! | `POST /v1/collect` | [`PartyBody`] | [`Collected`] |
 //! | `POST /v1/send` | [`SendBody`] | `{"delivered":true}` |
+//! | `POST /v1/store` | [`StoreBody`] | [`Stored`] |
 //!
 //! Errors are `{"error": "<message>"}` with `400` for bad input, `401` for a
 //! missing or wrong token, `404` for unknown jobs, `502` when a peer or the
@@ -49,7 +50,7 @@ use tracing::{info, warn};
 
 use crate::cli::IfaceOpts;
 use crate::net::{Addr, IpVersion};
-use crate::ops::{self, Collected, NetOpts};
+use crate::ops::{self, Collected, NetOpts, StoreOp, Stored};
 use crate::party::Session;
 use crate::protocol::{Key, PartyId, ServiceHandle};
 use crate::{Error, Result};
@@ -146,6 +147,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/jobs/{id}", get(job).delete(cancel_job))
         .route("/v1/collect", post(collect))
         .route("/v1/send", post(send))
+        .route("/v1/store", post(store))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&app),
             require_token,
@@ -341,6 +343,19 @@ pub struct SendBody {
     pub party: Addr,
     /// Text to deliver.
     pub msg: String,
+}
+
+/// `POST /v1/store`: the party to go through and the operation, whose fields
+/// sit next to `party`: `{"party":"http://10.128.0.9:41232","op":"put",
+/// "key":"step","value":"5"}`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StoreBody {
+    /// Either party's heartbeat address: the client's or its service's,
+    /// which share one store.
+    pub party: Addr,
+    /// The operation (`op` with its `key` and `value`).
+    #[serde(flatten)]
+    pub op: StoreOp,
 }
 
 /// Query string of `GET /v1/interfaces` and `GET /v1/ips`.
@@ -558,6 +573,11 @@ async fn send(State(app): State<Arc<AppState>>, body: Bytes) -> ApiResult<Json<s
     let b: SendBody = parse_body(&body)?;
     ops::send(&b.party, b.msg, &app.net).await?;
     Ok(Json(serde_json::json!({ "delivered": true })))
+}
+
+async fn store(State(app): State<Arc<AppState>>, body: Bytes) -> ApiResult<Json<Stored>> {
+    let b: StoreBody = parse_body(&body)?;
+    Ok(Json(ops::store(&b.party, b.op, &app.net).await?))
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
