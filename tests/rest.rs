@@ -371,6 +371,7 @@ async fn store_through_the_api() {
             .await;
         assert_eq!(status, StatusCode::OK, "{put}");
         assert_eq!(put["client"], owner, "{put}");
+        assert_eq!(put["applied"], true, "{put}");
         let version = put["entries"][0]["version"].as_u64().expect("version");
         assert_eq!(put["revision"], json!(version), "{put}");
         assert_eq!(
@@ -446,7 +447,7 @@ async fn store_through_the_api() {
             assert_eq!(status, StatusCode::OK, "{read}: {empty}");
             assert_eq!(
                 empty,
-                json!({ "client": null, "revision": 0, "entries": [] }),
+                json!({ "client": null, "revision": 0, "applied": true, "entries": [] }),
                 "{read}"
             );
         }
@@ -487,6 +488,111 @@ async fn store_through_the_api() {
             .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
         assert!(body["error"].is_string(), "{body}");
+
+        api.stop().await;
+        cluster.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn conditional_store_writes_through_the_api() {
+    with_deadline(async {
+        let cluster = Cluster::start(Transport::Http).await;
+        let api = Api::start(cluster.net().clone(), None).await;
+        let service = cluster.publish(7, 9100).await;
+        let client = cluster.claim(7).await;
+        let (client_hb, service_hb) = (client.bound().to_string(), service.bound().to_string());
+        let owner = json!(client.id());
+
+        // Create-only: the first put with if_version 0 is an ordinary 200.
+        let create = |party: &str, value: &str| {
+            json!({ "party": party, "op": "put", "key": "task", "value": value, "if_version": 0 })
+        };
+        let (status, first) = api.post("/v1/store", &create(&client_hb, "a")).await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        assert_eq!(first["applied"], true, "{first}");
+        assert!(first.get("error").is_none(), "{first}");
+        let v1 = first["entries"][0]["version"].as_u64().expect("version");
+
+        // The second is a 409 carrying the reply, applied false and the
+        // current entry, with an error saying where the key is.
+        let (status, lost) = api.post("/v1/store", &create(&service_hb, "b")).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{lost}");
+        assert_eq!(
+            lost,
+            json!({
+                "error": format!("store key task is at version {v1}"),
+                "client": owner,
+                "revision": v1,
+                "applied": false,
+                "entries": [{ "key": "task", "value": "a", "version": v1 }],
+            })
+        );
+
+        // A put at the current version is a 200 with the new entry.
+        let (status, updated) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": service_hb, "op": "put", "key": "task", "value": "c", "if_version": v1 }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{updated}");
+        assert_eq!(updated["applied"], true, "{updated}");
+        let v2 = updated["entries"][0]["version"].as_u64().expect("version");
+        assert!(v2 > v1, "{updated}");
+
+        // A stale delete misses; a current one removes the key; after that a
+        // version other than 0 misses with "not set" and no entries.
+        let delete = |if_version: u64| {
+            json!({ "party": client_hb, "op": "delete", "key": "task", "if_version": if_version })
+        };
+        let (status, stale) = api.post("/v1/store", &delete(v1)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+        assert_eq!(
+            stale["error"],
+            json!(format!("store key task is at version {v2}"))
+        );
+        assert_eq!(stale["entries"][0]["value"], "c", "{stale}");
+        let (status, removed) = api.post("/v1/store", &delete(v2)).await;
+        assert_eq!(status, StatusCode::OK, "{removed}");
+        assert_eq!(removed["entries"][0]["version"], json!(v2), "{removed}");
+        let (status, unset) = api.post("/v1/store", &delete(v2)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{unset}");
+        assert_eq!(unset["error"], "store key task is not set", "{unset}");
+        assert_eq!(unset["applied"], false, "{unset}");
+        assert_eq!(unset["entries"], json!([]), "{unset}");
+        let (status, nothing) = api.post("/v1/store", &delete(0)).await;
+        assert_eq!(status, StatusCode::OK, "{nothing}");
+        assert_eq!(nothing["entries"], json!([]), "{nothing}");
+
+        // A null condition is no condition, and a malformed one is the
+        // caller's fault.
+        let (status, plain) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": client_hb, "op": "put", "key": "task", "value": "d", "if_version": null }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{plain}");
+        for bad in [json!(-1), json!("1"), json!(1.5)] {
+            let body = json!({ "party": client_hb, "op": "put", "key": "task", "value": "e", "if_version": bad });
+            let (status, reply) = api.post("/v1/store", &body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {reply}");
+        }
+        // An unclaimed service is refused whatever the condition.
+        let lonely = cluster.publish(8, 9101).await;
+        let (status, refused) = api
+            .post("/v1/store", &create(&lonely.bound().to_string(), "x"))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("not claimed"),
+            "{refused}"
+        );
 
         api.stop().await;
         cluster.stop().await;

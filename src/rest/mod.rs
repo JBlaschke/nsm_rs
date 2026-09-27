@@ -25,11 +25,15 @@
 //! | `DELETE /v1/jobs/{id}` | | [`JobView`] (state `cancelled`) or `404` |
 //! | `POST /v1/collect` | [`PartyBody`] | [`Collected`] |
 //! | `POST /v1/send` | [`SendBody`] | `{"delivered":true}` |
-//! | `POST /v1/store` | [`StoreBody`] | [`Stored`] |
+//! | `POST /v1/store` | [`StoreBody`] | [`Stored`], or `409` with an `error` |
 //!
 //! Errors are `{"error": "<message>"}` with `400` for bad input, `401` for a
 //! missing or wrong token, `404` for unknown jobs, `502` when a peer or the
-//! broker could not be reached, `500` otherwise.
+//! broker could not be reached, `500` otherwise. The one answer that is not
+//! a success but is not an error either is a conditional store write whose
+//! `if_version` did not match: `409` with the [`Stored`] reply (`applied`
+//! false, the key's current entry) and an `error` field saying where the key
+//! is.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -347,13 +351,14 @@ pub struct SendBody {
 
 /// `POST /v1/store`: the party to go through and the operation, whose fields
 /// sit next to `party`: `{"party":"http://10.128.0.9:41232","op":"put",
-/// "key":"step","value":"5"}`.
+/// "key":"step","value":"5"}`. A put or a delete may add `"if_version":N`
+/// (0: only if the key is not set).
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct StoreBody {
     /// Either party's heartbeat address: the client's or its service's,
     /// which share one store.
     pub party: Addr,
-    /// The operation (`op` with its `key` and `value`).
+    /// The operation (`op` with its `key`, `value` and `if_version`).
     #[serde(flatten)]
     pub op: StoreOp,
 }
@@ -575,9 +580,34 @@ async fn send(State(app): State<Arc<AppState>>, body: Bytes) -> ApiResult<Json<s
     Ok(Json(serde_json::json!({ "delivered": true })))
 }
 
-async fn store(State(app): State<Arc<AppState>>, body: Bytes) -> ApiResult<Json<Stored>> {
+/// The body of a `409` from `POST /v1/store`: the reply with an `error`
+/// field in front, so a caller that only looks for `error` sees a failure
+/// and one that knows conditional writes finds the current entry.
+#[derive(serde::Serialize)]
+struct NotApplied<'a> {
+    error: String,
+    #[serde(flatten)]
+    stored: &'a Stored,
+}
+
+async fn store(State(app): State<Arc<AppState>>, body: Bytes) -> ApiResult<Response> {
     let b: StoreBody = parse_body(&body)?;
-    Ok(Json(ops::store(&b.party, b.op, &app.net).await?))
+    let key = b.op.key().cloned();
+    let kind = b.op.kind();
+    let stored = ops::store(&b.party, b.op, &app.net).await?;
+    if stored.applied {
+        return Ok(Json(stored).into_response());
+    }
+    // Only a put or a delete with `if_version` can miss, and both name a key.
+    let error = match &key {
+        Some(key) => format!("store key {}", stored.key_state(key)),
+        None => format!("the {kind} was not applied"),
+    };
+    let body = NotApplied {
+        error,
+        stored: &stored,
+    };
+    Ok((StatusCode::CONFLICT, Json(body)).into_response())
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
