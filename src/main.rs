@@ -199,10 +199,15 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
         } => {
             let collected =
                 ops::collect(&party, &net_opts(&tls, &timing, &LimitsOpts::default())).await?;
-            match (collected.text, collected.service) {
-                (Some(text), _) => println!("{text}"),
-                (None, Some(service)) => println!("{service}"),
-                (None, None) => eprintln!("nsm: nothing to collect yet"),
+            match collected {
+                ops::Collected::Service { text: Some(text) } => println!("{text}"),
+                ops::Collected::Client {
+                    service: Some(service),
+                } => println!("{service}"),
+                ops::Collected::Service { text: None }
+                | ops::Collected::Client { service: None } => {
+                    eprintln!("nsm: nothing to collect yet")
+                }
             }
         }
         Command::Send {

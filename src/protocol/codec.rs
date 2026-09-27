@@ -417,7 +417,7 @@ mod tests {
     // ---- randomized properties (deterministic seeds; see crate::testing) ----
 
     fn random_message(rng: &mut crate::testing::Rng) -> Message {
-        use crate::protocol::ServiceHandle;
+        use crate::protocol::{Role, ServiceHandle};
         let token = rng.token();
         let handle = ServiceHandle {
             id: PartyId(rng.next_u64()),
@@ -469,6 +469,11 @@ mod tests {
             },
             10 => Message::Delivered,
             11 => Message::Collected {
+                role: if rng.chance(2) {
+                    Role::Service
+                } else {
+                    Role::Client
+                },
                 text: rng.chance(2).then(|| rng.text(300)),
                 service: rng.chance(2).then_some(handle),
             },

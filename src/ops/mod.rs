@@ -14,7 +14,7 @@ use crate::broker::listen::{BrokerHandle, ListenOpts, listen as start_broker};
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, LocalAddr, Selector, Transport, interfaces};
 use crate::party::{ClaimOpts, PartyOpts, PublishOpts, Session};
-use crate::protocol::{Key, Message, ServiceHandle};
+use crate::protocol::{Key, Message, Role, ServiceHandle};
 use crate::transport::Client;
 use crate::{Error, Result};
 
@@ -168,18 +168,41 @@ pub async fn claim(req: ClaimRequest) -> Result<Session> {
 }
 
 /// What a party holds, as returned by [`collect`].
+///
+/// The variant is the party's role, and each variant carries only what that
+/// role holds, so a caller never has to guess which field applies. For the
+/// control plane it serialises with the role as a `role` tag next to the
+/// variant's field: `{"role":"service","text":"job 17"}` or
+/// `{"role":"client","service":{...}}`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Collected {
-    /// A service's last delivered text.
-    pub text: Option<String>,
-    /// A client's paired service.
-    pub service: Option<ServiceHandle>,
+#[serde(tag = "role", rename_all = "lowercase")]
+pub enum Collected {
+    /// The party is a service.
+    Service {
+        /// The last text delivered to it; `None` before the first.
+        text: Option<String>,
+    },
+    /// The party is a client.
+    Client {
+        /// The service it is paired with; `None` only in the moment between
+        /// binding its listener and registering.
+        service: Option<ServiceHandle>,
+    },
 }
 
 /// Ask a party (by its heartbeat address) what it holds.
 pub async fn collect(party: &Addr, net: &NetOpts) -> Result<Collected> {
     match net.client().call(party, Message::Collect).await? {
-        Message::Collected { text, service } => Ok(Collected { text, service }),
+        Message::Collected {
+            role: Role::Service,
+            text,
+            ..
+        } => Ok(Collected::Service { text }),
+        Message::Collected {
+            role: Role::Client,
+            service,
+            ..
+        } => Ok(Collected::Client { service }),
         Message::Nack { reason } => Err(Error::Rejected(reason)),
         other => Err(Error::protocol(format!(
             "collect answered with {}",
@@ -203,6 +226,39 @@ pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::PartyId;
+
+    #[test]
+    fn collected_serialises_with_the_role_as_the_tag() {
+        let from_service = Collected::Service {
+            text: Some("job 17".into()),
+        };
+        assert_eq!(
+            serde_json::to_string(&from_service).unwrap(),
+            r#"{"role":"service","text":"job 17"}"#
+        );
+        let from_client = Collected::Client { service: None };
+        assert_eq!(
+            serde_json::to_string(&from_client).unwrap(),
+            r#"{"role":"client","service":null}"#
+        );
+        let handle = ServiceHandle {
+            id: PartyId(1),
+            host: "h".into(),
+            service_port: 2,
+        };
+        assert_eq!(
+            serde_json::from_str::<Collected>(
+                r#"{"role":"client","service":{"id":1,"host":"h","service_port":2}}"#
+            )
+            .unwrap(),
+            Collected::Client {
+                service: Some(handle)
+            }
+        );
+        // Without the tag there is no way to tell what applies.
+        assert!(serde_json::from_str::<Collected>(r#"{"text":"x","service":null}"#).is_err());
+    }
 
     #[test]
     fn interface_listing_matches_enumeration() {

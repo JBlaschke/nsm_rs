@@ -114,7 +114,10 @@ async fn dead_service_is_removed_and_its_client_repaired() {
         c.wait_until_true(|| client.service().map(|h| h.id) == Some(s2.id()))
             .await;
         let collected = ops::collect(&client.bound(), c.net()).await.unwrap();
-        assert_eq!(collected.service.unwrap().id, s2.id());
+        assert!(
+            matches!(&collected, ops::Collected::Client { service: Some(h) } if h.id == s2.id()),
+            "{collected:?}"
+        );
         c.stop().await;
     })
     .await;
@@ -154,7 +157,13 @@ async fn send_reaches_the_service_and_collect_reads_it() {
             c.wait_until_true(|| service.state().inbox().is_some())
                 .await;
             let got = ops::collect(&service.bound(), c.net()).await.unwrap();
-            assert_eq!(got.text.as_deref(), Some("job 17"), "{t:?}");
+            assert_eq!(
+                got,
+                ops::Collected::Service {
+                    text: Some("job 17".into())
+                },
+                "{t:?}"
+            );
             // Sending to a service is refused.
             let err = ops::send(&service.bound(), "x".into(), c.net())
                 .await

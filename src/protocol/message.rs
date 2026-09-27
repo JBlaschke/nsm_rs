@@ -35,7 +35,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{Key, PartyId, RegToken, ServiceHandle};
+use super::types::{Key, PartyId, RegToken, Role, ServiceHandle};
 use crate::net::Addr;
 
 /// Version of the wire protocol described in this module.
@@ -43,7 +43,12 @@ use crate::net::Addr;
 /// Bumped on any change to [`Message`] or to the framing that an older peer
 /// could not decode. Adding an optional field or a new variant does not
 /// require a bump.
-pub const PROTOCOL_VERSION: u16 = 1;
+///
+/// | Version | Change |
+/// |---|---|
+/// | 1 | the first versioned format |
+/// | 2 | [`Collected`](Message::Collected) carries the answering party's `role` |
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// One wire message: a request to the broker or to a party, or a reply.
 ///
@@ -191,10 +196,10 @@ pub enum Message {
     ///
     /// Sent by the `collect` operation to a party's bind address.
     ///
-    /// Reply: [`Message::Collected`]. A service answers with the last text it
-    /// received in a heartbeat (`text`, `None` if nothing was ever
-    /// delivered); a client answers with the handle of the service it is
-    /// paired with (`service`).
+    /// Reply: [`Message::Collected`], which names the party's role. A
+    /// service answers with the last text it received in a heartbeat
+    /// (`text`, `None` if nothing was ever delivered); a client answers with
+    /// the handle of the service it is paired with (`service`).
     Collect,
 
     // ----- replies ----------------------------------------------------------
@@ -226,11 +231,16 @@ pub enum Message {
     /// Reply to [`Message::Deliver`]: the text was accepted for delivery.
     Delivered,
 
-    /// Reply to [`Message::Collect`]. Exactly one field is `Some` in
-    /// practice: `text` from a service that has received something,
-    /// `service` from a client. A service that has never received anything
-    /// answers with both `None`.
+    /// Reply to [`Message::Collect`]: what the party holds, and which kind
+    /// of party it is. A service (`role: service`) fills `text` with the
+    /// last text delivered to it (`None` before the first) and leaves
+    /// `service` empty; a client (`role: client`) fills `service` with its
+    /// current pairing (`None` only in the moment between binding its
+    /// listener and registering) and leaves `text` empty. The role tells the
+    /// asker which field applies, so it never has to guess from what is set.
     Collected {
+        /// Which kind of party answered.
+        role: Role,
         /// Last text delivered to a service.
         text: Option<String>,
         /// The service a client is paired with.
@@ -351,6 +361,7 @@ pub(crate) fn all_variants() -> Vec<Message> {
         Message::HeartbeatAck { id: PartyId(4) },
         Message::Delivered,
         Message::Collected {
+            role: Role::Client,
             text: Some("last".into()),
             service: Some(handle),
         },
@@ -482,12 +493,46 @@ mod tests {
         // The token is not optional.
         assert!(decode(r#"{"type":"heartbeat"}"#).is_err());
         assert_eq!(
-            decode(r#"{"type":"collected","text":null}"#).unwrap(),
+            decode(r#"{"type":"collected","role":"service","text":null}"#).unwrap(),
             Message::Collected {
+                role: Role::Service,
                 text: None,
                 service: None,
             }
         );
+        // The role is not optional: a version-1 reply does not decode.
+        assert!(decode(r#"{"type":"collected","text":null,"service":null}"#).is_err());
+    }
+
+    #[test]
+    fn collected_json_shape_names_the_role() {
+        let from_service = Message::Collected {
+            role: Role::Service,
+            text: Some("job 17".into()),
+            service: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&from_service).unwrap(),
+            r#"{"type":"collected","role":"service","text":"job 17","service":null}"#
+        );
+        let from_client = decode(
+            r#"{"type":"collected","role":"client","service":{"id":7,"host":"h","service_port":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            from_client,
+            Message::Collected {
+                role: Role::Client,
+                text: None,
+                service: Some(ServiceHandle {
+                    id: PartyId(7),
+                    host: "h".into(),
+                    service_port: 2,
+                }),
+            }
+        );
+        assert!(decode(r#"{"type":"collected","role":"claimer","text":null}"#).is_err());
+        assert!(decode(r#"{"type":"collected","role":1,"text":null}"#).is_err());
     }
 
     #[test]

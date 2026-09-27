@@ -227,6 +227,8 @@ async fn publish_claim_send_collect_and_cancel_through_the_api() {
                 .post("/v1/collect", &json!({ "party": service_hb }))
                 .await;
             assert_eq!(status, StatusCode::OK, "{collected}");
+            assert_eq!(collected["role"], json!("service"), "{collected}");
+            assert!(collected.get("service").is_none(), "{collected}");
             if let Some(text) = collected["text"].as_str() {
                 break text.to_owned();
             }
@@ -237,7 +239,8 @@ async fn publish_claim_send_collect_and_cancel_through_the_api() {
             .post("/v1/collect", &json!({ "party": client_hb }))
             .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(collected["text"], Value::Null);
+        assert_eq!(collected["role"], json!("client"), "{collected}");
+        assert!(collected.get("text").is_none(), "{collected}");
         assert_eq!(collected["service"]["service_port"], json!(9100));
 
         // Cancelling the client keeps the job (as cancelled) and, once the

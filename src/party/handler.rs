@@ -49,8 +49,8 @@ impl PartyHandler {
                 }
                 // A service has no pairing to update.
                 let service = match self.state.role() {
-                    Role::Publisher => None,
-                    Role::Claimer => service,
+                    Role::Service => None,
+                    Role::Client => service,
                 };
                 self.state.apply_heartbeat(inbox, service);
                 Ok(Message::HeartbeatAck {
@@ -58,14 +58,15 @@ impl PartyHandler {
                 })
             }
             Message::Collect => Ok(Message::Collected {
+                role: self.state.role(),
                 text: self.state.inbox(),
                 service: self.state.service(),
             }),
             Message::Send { text } => match self.state.role() {
-                Role::Publisher => Ok(Message::nack(
+                Role::Service => Ok(Message::nack(
                     "services do not accept send; address the client",
                 )),
-                Role::Claimer => {
+                Role::Client => {
                     let Some(service) = self.state.service() else {
                         return Ok(Message::nack("client is not paired with a service"));
                     };
@@ -156,7 +157,7 @@ mod tests {
 
     #[tokio::test]
     async fn heartbeat_is_acked_and_applied_only_with_our_token() {
-        let h = handler(Role::Publisher);
+        let h = handler(Role::Service);
         let forged = Message::Heartbeat {
             token: RegToken::from_bytes([0xee; 16]),
             inbox: Some("planted".into()),
@@ -194,7 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn services_ignore_pairings_and_clients_take_them() {
-        let s = handler(Role::Publisher);
+        let s = handler(Role::Service);
         registered(&s, 1);
         s.handle(
             Message::Heartbeat {
@@ -208,7 +209,7 @@ mod tests {
         .unwrap();
         assert_eq!(s.state().service(), None);
 
-        let c = handler(Role::Claimer);
+        let c = handler(Role::Client);
         registered(&c, 2);
         c.handle(
             Message::Heartbeat {
@@ -225,10 +226,11 @@ mod tests {
 
     #[tokio::test]
     async fn collect_returns_inbox_for_services_and_service_for_clients() {
-        let s = handler(Role::Publisher);
+        let s = handler(Role::Service);
         assert_eq!(
             s.handle(Message::Collect, peer()).await.unwrap(),
             Message::Collected {
+                role: Role::Service,
                 text: None,
                 service: None
             }
@@ -237,16 +239,27 @@ mod tests {
         assert_eq!(
             s.handle(Message::Collect, peer()).await.unwrap(),
             Message::Collected {
+                role: Role::Service,
                 text: Some("x".into()),
                 service: None
             }
         );
 
-        let c = handler(Role::Claimer);
+        // A client answers with its role even before it is paired.
+        let c = handler(Role::Client);
+        assert_eq!(
+            c.handle(Message::Collect, peer()).await.unwrap(),
+            Message::Collected {
+                role: Role::Client,
+                text: None,
+                service: None
+            }
+        );
         c.state().set_service(handle());
         assert_eq!(
             c.handle(Message::Collect, peer()).await.unwrap(),
             Message::Collected {
+                role: Role::Client,
                 text: None,
                 service: Some(handle())
             }
@@ -255,14 +268,14 @@ mod tests {
 
     #[tokio::test]
     async fn send_is_refused_by_services_and_unpaired_clients() {
-        let s = handler(Role::Publisher);
+        let s = handler(Role::Service);
         assert!(matches!(
             s.handle(Message::Send { text: "hi".into() }, peer())
                 .await
                 .unwrap(),
             Message::Nack { .. }
         ));
-        let c = handler(Role::Claimer);
+        let c = handler(Role::Client);
         assert!(matches!(
             c.handle(Message::Send { text: "hi".into() }, peer())
                 .await
@@ -273,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn unexpected_messages_are_nacked_not_panicked() {
-        let h = handler(Role::Claimer);
+        let h = handler(Role::Client);
         for msg in [
             Message::Publish {
                 key: 1,

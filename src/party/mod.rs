@@ -19,27 +19,9 @@ use crate::net::Addr;
 use crate::protocol::{Key, PartyId, RegToken, ServiceHandle};
 use crate::transport::Client;
 
+pub use crate::protocol::Role;
 pub use handler::PartyHandler;
 pub use session::{ClaimOpts, PartyOpts, PublishOpts, Session};
-
-/// Which side of a pairing a party is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    /// A published service.
-    Publisher,
-    /// A client that claimed a service.
-    Claimer,
-}
-
-impl std::fmt::Display for Role {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Role::Publisher => "service",
-            Role::Claimer => "client",
-        })
-    }
-}
 
 /// State shared between a party's server handler and its liveness loop.
 ///
@@ -182,7 +164,7 @@ mod tests {
 
     #[test]
     fn id_is_set_once() {
-        let s = state(Role::Publisher);
+        let s = state(Role::Service);
         assert_eq!(s.id(), None);
         assert!(s.set_id(PartyId(5)));
         assert!(!s.set_id(PartyId(6)));
@@ -191,7 +173,7 @@ mod tests {
 
     #[test]
     fn heartbeat_contents_are_stored_and_contact_refreshed() {
-        let s = state(Role::Claimer);
+        let s = state(Role::Client);
         let before = s.last_contact();
         std::thread::sleep(std::time::Duration::from_millis(2));
         let handle = ServiceHandle {
@@ -207,15 +189,5 @@ mod tests {
         s.apply_heartbeat(None, None);
         assert_eq!(s.inbox().as_deref(), Some("hello"));
         assert_eq!(s.service(), Some(handle));
-    }
-
-    #[test]
-    fn role_displays_as_service_or_client() {
-        assert_eq!(Role::Publisher.to_string(), "service");
-        assert_eq!(Role::Claimer.to_string(), "client");
-        assert_eq!(
-            serde_json::to_string(&Role::Claimer).unwrap(),
-            "\"claimer\""
-        );
     }
 }
