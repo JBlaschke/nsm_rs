@@ -217,9 +217,10 @@ On `listen` and `serve`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--max-frame-bytes BYTES` | 65536 | largest message accepted on any transport (at least 1024) |
+| `--max-frame-bytes BYTES` | 65536 | largest message accepted on any transport (at least 1024); `listen` needs at least `--max-store-bytes` plus 1024, so 17408 with the default store budget and never less than 1280 |
 | `--max-connections N` | 1024 | connections a listener serves at once; more wait in the accept queue |
-| `--max-registrations N` | 10000 | services plus clients a broker holds at once |
+| `--max-registrations N` | 10000 | services plus clients a broker holds at once (broker only) |
+| `--max-store-bytes BYTES` | 16384 | budget of each claim's shared store, 256 to 32768, counting every entry as its JSON-encoded key and value plus 64 bytes (broker only) |
 
 ### Admission options
 

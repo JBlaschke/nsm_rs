@@ -203,7 +203,8 @@ Two limits only matter at a broker: `max_registrations` and
 32768). `serve` accepts both with the other limits and ignores them.
 `listen` refuses to start, with a configuration error naming both flags,
 when a full store's reply (the budget plus 1024 bytes) would not fit its own
-`--max-frame-bytes`. Parties use the default 64 KiB frame, which every
+`--max-frame-bytes`, so a broker needs a frame limit of at least 1280 bytes
+(17408 with the default budget). Parties use the default 64 KiB frame, which every
 allowed budget fits; parties started by `nsm serve` inherit its
 `--max-frame-bytes`, so lowering it below a store's reply size breaks large
 replies at those parties. There is at most one store per client, and every

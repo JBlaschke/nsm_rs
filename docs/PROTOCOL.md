@@ -356,10 +356,11 @@ one interval; a re-paired client learns its new service within one interval.
   escapes included, plus 64 bytes, and a put that would exceed the budget is
   refused. A `stored` reply carrying every entry of a full store is then at
   most the budget plus 1024 bytes, and `listen` refuses to start unless that
-  fits its own `--max-frame-bytes`. Parties use the default frame limit of
-  65536, which every allowed budget fits; parties started by `nsm serve`
-  inherit its `--max-frame-bytes`, so lowering it below a store's reply size
-  breaks large replies at those parties.
+  fits its own `--max-frame-bytes`, which a broker therefore needs at 1280
+  or more (17408 with the default budget). Parties use the default frame
+  limit of 65536, which every allowed budget fits; parties started by
+  `nsm serve` inherit its `--max-frame-bytes`, so lowering it below a
+  store's reply size breaks large replies at those parties.
 - **Compatibility.** `PROTOCOL_VERSION` is bumped for any change an older
   peer could not decode: a renamed or removed field or variant, a changed
   framing. Adding an optional field or a new variant does not require a bump;

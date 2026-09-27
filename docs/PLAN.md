@@ -77,7 +77,8 @@ that knows who is paired with whom.
   `broker::listen`.
 - Docs: `docs/PROTOCOL.md` (messages, types, `store_relay`, rules, sizes),
   `docs/ARCHITECTURE.md` (registry model, configuration, failure table),
-  `CHANGELOG.md`.
+  `CHANGELOG.md`, and the README's limits table (the `--max-store-bytes` row
+  and the frame limit `listen` now needs), because the flag ships here.
 
 ### `store/02-party-relay`
 
@@ -97,7 +98,7 @@ that knows who is paired with whom.
 - `POST /v1/store`.
 - Tests: parsing, `tests/cli.rs` (help, usage errors, the full session, exit
   3), `tests/rest.rs`.
-- Docs: README (how it works, quickstart, command table, limits, exit codes,
+- Docs: README (how it works, quickstart, command table, exit codes,
   job-script recipes), `docs/REST_API.md`, `docs/ARCHITECTURE.md`,
   `CHANGELOG.md`.
 

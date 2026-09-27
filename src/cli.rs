@@ -170,7 +170,9 @@ impl TimingOpts {
 /// default from [`Limits`].
 #[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
 pub struct LimitsOpts {
-    /// Largest message accepted on any transport, in bytes (at least 1024).
+    /// Largest message accepted on any transport, in bytes (at least 1024;
+    /// `listen` needs at least `--max-store-bytes` plus 1024, which is 17408
+    /// with the default store budget and never less than 1280).
     #[arg(long, value_name = "BYTES", value_parser = clap::value_parser!(u64).range(1024..))]
     pub max_frame_bytes: Option<u64>,
     /// Connections a listener serves concurrently.

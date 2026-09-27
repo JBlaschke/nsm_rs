@@ -95,8 +95,10 @@ version: 3.
 - `--max-store-bytes` on `listen` (default 16384, allowed 256 to 32768): the
   budget of each store, counting every entry as its JSON-encoded key and
   value plus 64 bytes. `listen` refuses to start when a full store's reply
-  would not fit `--max-frame-bytes`, so a frame limit below 17408 bytes now
-  needs a smaller store budget too.
+  (the budget plus 1024 bytes) would not fit `--max-frame-bytes`, so a
+  broker's frame limit below 17408 bytes now needs a smaller store budget
+  too, and one below 1280 bytes (the smallest budget plus 1024) can no
+  longer start a broker at all.
 - Exit code 3: the party answered but has nothing to report yet (`collect`
   before the first text, `peer` before the pairing), distinct from a failed
   operation (1) and a usage error (2).
