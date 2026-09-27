@@ -609,7 +609,8 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
-        // `serve` accepts it with the other limits, for the parties it starts.
+        // `serve` accepts it with the other limits and ignores it; only a
+        // broker has stores.
         match parse(&["serve", "--max-store-bytes", "1024"]).command {
             Command::Serve { limits, .. } => assert_eq!(limits.limits().max_store_bytes, 1024),
             other => panic!("{other:?}"),
