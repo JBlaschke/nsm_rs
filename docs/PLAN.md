@@ -10,8 +10,8 @@
 | Branch | State | Notes |
 |---|---|---|
 | `peer/01-typed-collect` | done | `Role` in `protocol`; `collected` carries `role`; protocol version 2; `ops::Collected` is an enum; no command's output changes |
-| `peer/02-pairing-updates` | in progress | |
-| `peer/03-peer-command` | pending | |
+| `peer/02-pairing-updates` | done | the pairing is a `watch` channel; `Session::pairings`; `nsm claim` prints every pairing; three-process CLI test |
+| `peer/03-peer-command` | in progress | |
 
 Each branch builds on the previous one and passes the checks in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.

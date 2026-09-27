@@ -136,7 +136,7 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm list-ips [-n IFACE] [-i PREFIX] [--ip-version 4\|6] [-v]` | addresses on this host | one address per line |
 | `nsm listen --bind-port PORT [--transport tcp\|tls\|http\|https] [options]` | run the broker | nothing |
 | `nsm publish BROKER --bind-port PORT --service-port PORT --key KEY [--ping] [options]` | register a service and keep it registered | nothing |
-| `nsm claim BROKER --bind-port PORT --key KEY [--ping] [options]` | pair with a service and stay paired | the service's `host:port` |
+| `nsm claim BROKER --bind-port PORT --key KEY [--ping] [options]` | pair with a service and stay paired | the service's `host:port`, one line per pairing |
 | `nsm collect PARTY [options]` | a service's last received text, or a client's service address | the text or the `host:port` |
 | `nsm send PARTY --msg TEXT [options]` | hand text to a client for delivery to its service | nothing |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
@@ -335,8 +335,11 @@ controller should start parties over HTTP.
   `--heartbeat-timeout`; use the same values on the broker and its parties.
 - **Job scripts.** `nsm claim` prints the service address once paired and
   then keeps running; start it in the background, read its first stdout
-  line, and stop it when the job ends. It exits 1 when the broker is lost or
-  no replacement service exists.
+  line, and stop it when the job ends. If the service dies and the broker
+  re-pairs the client, the new address follows as one more line, so a script
+  that keeps reading (or takes the last line) always holds the current
+  service. It exits 1 when the broker is lost or no replacement service
+  exists.
 
 ## Testing
 

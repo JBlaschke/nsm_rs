@@ -150,7 +150,10 @@ up after `fail_threshold` failures or when the broker no longer knows the
 party. `PartyHandler` answers the broker's `Heartbeat` (only with the party's
 own token), `Collect`, and `Send` (relayed to the broker as `Deliver`).
 `PartyState` is the shared state: id, token, inbox, paired service, last
-contact.
+contact. The pairing sits in a `tokio::sync::watch` channel:
+`Session::pairings` hands out receivers, which is how `nsm claim` prints
+every re-pairing as one more stdout line instead of keeping the new address
+to itself.
 
 ### Operations and front-ends (`ops`, `cli`, `main`, `rest`)
 

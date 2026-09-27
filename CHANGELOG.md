@@ -59,6 +59,10 @@ version: 2.
   `Cargo.toml`). The repository had none before.
 - A library crate (`nsm`) with the binary as a thin front-end; every operation
   is a typed function in `nsm::ops`.
+- `nsm claim` prints one stdout line per pairing: the first at registration
+  and one more each time the broker re-pairs the client after its service
+  went away, so the last line is always the current service. The library
+  exposes the same stream as `Session::pairings`.
 - Four transports from one implementation: TCP, TCP+TLS (`tls://`, new),
   HTTP, HTTPS.
 - Registration tokens: 128-bit secrets issued at registration and required on
