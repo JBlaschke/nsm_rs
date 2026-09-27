@@ -86,6 +86,12 @@ cargo build --release --target x86_64-unknown-linux-musl --no-default-features -
   service) receives it on its next heartbeat. `nsm collect` reads the last
   text a party received; `nsm peer` reads the service a client is paired
   with.
+- `nsm store` reads and writes a small key-value **store** that a client and
+  the service it holds share, through either party's bind address. The
+  broker keeps the only copy, one store per claim: it starts empty when the
+  claim is granted, survives a re-pairing (the replacement service reads
+  everything written before) and is dropped when the client goes away.
+  A **store key** names an entry and is unrelated to the rendezvous key.
 - Every registration reply carries a **registration token** (128 random bits)
   known only to the broker and that party. Pings, relayed messages and the
   broker's heartbeats must present it, so a peer that knows an id or the
@@ -122,6 +128,12 @@ nsm send 127.0.0.1:12010 --msg "ready"
 nsm collect 127.0.0.1:12020        # prints: ready      (after the next heartbeat)
 ```
 
+```bash
+nsm store put 127.0.0.1:12020 step --value 5   # prints the write's version, e.g. 1
+nsm store get 127.0.0.1:12010 step             # prints: 5    (at once, no heartbeat needed)
+nsm store list 127.0.0.1:12010                 # prints: step
+```
+
 `publish` and `claim` keep running: they are the party. Stop them with Ctrl-C
 (or SIGTERM), which unregisters nothing but stops answering heartbeats, and
 the broker removes the party after the failure threshold. The same session
@@ -144,6 +156,10 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm collect PARTY [options]` | the last text a party received from its peer | the text |
 | `nsm peer PARTY [options]` | the service a client is paired with | the service's `host:port` |
 | `nsm send PARTY --msg TEXT [options]` | hand text to a party for delivery to its peer | nothing |
+| `nsm store get PARTY KEY [--json] [options]` | read one entry of the store a client shares with its service | the value (exit 3 when the key is not set) |
+| `nsm store put PARTY KEY --value TEXT [--json] [options]` | set an entry, replacing what was there | the write's version |
+| `nsm store delete PARTY KEY [--json] [options]` | remove an entry; succeeds whether or not it was set | nothing (stderr says which) |
+| `nsm store list PARTY [--json] [options]` | every key in the store | one key per line, sorted |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
 
 `nsm <command> --help` lists every option with its default. The snake_case
@@ -162,10 +178,81 @@ broker and the parties print the address they actually bound on stderr.
 **Exit codes and output.** 0 on success; 1 when an operation fails at run time
 (a message prefixed `nsm: ` goes to stderr); 2 for a command-line error; 3 when
 the party answered but has nothing to report yet (`collect` before the first
-text, `peer` before the pairing), so a polling script can tell "not yet" from
-"failed". Asking a service for its peer fails with a message naming the
-party's role. Stdout carries only a command's result, so it can be captured by
-scripts; logs and status lines go to stderr.
+text, `peer` before the pairing, `store get` of a key that is not set), so a
+polling script can tell "not yet" from "failed". Asking a service for its peer
+fails with a message naming the party's role. Stdout carries only a command's
+result, so it can be captured by scripts; logs and status lines go to stderr.
+A stdout nobody reads any more (a closed pipe) makes the command exit 1.
+
+### Shared store
+
+A client and the service it holds share one small key-value store, kept by
+the broker for as long as the claim lasts. `nsm store` reaches it through
+either party's bind address (`PARTY`, as for `send` and `collect`); both see
+every write at once, without waiting for a heartbeat. A **store key** is 1 to
+128 characters from `A-Z a-z 0-9 . _ - : /` and does not start with `-`, so
+it never needs quoting; it has nothing to do with the rendezvous key that
+`--key` names. A value is any text, including empty text. How much a store
+holds is the broker's `--max-store-bytes` (see [limit
+options](#limit-options)); a put that does not fit is refused.
+
+- `get` prints the value followed by a newline; a key that is not set prints
+  `nsm: KEY is not set` on stderr and exits 3.
+- `put` prints the write's version, a number that only grows; `--value`
+  takes text starting with `-` as it is.
+- `delete` prints nothing on stdout and says `nsm: deleted KEY` or
+  `nsm: KEY was not set` on stderr; both are exit 0.
+- `list` prints the keys, one per line, in sorted order, and nothing for an
+  empty store (exit 0).
+- `--json` prints the broker's reply instead, as one line:
+  `{"client":8,"revision":3,"entries":[{"key":"step","value":"5","version":3}]}`,
+  the same body `POST /v1/store` returns. `client` is the id of the client
+  whose claim owns the store (`null` at a service nobody holds), and `list`
+  carries every value. Stderr and the exit status stay the same.
+
+A service nobody holds yet reads an empty store (so `get` exits 3) and is
+refused writes (exit 1, `not claimed`). The store is readable and writable by
+anyone who can reach a party's bind address, as `send` and `collect` are:
+it is not a place for secrets.
+
+Some job-script recipes, with the service's bind address in `$SERVICE_HB` and
+the client's in `$CLIENT_HB`:
+
+```bash
+# A readiness flag: the service waits until the client has staged its input.
+# Exit 3 means "not set yet"; anything else is a real failure.
+until nsm store get "$SERVICE_HB" ready > /dev/null; do
+  [ $? -eq 3 ] || exit 1
+  sleep 2
+done
+```
+
+```bash
+# Handing over an input path: the client writes it, the service reads it.
+nsm store put "$CLIENT_HB" input/path --value "$SCRATCH/run17/in.h5" > /dev/null
+nsm store put "$CLIENT_HB" ready --value yes > /dev/null
+input=$(nsm store get "$SERVICE_HB" input/path)
+```
+
+```bash
+# A checkpoint that survives a service failover. The service records its
+# progress after every step:
+nsm store put "$SERVICE_HB" checkpoint --value "$step" > /dev/null
+# The spare service the broker re-pairs the client with resumes from it,
+# because the store belongs to the claim, not to the service:
+if step=$(nsm store get "$SERVICE_HB" checkpoint); then
+  echo "resuming after step $step"
+elif [ $? -eq 3 ]; then
+  step=0
+else
+  exit 1
+fi
+```
+
+A spare service is not claimed until the broker re-pairs the client with it,
+and until then its store reads as empty; `nsm store list "$SERVICE_HB" --json`
+shows `"client":null` while nobody holds it, so a spare should wait for that
+to change (or for a text from the client) before it trusts an empty store.
 
 ### Address selection
 
@@ -243,7 +330,7 @@ Which side needs what:
 |---|---|
 | broker with `--transport tls` or `https` | `--tls-cert` and `--tls-key`; `--root-ca` to dial parties that serve TLS |
 | party (`publish`, `claim`) talking to a TLS broker | `--root-ca` (or `--system-roots`) to verify the broker; `--tls-cert`/`--tls-key` if it serves TLS itself |
-| `collect`, `send` against a party that serves TLS | `--root-ca` (or `--system-roots`) |
+| `collect`, `peer`, `send`, `store` against a party that serves TLS | `--root-ca` (or `--system-roots`) |
 | `serve` | the same material, handed to the parties it starts |
 
 A party serves TLS on its own listener when asked with `--tls`, or
@@ -278,6 +365,7 @@ accepted; HTTP transports negotiate `http/1.1` through ALPN. Mutual TLS
 | `POST /v1/publish`, `POST /v1/claim` | start a party as a background *job*; `202` with the job |
 | `GET /v1/jobs`, `GET /v1/jobs/{id}`, `DELETE /v1/jobs/{id}` | list, inspect and stop jobs |
 | `POST /v1/collect`, `POST /v1/send` | the `collect` and `send` operations |
+| `POST /v1/store` | the `store` operations, with the operation in the body |
 
 It binds `127.0.0.1:8080` by default. Binding any other address requires
 `--token` (or `NSM_TOKEN`), which clients send as `Authorization: Bearer

@@ -81,8 +81,9 @@ version: 3.
   and read with `nsm collect` at the client (`POST /v1/send` and
   `POST /v1/collect` likewise). A client's `collect` answer carries both its
   pairing and its last text.
-- A shared store at the broker, one per claim (the command line and the
-  control plane reach it in later changes). Three new messages carry it:
+- A shared store at the broker, one per claim, which the command line and
+  the control plane reach through `nsm store` and `POST /v1/store` (below).
+  Three new messages carry it:
   `store` (operator to party), `store_relay` (party to broker, with its id
   and token) and `stored`, the reply naming the claim's client, the store's
   revision and the entries; they are new variants, so the wire protocol
@@ -100,6 +101,19 @@ version: 3.
   `ops::store`, which returns the `Stored` reply (a refusal is
   `Error::Rejected`), with `StoreEntry`, `StoreKey`, `StoreOp` and `Stored`
   re-exported from `ops`.
+- `nsm store get|put|delete|list PARTY [KEY]`: the shared store from job
+  scripts, through either party's bind address. `get` prints the value and
+  exits 3 when the key is not set; `put --value TEXT` prints the write's
+  version; `delete` prints nothing on stdout, says on stderr whether it
+  removed anything and succeeds either way; `list` prints the keys, one per
+  line. `--json` prints the broker's reply as one line instead, with the exit
+  status unchanged. An invalid store key is a usage error (exit 2). In the
+  library: `cli::StoreCommand`.
+- `POST /v1/store` on the control plane: `{"party":...,"op":"get"|"put"|
+  "delete"|"list","key":...,"value":...}`, answered with the broker's reply
+  (`{"client":...,"revision":...,"entries":[...]}`); an unset key is 200 with
+  no entries, a refusal 400, an unreachable party 502. In the library:
+  `rest::StoreBody`.
 - `--max-store-bytes` on `listen` (default 16384, allowed 256 to 32768): the
   budget of each store, counting every entry as its JSON-encoded key and
   value plus 64 bytes. `listen` refuses to start when a full store's reply
@@ -108,8 +122,9 @@ version: 3.
   too, and one below 1280 bytes (the smallest budget plus 1024) can no
   longer start a broker at all.
 - Exit code 3: the party answered but has nothing to report yet (`collect`
-  before the first text, `peer` before the pairing), distinct from a failed
-  operation (1) and a usage error (2).
+  before the first text, `peer` before the pairing, `store get` of a key
+  that is not set), distinct from a failed operation (1) and a usage error
+  (2).
 - Four transports from one implementation: TCP, TCP+TLS (`tls://`, new),
   HTTP, HTTPS.
 - Registration tokens: 128-bit secrets issued at registration and required on
@@ -187,6 +202,10 @@ version: 3.
   refused" instead of the missing configuration.
 - The control plane reported a 500 for an unreachable broker or party; it now
   reports 502 as documented.
+- A closed stdout (a reader that went away, as in `nsm list-interfaces |
+  head -0`) made `nsm` panic with exit 101; it now exits 1 with an `nsm: `
+  message, and `nsm claim` stops printing re-pairings but keeps its party
+  running.
 
 ### Security
 

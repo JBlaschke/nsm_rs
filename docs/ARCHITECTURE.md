@@ -191,15 +191,20 @@ to itself.
 the crypto provider and the signal handler, runs one operation, prints its
 result to stdout and maps `Err` to exit code 1 with an `nsm: ` message on
 stderr (clap's own usage errors exit 2; a party that answered but has nothing
-to report yet, for `collect` and `peer`, is exit 3). `peer` and `collect` are
-the two accessors of `ops::Collected`, one per role; the binary adds no
-logic of its own. `ops::store` takes a `StoreOp` to either party and returns
-the broker's `Stored` as it is (a key that is not set is an answer with no
-entry, a refusal is `Error::Rejected`), so the command line and the control
-plane need no store logic of their own either. `rest` serves the same operations
-over HTTP: `publish` and `claim` become background jobs with a view the API
-reports, cancels and reaps; a bearer token guards every route when one is
-configured, and it is mandatory off loopback.
+to report yet, for `collect`, `peer` and `store get` of a key that is not
+set, is exit 3). Every stdout line goes through one writer that reports a
+closed pipe as an error, so a reader that went away is exit 1, not a panic.
+`peer` and `collect` are the two accessors of `ops::Collected`, one per role;
+the binary adds no logic of its own. `ops::store` takes a `StoreOp` to either
+party and returns the broker's `Stored` as it is (a key that is not set is an
+answer with no entry, a refusal is `Error::Rejected`), so the command line
+and the control plane need no store logic of their own either: `nsm store`
+gets the party and the `StoreOp` from `StoreCommand::into_parts` and only
+prints (the value, the new version, the keys, or with `--json` the reply as
+one line), and `POST /v1/store` returns the reply as its body. `rest` serves
+the same operations over HTTP: `publish` and `claim` become background jobs
+with a view the API reports, cancels and reaps; a bearer token guards every
+route when one is configured, and it is mandatory off loopback.
 
 ## 5. Configuration
 
@@ -300,7 +305,7 @@ misconfiguration; registration retries only on the former.
 - **`tests/rest.rs`**: every control-plane route, the job lifecycle, status
   mapping and the token.
 - **`tests/cli.rs`**: the built binary: parsing, exit codes, stdout/stderr
-  discipline, complete sessions, SIGTERM.
+  discipline, a closed stdout, complete sessions with the store, SIGTERM.
 - **`tests/stress.rs`** (`--ignored`): 50 services and 50 clients, text and
   store traffic, churn.
 - CI enforces formatting, clippy for both providers, rustdoc, cargo-deny,

@@ -27,7 +27,7 @@ nsm serve --bind 0.0.0.0:8080 --token "$NSM_TOKEN"   # any other address needs a
 
 | Status | When |
 |---|---|
-| 400 | malformed or incomplete body, bad address or query value, a refusal by the broker (unknown key, admission), oversized frame |
+| 400 | malformed or incomplete body, bad address or query value, a refusal by the broker or a party (unknown key, admission, a store write at a service nobody holds, a full store), oversized frame |
 | 401 | missing or wrong bearer token |
 | 404 | unknown job id, unknown route |
 | 405 | wrong method on a known route |
@@ -151,6 +151,55 @@ through the broker to its peer (a client's service, or the client holding a
 service), which receives it on its next heartbeat. A service that no client
 holds is a 400 with the reason.
 
+### `POST /v1/store`
+
+One operation on the store a client shares with the service it holds,
+through either party. The operation's fields sit next to `party`, in the
+shape of the protocol's `store` message.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `party` | address string | yes | either party's heartbeat address (a job's `bind_addr`); the client and its service reach the same store |
+| `op` | string | yes | `"get"`, `"put"`, `"delete"` or `"list"` |
+| `key` | string | for get, put, delete | store key: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-` (unrelated to the rendezvous `key` of publish and claim) |
+| `value` | string | for put | the new value: any text, including empty text and newlines |
+
+```json
+{"party":"http://10.128.0.9:41232","op":"put","key":"step","value":"5"}
+{"party":"http://10.128.0.7:41231","op":"get","key":"step"}
+{"party":"http://10.128.0.7:41231","op":"delete","key":"step"}
+{"party":"http://10.128.0.7:41231","op":"list"}
+```
+
+Every operation answers 200 with the broker's reply, the same line
+`nsm store ... --json` prints:
+
+```json
+{"client":8,"revision":3,"entries":[{"key":"step","value":"5","version":3}]}
+```
+
+`client` is the party id of the client whose claim owns the store, whichever
+party was asked, and `null` when a service nobody holds reads its store.
+`revision` is the number of the store's last write (0 for a store never
+written). Versions come from one counter for the broker's whole life, so a
+version names one write and is never issued twice. `entries` depends on the
+operation:
+
+| `op` | `entries` |
+|---|---|
+| `get` | the entry, or `[]` when the key is not set (still 200, as `collect` answers `text: null`) |
+| `put` | the entry as written, with its new version |
+| `delete` | the removed entry, or `[]` when the key was not set (still 200) |
+| `list` | every entry, sorted by key: one consistent snapshot |
+
+A service nobody holds reads an empty store (`{"client":null,"revision":0,"entries":[]}`)
+and its put and delete are a 400 `service <id> is not claimed`. Other 400s:
+an invalid or missing `key`, an unknown `op`, a put without `value`, a party
+that has not registered yet, a put that does not fit the store's budget
+(`store full: ...`), and a party whose registration is gone. An unreachable
+party is a 502. The store is readable and writable by anyone who can reach a
+party's heartbeat address; it is not a place for secrets.
+
 ## Job view
 
 | Field | Meaning |
@@ -160,7 +209,7 @@ holds is a 400 with the reason.
 | `state` | `"running"`, `"failed"` (broker lost, or the party was removed), `"cancelled"` (after `DELETE`), `"finished"` (the server stopped) |
 | `error` | why the job failed, when it did |
 | `party_id` | the broker-assigned id |
-| `bind_addr` | where the party listens for heartbeats (also what `collect` and `send` take) |
+| `bind_addr` | where the party listens for heartbeats (also what `collect`, `send` and `store` take) |
 | `service` | for a claim: the paired service (updated on re-pairing) |
 | `broker`, `key` | as requested |
 
@@ -175,5 +224,8 @@ curl -s -X POST $B/v1/publish -d '{"broker":"http://127.0.0.1:12000","key":77,"s
 curl -s -X POST $B/v1/claim   -d '{"broker":"http://127.0.0.1:12000","key":77,"ip_start":"127.","ip_version":"4"}'
 curl -s -X POST $B/v1/send    -d '{"party":"<claim bind_addr>","msg":"job 17"}'
 curl -s -X POST $B/v1/collect -d '{"party":"<publish bind_addr>"}'
+curl -s -X POST $B/v1/store   -d '{"party":"<claim bind_addr>","op":"put","key":"step","value":"5"}'
+curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"get","key":"step"}'
+curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"list"}'
 curl -s -X DELETE $B/v1/jobs/2
 ```
