@@ -11,7 +11,7 @@
 |---|---|---|
 | `peer/01-typed-collect` | done | `Role` in `protocol`; `collected` carries `role`; protocol version 2; `ops::Collected` is an enum; no command's output changes |
 | `peer/02-pairing-updates` | done | the pairing is a `watch` channel; `Session::pairings`; `nsm claim` prints every pairing; three-process CLI test |
-| `peer/03-peer-command` | in progress | |
+| `peer/03-peer-command` | done | `nsm peer`; `collect` prints text only; `Collected::text` / `Collected::service` with `Error::WrongRole`; exit status 3 for "nothing yet" |
 
 Each branch builds on the previous one and passes the checks in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.

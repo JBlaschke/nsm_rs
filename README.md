@@ -82,8 +82,8 @@ cargo build --release --target x86_64-unknown-linux-musl --no-default-features -
   heartbeat; if there is none, the client is removed and its process exits.
 - `nsm send` hands a short text to a client; the client relays it through the
   broker and the paired service receives it on its next heartbeat. `nsm
-  collect` reads a service's last received text, or a client's paired service
-  address.
+  collect` reads the last text a service received; `nsm peer` reads the
+  service a client is paired with.
 - Every registration reply carries a **registration token** (128 random bits)
   known only to the broker and that party. Pings, relayed messages and the
   broker's heartbeats must present it, so a peer that knows an id or the
@@ -115,7 +115,7 @@ nsm claim 127.0.0.1:12000 --bind-port 12020 --key 1234 -i 127. --ip-version 4
 ```bash
 nsm send 127.0.0.1:12020 --msg "job 17"
 nsm collect 127.0.0.1:12010        # prints: job 17     (after the next heartbeat)
-nsm collect 127.0.0.1:12020        # prints: 127.0.0.1:9000
+nsm peer 127.0.0.1:12020           # prints: 127.0.0.1:9000
 ```
 
 `publish` and `claim` keep running: they are the party. Stop them with Ctrl-C
@@ -137,7 +137,8 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm listen --bind-port PORT [--transport tcp\|tls\|http\|https] [options]` | run the broker | nothing |
 | `nsm publish BROKER --bind-port PORT --service-port PORT --key KEY [--ping] [options]` | register a service and keep it registered | nothing |
 | `nsm claim BROKER --bind-port PORT --key KEY [--ping] [options]` | pair with a service and stay paired | the service's `host:port`, one line per pairing |
-| `nsm collect PARTY [options]` | a service's last received text, or a client's service address | the text or the `host:port` |
+| `nsm collect PARTY [options]` | the last text a service received | the text |
+| `nsm peer PARTY [options]` | the service a client is paired with | the service's `host:port` |
 | `nsm send PARTY --msg TEXT [options]` | hand text to a client for delivery to its service | nothing |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
 
@@ -155,9 +156,12 @@ has no peer, so it takes `--transport`. `--bind-port 0` picks a free port; the
 broker and the parties print the address they actually bound on stderr.
 
 **Exit codes and output.** 0 on success; 1 when an operation fails at run time
-(a message prefixed `nsm: ` goes to stderr); 2 for a command-line error. Stdout
-carries only a command's result, so it can be captured by scripts; logs and
-status lines go to stderr.
+(a message prefixed `nsm: ` goes to stderr); 2 for a command-line error; 3 when
+the party answered but has nothing to report yet (`collect` before the first
+text, `peer` before the pairing), so a polling script can tell "not yet" from
+"failed". Asking a service for its peer, or a client for text, fails with a
+message naming the party's role. Stdout carries only a command's result, so it
+can be captured by scripts; logs and status lines go to stderr.
 
 ### Address selection
 

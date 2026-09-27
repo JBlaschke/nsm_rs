@@ -22,7 +22,7 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
    │ Session + PartyHandler         │ ◄── data traffic ── │ Session + PartyHandler         │
    │ listener on the bind port      │   (not NSM's job)   │ listener on the bind port      │
    └─────────────────────▲──────────┘                     └─────────────▲──────────────────┘
-                         │ collect                                      │ send / collect
+                         │ collect                                      │ send / peer   
                     operator, script, or `nsm serve` (REST control plane) driving `ops`
 ```
 
@@ -160,7 +160,10 @@ to itself.
 `ops` turns typed requests into typed results. `main` parses the CLI, installs
 the crypto provider and the signal handler, runs one operation, prints its
 result to stdout and maps `Err` to exit code 1 with an `nsm: ` message on
-stderr (clap's own usage errors exit 2). `rest` serves the same operations
+stderr (clap's own usage errors exit 2; a party that answered but has nothing
+to report yet, for `collect` and `peer`, is exit 3). `peer` and `collect` are
+the two accessors of `ops::Collected`, one per role; the binary adds no
+logic of its own. `rest` serves the same operations
 over HTTP: `publish` and `claim` become background jobs with a view the API
 reports, cancels and reaps; a bearer token guards every route when one is
 configured, and it is mandatory off loopback.
@@ -214,8 +217,8 @@ next heartbeat replaces the first.
 
 `Error` is one `thiserror` enum. The binary maps every variant to exit code 1
 with its `Display` text; the control plane maps input errors (`Json`, `Addr`,
-`Config`, `Protocol`, `Rejected`, `NoService`, `AmbiguousAddress`,
-`FrameTooLarge`) to 400, unreachable peers (`Timeout`, `BrokerLost`,
+`Config`, `Protocol`, `Rejected`, `WrongRole`, `NoService`,
+`AmbiguousAddress`, `FrameTooLarge`) to 400, unreachable peers (`Timeout`, `BrokerLost`,
 `PeerLost`, `Closed`, `Resolve`, connection-level `Io`) to 502, and the rest
 to 500. `Error::is_disconnect` tells transient peer loss from local
 misconfiguration; registration retries only on the former.

@@ -49,6 +49,10 @@ version: 2.
   `POST /v1/collect` answers `{"role":"service","text":...}` or
   `{"role":"client","service":...}` instead of an object with both fields.
 - `collect` and `send` ignore `--key` (still accepted, hidden).
+- **`collect` answers one question.** It prints the last text a service
+  received and nothing else; asked of a client it fails with a message naming
+  the role. The service a client is paired with is now `nsm peer`. Scripts
+  that collected an address from a client switch to `peer`.
 - **Logging** uses `tracing`; `NSM_LOG_LEVEL` and `NSM_LOG_STYLE` keep their
   meaning, `--log-level` overrides them, logs go to stderr and stdout carries
   only a command's result.
@@ -63,6 +67,13 @@ version: 2.
   and one more each time the broker re-pairs the client after its service
   went away, so the last line is always the current service. The library
   exposes the same stream as `Session::pairings`.
+- `nsm peer PARTY`: the service a client is paired with, as `host:port`, and
+  nothing else; asked of a service it fails with a message naming the role.
+  In the library, `Collected::text` and `Collected::service` are the two
+  accessors behind `collect` and `peer`, and `Error::WrongRole` their refusal.
+- Exit code 3: the party answered but has nothing to report yet (`collect`
+  before the first text, `peer` before the pairing), distinct from a failed
+  operation (1) and a usage error (2).
 - Four transports from one implementation: TCP, TCP+TLS (`tls://`, new),
   HTTP, HTTPS.
 - Registration tokens: 128-bit secrets issued at registration and required on
