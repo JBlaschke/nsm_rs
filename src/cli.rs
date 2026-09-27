@@ -176,9 +176,15 @@ pub struct LimitsOpts {
     /// Connections a listener serves concurrently.
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_connections: Option<u64>,
-    /// Registrations (services plus clients) a broker holds at once.
+    /// Registrations (services plus clients) a broker holds at once
+    /// (broker only; no effect on `serve`).
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_registrations: Option<u64>,
+    /// Budget of each claim's shared store, counting every entry as its
+    /// JSON-encoded key and value plus 64 bytes (256 to 32768, default
+    /// 16384; broker only, no effect on `serve`).
+    #[arg(long, value_name = "BYTES", value_parser = clap::value_parser!(u64).range(256..=32768))]
+    pub max_store_bytes: Option<u64>,
 }
 
 impl LimitsOpts {
@@ -193,6 +199,9 @@ impl LimitsOpts {
         }
         if let Some(v) = self.max_registrations {
             l.max_registrations = usize::try_from(v).unwrap_or(usize::MAX);
+        }
+        if let Some(v) = self.max_store_bytes {
+            l.max_store_bytes = usize::try_from(v).unwrap_or(usize::MAX);
         }
         l
     }
@@ -529,6 +538,8 @@ mod tests {
             "3",
             "--max-frame-bytes",
             "4096",
+            "--max-store-bytes",
+            "2048",
             "--require-matching-host",
             "--max-registrations-per-host",
             "5",
@@ -546,6 +557,11 @@ mod tests {
                 assert_eq!(t.fail_threshold, 3);
                 assert_eq!(t.request_timeout, Timing::default().request_timeout);
                 assert_eq!(limits.limits().max_frame_bytes, 4096);
+                assert_eq!(limits.limits().max_store_bytes, 2048);
+                assert_eq!(
+                    limits.limits().max_registrations,
+                    Limits::default().max_registrations
+                );
                 let p = policy.policy();
                 assert!(p.require_matching_host);
                 assert_eq!(p.max_registrations_per_host, 5);
@@ -557,6 +573,8 @@ mod tests {
             &["listen", "--bind-port", "1", "--heartbeat-interval", "soon"],
             &["listen", "--bind-port", "1", "--max-frame-bytes", "10"],
             &["listen", "--bind-port", "1", "--fail-threshold", "0"],
+            &["listen", "--bind-port", "1", "--max-store-bytes", "255"],
+            &["listen", "--bind-port", "1", "--max-store-bytes", "32769"],
         ] {
             let err =
                 Cli::try_parse_from(std::iter::once("nsm").chain(bad.iter().copied())).unwrap_err();
@@ -565,6 +583,34 @@ mod tests {
                 clap::error::ErrorKind::ValueValidation,
                 "{bad:?}"
             );
+        }
+    }
+
+    #[test]
+    fn max_store_bytes_accepts_its_whole_range() {
+        for (given, expected) in [
+            (None, 16 * 1024),
+            (Some("256"), 256),
+            (Some("32768"), 32768),
+        ] {
+            let mut args = vec!["listen", "--bind-port", "1"];
+            args.extend(
+                given
+                    .map(|v| ["--max-store-bytes", v])
+                    .into_iter()
+                    .flatten(),
+            );
+            match parse(&args).command {
+                Command::Listen { limits, .. } => {
+                    assert_eq!(limits.limits().max_store_bytes, expected, "{given:?}")
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        // `serve` accepts it with the other limits, for the parties it starts.
+        match parse(&["serve", "--max-store-bytes", "1024"]).command {
+            Command::Serve { limits, .. } => assert_eq!(limits.limits().max_store_bytes, 1024),
+            other => panic!("{other:?}"),
         }
     }
 

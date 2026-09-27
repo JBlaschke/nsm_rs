@@ -277,6 +277,7 @@ fn version_and_help_for_every_command() {
         "--max-frame-bytes",
         "--max-connections",
         "--max-registrations",
+        "--max-store-bytes",
         "--require-matching-host",
         "--max-registrations-per-host",
         "--ip-version",
@@ -319,6 +320,10 @@ fn usage_errors_exit_2_and_explain() {
         (
             &["listen", "--bind-port", "0", "--transport", "smtp"],
             "smtp",
+        ),
+        (
+            &["listen", "--bind-port", "0", "--max-store-bytes", "100"],
+            "not in",
         ),
         (&["list-ips", "--ip-version", "5"], "5"),
         (&["serve", "--bind", "not-an-address"], "not-an-address"),
@@ -404,6 +409,18 @@ fn runtime_failures_exit_1_with_a_prefixed_message() {
     ]));
     assert_eq!(out.code, 1, "{}", out.stderr);
     assert!(out.stderr.contains("--tls-cert"), "{}", out.stderr);
+    // A store budget whose full reply would not fit the frame limit.
+    let out = run(argv(&[
+        &["listen", "--bind-port", "0", "--max-frame-bytes", "4096"],
+        IFACE,
+    ]));
+    assert_eq!(out.code, 1, "{}", out.stderr);
+    assert!(
+        out.stderr
+            .starts_with("nsm: configuration error: --max-store-bytes 16384"),
+        "{}",
+        out.stderr
+    );
     for scheme in ["tls", "https"] {
         let out = run(argv(&[&["collect", &format!("{scheme}://{dead}")], FAST]));
         assert_eq!(out.code, 1, "{scheme}: {}", out.stderr);
