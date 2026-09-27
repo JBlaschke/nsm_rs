@@ -262,8 +262,18 @@ pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
 /// A refusal (the party is not registered yet, a service nobody holds tried
 /// to write, the store is full, the party's registration is gone) is an
 /// [`Error::Rejected`] with the reason.
+///
+/// Only a write that stated a condition can miss, so an answer with
+/// `applied: false` to any other operation is an [`Error::Protocol`]: the
+/// front-ends can then read `applied: false` as "the condition did not
+/// hold" without checking what was asked.
 pub async fn store(party: &Addr, op: StoreOp, net: &NetOpts) -> Result<Stored> {
+    let kind = op.kind();
+    let conditional = op.if_version().is_some();
     match net.client().call(party, Message::Store { op }).await? {
+        Message::Stored(stored) if !stored.applied && !conditional => Err(Error::protocol(
+            format!("the {kind} was answered as not applied although it stated no condition"),
+        )),
         Message::Stored(stored) => Ok(stored),
         Message::Nack { reason } => Err(Error::Rejected(reason)),
         other => Err(Error::protocol(format!(
@@ -373,6 +383,74 @@ mod tests {
                 matches!(&err, Error::Protocol(text) if text == "store answered with store"),
                 "{err}"
             );
+            server.shutdown().await;
+        })
+        .await
+        .expect("the test finished in time");
+    }
+
+    /// A party stand-in that answers every store request with `applied:
+    /// false`, whatever it asked.
+    struct NeverApplies;
+
+    impl crate::transport::Handler for NeverApplies {
+        async fn handle(&self, msg: Message, _peer: crate::transport::PeerInfo) -> Result<Message> {
+            Ok(match msg {
+                Message::Store { .. } => Message::Stored(Stored {
+                    client: Some(PartyId(2)),
+                    revision: 9,
+                    applied: false,
+                    entries: vec![],
+                }),
+                other => Message::nack(format!("unexpected {} at the script", other.kind())),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_conditional_write_may_be_answered_as_not_applied() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let (server, _client, _certs) =
+                crate::transport::testing::start(Transport::Tcp, NeverApplies).await;
+            let net = NetOpts {
+                timing: Timing::fast(),
+                ..NetOpts::default()
+            };
+            let key = crate::protocol::message::store_key;
+            let put = |if_version| StoreOp::Put {
+                key: key("step"),
+                value: "5".into(),
+                if_version,
+            };
+            let delete = |if_version| StoreOp::Delete {
+                key: key("step"),
+                if_version,
+            };
+
+            // A miss is how a conditional write is answered.
+            for op in [put(Some(0)), put(Some(7)), delete(Some(0)), delete(Some(7))] {
+                let what = format!("{op:?}");
+                let stored = store(&server.bound(), op, &net).await.expect(&what);
+                assert!(!stored.applied, "{what}");
+            }
+            // Any other operation cannot miss, so the answer is a violation.
+            for op in [
+                StoreOp::Get { key: key("step") },
+                StoreOp::List,
+                put(None),
+                delete(None),
+            ] {
+                let kind = op.kind();
+                match store(&server.bound(), op, &net).await {
+                    Err(Error::Protocol(reason)) => assert_eq!(
+                        reason,
+                        format!(
+                            "the {kind} was answered as not applied although it stated no condition"
+                        )
+                    ),
+                    other => panic!("{kind}: {other:?}"),
+                }
+            }
             server.shutdown().await;
         })
         .await
