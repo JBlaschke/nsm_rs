@@ -190,6 +190,33 @@ pub enum Collected {
     },
 }
 
+impl Collected {
+    /// The text a service holds: `None` before the first delivery. An
+    /// [`Error::WrongRole`] when the party is a client, which holds no text.
+    pub fn text(self) -> Result<Option<String>> {
+        match self {
+            Collected::Service { text } => Ok(text),
+            Collected::Client { .. } => Err(Error::WrongRole {
+                role: Role::Client,
+                hint: "text is collected from its service",
+            }),
+        }
+    }
+
+    /// The service a client is paired with: `None` only before it has
+    /// registered. An [`Error::WrongRole`] when the party is a service,
+    /// which has no peer.
+    pub fn service(self) -> Result<Option<ServiceHandle>> {
+        match self {
+            Collected::Client { service } => Ok(service),
+            Collected::Service { .. } => Err(Error::WrongRole {
+                role: Role::Service,
+                hint: "only a client has a peer",
+            }),
+        }
+    }
+}
+
 /// Ask a party (by its heartbeat address) what it holds.
 pub async fn collect(party: &Addr, net: &NetOpts) -> Result<Collected> {
     match net.client().call(party, Message::Collect).await? {
@@ -258,6 +285,35 @@ mod tests {
         );
         // Without the tag there is no way to tell what applies.
         assert!(serde_json::from_str::<Collected>(r#"{"text":"x","service":null}"#).is_err());
+    }
+
+    #[test]
+    fn accessors_answer_their_own_role_and_refuse_the_other() {
+        let handle = ServiceHandle {
+            id: PartyId(1),
+            host: "h".into(),
+            service_port: 2,
+        };
+        let service = || Collected::Service {
+            text: Some("job 17".into()),
+        };
+        let client = || Collected::Client {
+            service: Some(handle.clone()),
+        };
+        assert_eq!(service().text().unwrap().as_deref(), Some("job 17"));
+        assert_eq!(client().service().unwrap(), Some(handle.clone()));
+        // "Nothing yet" is `None`, not an error.
+        assert_eq!(Collected::Service { text: None }.text().unwrap(), None);
+        assert_eq!(Collected::Client { service: None }.service().unwrap(), None);
+        // The other role is an error that names the role.
+        match client().text() {
+            Err(Error::WrongRole { role, .. }) => assert_eq!(role, Role::Client),
+            other => panic!("{other:?}"),
+        }
+        match service().service() {
+            Err(Error::WrongRole { role, .. }) => assert_eq!(role, Role::Service),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

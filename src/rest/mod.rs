@@ -386,6 +386,7 @@ impl IntoResponse for ApiError {
             | Error::Config(_)
             | Error::Protocol(_)
             | Error::Rejected(_)
+            | Error::WrongRole { .. }
             | Error::NoService(_)
             | Error::AmbiguousAddress { .. }
             | Error::FrameTooLarge { .. } => StatusCode::BAD_REQUEST,

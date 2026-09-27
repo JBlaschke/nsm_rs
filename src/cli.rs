@@ -325,8 +325,7 @@ pub enum Command {
         timing: TimingOpts,
     },
 
-    /// Fetch what a party is holding: a service's last received message, or a
-    /// client's paired service address.
+    /// Fetch the last text a service received.
     Collect {
         /// The party's heartbeat address.
         party: Addr,
@@ -336,6 +335,18 @@ pub enum Command {
         /// Local address selection.
         #[command(flatten)]
         iface: IfaceOpts,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+
+    /// Print the service a client is paired with (its `host:port`), as of now.
+    Peer {
+        /// The client's heartbeat address.
+        party: Addr,
         /// TLS options.
         #[command(flatten)]
         tls: TlsOpts,
@@ -440,6 +451,21 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn peer_takes_a_party_address_and_the_shared_options() {
+        let cli = parse(&["peer", "http://10.0.0.9:41232", "--request-timeout", "2"]);
+        match cli.command {
+            Command::Peer { party, tls, timing } => {
+                assert_eq!(party.to_string(), "http://10.0.0.9:41232");
+                assert!(!tls.tls);
+                assert_eq!(timing.timing().request_timeout, Duration::from_secs(2));
+            }
+            other => panic!("{other:?}"),
+        }
+        let err = Cli::try_parse_from(["nsm", "peer"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

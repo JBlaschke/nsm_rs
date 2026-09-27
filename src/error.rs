@@ -7,6 +7,7 @@
 use std::net::SocketAddr;
 
 use crate::net::addr::ParseAddrError;
+use crate::protocol::Role;
 
 /// Errors produced by the NSM library.
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +66,16 @@ pub enum Error {
     /// The broker rejected a request.
     #[error("broker rejected the request: {0}")]
     Rejected(String),
+
+    /// A party was asked something its role cannot answer: a service for
+    /// its peer, or a client for text.
+    #[error("the party is a {role}; {hint}")]
+    WrongRole {
+        /// What the party turned out to be.
+        role: Role,
+        /// What to ask instead.
+        hint: &'static str,
+    },
 
     /// The broker stopped answering heartbeats.
     #[error("lost contact with the broker at {0}")]
@@ -145,6 +156,19 @@ mod tests {
     fn config_errors_are_not_disconnects() {
         assert!(!Error::config("missing cert").is_disconnect());
         assert_eq!(Error::config("x").to_string(), "configuration error: x");
+    }
+
+    #[test]
+    fn wrong_role_names_the_role_and_the_way_out() {
+        let e = Error::WrongRole {
+            role: Role::Service,
+            hint: "only a client has a peer",
+        };
+        assert_eq!(
+            e.to_string(),
+            "the party is a service; only a client has a peer"
+        );
+        assert!(!e.is_disconnect());
     }
 
     #[test]

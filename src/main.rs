@@ -1,6 +1,9 @@
 //! The `nsm` binary: installs the crypto provider, initialises logging, parses
 //! the command line, runs one operation and prints its result. This is the
-//! only place that prints to stdout or decides exit codes.
+//! only place that prints to stdout or decides exit codes: 0 when the
+//! operation succeeded, 1 when it failed (`nsm: <error>` on stderr), 2 for a
+//! usage error (clap's own), and [`NOTHING_YET`] when the party answered but
+//! has nothing to report yet.
 
 use std::process::ExitCode;
 
@@ -12,6 +15,12 @@ use nsm::net::Transport;
 use nsm::ops::{self, NetOpts};
 use nsm::{Error, Result};
 
+/// Exit status when the party was reached but has nothing to report yet:
+/// `collect` before the first text, `peer` before the pairing. Distinct from
+/// a failed operation (1) so a polling script can tell "not yet" from
+/// "failed" without parsing stderr.
+const NOTHING_YET: u8 = 3;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     nsm::tls::install_default_provider();
@@ -22,7 +31,7 @@ async fn main() -> ExitCode {
     spawn_signal_handler(shutdown.clone());
 
     match run(cli.command, shutdown).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(e) => {
             eprintln!("nsm: {e}");
             ExitCode::FAILURE
@@ -79,7 +88,7 @@ fn serve_tls(tls: &TlsOpts, broker: Transport) -> Result<bool> {
     Ok(tls.tls || (broker.is_tls() && tls.paths().has_server_identity()))
 }
 
-async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
+async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> {
     match command {
         Command::ListInterfaces {
             ip_version,
@@ -209,16 +218,22 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
             tls,
             timing,
         } => {
-            let collected =
-                ops::collect(&party, &net_opts(&tls, &timing, &LimitsOpts::default())).await?;
-            match collected {
-                ops::Collected::Service { text: Some(text) } => println!("{text}"),
-                ops::Collected::Client {
-                    service: Some(service),
-                } => println!("{service}"),
-                ops::Collected::Service { text: None }
-                | ops::Collected::Client { service: None } => {
-                    eprintln!("nsm: nothing to collect yet")
+            let net = net_opts(&tls, &timing, &LimitsOpts::default());
+            match ops::collect(&party, &net).await?.text()? {
+                Some(text) => println!("{text}"),
+                None => {
+                    eprintln!("nsm: nothing to collect yet");
+                    return Ok(ExitCode::from(NOTHING_YET));
+                }
+            }
+        }
+        Command::Peer { party, tls, timing } => {
+            let net = net_opts(&tls, &timing, &LimitsOpts::default());
+            match ops::collect(&party, &net).await?.service()? {
+                Some(service) => println!("{service}"),
+                None => {
+                    eprintln!("nsm: not paired yet");
+                    return Ok(ExitCode::from(NOTHING_YET));
                 }
             }
         }
@@ -261,7 +276,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<()> {
             control.run().await?;
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Run a party session until Ctrl-C or until the broker is lost.
