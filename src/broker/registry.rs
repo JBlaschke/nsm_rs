@@ -28,6 +28,16 @@
 //!   [`ServiceHandle`] as *pending*, to be carried by the client's next
 //!   heartbeat. If no service is available the owner removes the client.
 //! - Removing a client frees its service for the next claim.
+//! - Each claim owns one [`Store`], kept in the client's entry: created
+//!   empty by `claim`, kept by `reclaim` across re-pairings (so the
+//!   replacement service reads every earlier write) and dropped when the
+//!   client is removed (decision S2 of the store plan).
+//!   [`store`](Registry::store) finds the store the way `deliver` finds the
+//!   peer: a client uses its own, including between losing its service and
+//!   being re-paired; a service uses the store of the client holding it, and
+//!   a service nobody holds reads an empty store and may not write (S3).
+//!   Every write takes the next number from one version counter for the
+//!   broker's whole life, starting at 1 (S5).
 //! - [`deliver`](Registry::deliver) parks text as the sender's peer's
 //!   pending *inbox* (a later delivery replaces an earlier one): a client's
 //!   text goes to its service, a service's text to the client holding it.
@@ -41,17 +51,19 @@
 //! the monitor's job, made from the counts and timestamps kept here and the
 //! thresholds in [`Timing`](crate::config::Timing).
 //!
-//! [`Limits::max_registrations`] bounds services and clients together.
+//! [`Limits::max_registrations`] bounds services and clients together, and
+//! [`Limits::max_store_bytes`] bounds each store.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use tokio::time::Instant;
 
+use super::store::Store;
 use crate::config::Limits;
 use crate::net::Addr;
 use crate::protocol::{
-    ClientRecord, Key, Message, PartyId, RegToken, ServiceHandle, ServiceRecord,
+    ClientRecord, Key, Message, PartyId, RegToken, ServiceHandle, ServiceRecord, StoreOp, Stored,
 };
 use crate::{Error, Result};
 
@@ -95,6 +107,10 @@ pub struct ClientEntry {
     pub failures: u32,
     /// When the broker last heard from the client.
     pub last_seen: Instant,
+    /// The store this claim shares with its service: created empty by
+    /// [`Registry::claim`], kept by [`Registry::reclaim`], dropped with the
+    /// entry.
+    pub store: Store,
 }
 
 /// What [`Registry::remove`] found and undid.
@@ -195,6 +211,20 @@ impl IdCounter {
     }
 }
 
+/// Source of store versions: starts at 1, strictly increasing, shared by
+/// every store for the broker's whole life. Stops before `u64::MAX` rather
+/// than wrapping.
+#[derive(Debug)]
+struct VersionCounter(u64);
+
+impl VersionCounter {
+    fn next(&mut self) -> Option<u64> {
+        let version = self.0;
+        self.0 = version.checked_add(1)?;
+        Some(version)
+    }
+}
+
 /// The broker's registry of services and clients. See the [module
 /// docs](self) for the model it implements.
 ///
@@ -206,6 +236,7 @@ impl IdCounter {
 pub struct Registry {
     limits: Limits,
     ids: IdCounter,
+    versions: VersionCounter,
     services: BTreeMap<PartyId, ServiceEntry>,
     clients: BTreeMap<PartyId, ClientEntry>,
 }
@@ -224,6 +255,7 @@ impl Registry {
         Registry {
             limits,
             ids: IdCounter(1),
+            versions: VersionCounter(1),
             services: BTreeMap::new(),
             clients: BTreeMap::new(),
         }
@@ -319,6 +351,7 @@ impl Registry {
                 inbox: None,
                 failures: 0,
                 last_seen: now,
+                store: Store::default(),
             },
         );
         Ok((id, handle))
@@ -494,6 +527,59 @@ impl Registry {
                 .count()
     }
 
+    // ----- the shared store -------------------------------------------------
+
+    /// Apply `op` to the store party `from` shares with its peer and say
+    /// whose store it is.
+    ///
+    /// A client uses its own claim's store, with no check on its service, so
+    /// it keeps access between losing its service and being re-paired. A
+    /// service uses the store of the client holding it. A service nobody
+    /// holds has no store: a get or a list answers an empty one with
+    /// `client: None` and revision 0, and nothing is created. Writes take
+    /// their numbers from the broker-wide version counter. Tokens are not
+    /// checked here; the handler verifies them first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Rejected`] when `from` is not a registered party
+    /// (`"unknown party <id>"`), when a service nobody holds tries to write
+    /// (`"service <id> is not claimed"`), when a put does not fit
+    /// [`Limits::max_store_bytes`] (`"store full: ..."`), and when the
+    /// version counter is exhausted (`"store versions exhausted"`). A
+    /// refused operation changes nothing.
+    pub fn store(&mut self, from: PartyId, op: StoreOp) -> Result<Stored> {
+        let client = if let Some(service) = self.services.get(&from) {
+            match service.claimed_by {
+                Some(client) if self.clients.contains_key(&client) => client,
+                _ if op.is_write() => {
+                    return Err(Error::Rejected(format!("service {from} is not claimed")));
+                }
+                _ => {
+                    return Ok(Stored {
+                        client: None,
+                        revision: 0,
+                        entries: Vec::new(),
+                    });
+                }
+            }
+        } else {
+            from
+        };
+        let Some(entry) = self.clients.get_mut(&client) else {
+            return Err(Error::Rejected(format!("unknown party {from}")));
+        };
+        let versions = &mut self.versions;
+        let (revision, entries) = entry
+            .store
+            .apply(op, self.limits.max_store_bytes, || versions.next())?;
+        Ok(Stored {
+            client: Some(client),
+            revision,
+            entries,
+        })
+    }
+
     // ----- liveness ---------------------------------------------------------
 
     /// Record that the party answered (a heartbeat succeeded or a ping
@@ -644,7 +730,11 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::broker::store::entry_cost;
     use crate::net::Transport;
+    use crate::protocol::message::store_key as skey;
+    use crate::protocol::{StoreEntry, StoreKey};
+    use crate::testing::Rng;
 
     const KEY: Key = 42;
 
@@ -769,6 +859,7 @@ mod tests {
                 inbox: None,
                 failures: 0,
                 last_seen: t,
+                store: Store::default(),
             }
         );
 
@@ -1398,5 +1489,554 @@ mod tests {
         assert_eq!(r.len(), 0);
         assert!(r.service_ids().is_empty() && r.client_ids().is_empty());
         assert_eq!(r.parties().count(), 0);
+    }
+
+    // ----- the shared store -------------------------------------------------
+
+    fn get(k: &str) -> StoreOp {
+        StoreOp::Get { key: skey(k) }
+    }
+
+    fn put(k: &str, value: &str) -> StoreOp {
+        StoreOp::Put {
+            key: skey(k),
+            value: value.into(),
+        }
+    }
+
+    fn delete(k: &str) -> StoreOp {
+        StoreOp::Delete { key: skey(k) }
+    }
+
+    fn entry(k: &str, value: &str, version: u64) -> StoreEntry {
+        StoreEntry {
+            key: skey(k),
+            value: value.into(),
+            version,
+        }
+    }
+
+    fn stored(client: PartyId, revision: u64, entries: Vec<StoreEntry>) -> Stored {
+        Stored {
+            client: Some(client),
+            revision,
+            entries,
+        }
+    }
+
+    fn empty_unclaimed() -> Stored {
+        Stored {
+            client: None,
+            revision: 0,
+            entries: vec![],
+        }
+    }
+
+    fn store_refusal(r: &mut Registry, from: PartyId, op: StoreOp) -> String {
+        match r.store(from, op) {
+            Err(Error::Rejected(reason)) => reason,
+            other => panic!("store from {from}: expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn claim_creates_an_empty_store() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+        let store = &r.client(c).unwrap().store;
+        assert!(store.is_empty());
+        assert_eq!((store.revision(), store.bytes()), (0, 0));
+        assert_eq!(r.store(c, StoreOp::List).unwrap(), stored(c, 0, vec![]));
+        assert_eq!(r.store(s, StoreOp::List).unwrap(), stored(c, 0, vec![]));
+    }
+
+    #[test]
+    fn a_client_and_its_service_share_one_store_named_after_the_client() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+
+        assert_eq!(
+            r.store(c, put("step", "5")).unwrap(),
+            stored(c, 1, vec![entry("step", "5", 1)])
+        );
+        assert_eq!(
+            r.store(s, get("step")).unwrap(),
+            stored(c, 1, vec![entry("step", "5", 1)]),
+            "the service reads the client's write, and the reply names the client"
+        );
+        assert_eq!(
+            r.store(s, put("ready", "yes")).unwrap(),
+            stored(c, 2, vec![entry("ready", "yes", 2)])
+        );
+        let both = stored(c, 2, vec![entry("ready", "yes", 2), entry("step", "5", 1)]);
+        assert_eq!(r.store(c, StoreOp::List).unwrap(), both);
+        assert_eq!(r.store(s, StoreOp::List).unwrap(), both);
+
+        assert_eq!(
+            r.store(s, delete("step")).unwrap(),
+            stored(c, 3, vec![entry("step", "5", 1)])
+        );
+        assert_eq!(r.store(c, get("step")).unwrap(), stored(c, 3, vec![]));
+        assert_eq!(
+            r.store(c, delete("step")).unwrap(),
+            stored(c, 3, vec![]),
+            "deleting an absent key succeeds and takes no number"
+        );
+        // Neither the service's entry nor anything else holds a copy.
+        assert_eq!(r.client(c).unwrap().store.len(), 1);
+    }
+
+    #[test]
+    fn an_unclaimed_service_reads_an_empty_store_and_cannot_write() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        assert_eq!(r.store(s, StoreOp::List).unwrap(), empty_unclaimed());
+        assert_eq!(r.store(s, get("step")).unwrap(), empty_unclaimed());
+        let not_claimed = format!("service {s} is not claimed");
+        assert_eq!(store_refusal(&mut r, s, put("step", "5")), not_claimed);
+        assert_eq!(store_refusal(&mut r, s, delete("step")), not_claimed);
+
+        // Nothing was seeded for the future claim, and no number was taken.
+        let (c, _) = claim(&mut r, KEY, false, t);
+        assert_eq!(r.store(s, StoreOp::List).unwrap(), stored(c, 0, vec![]));
+        assert_eq!(
+            r.store(c, put("step", "5")).unwrap(),
+            stored(c, 1, vec![entry("step", "5", 1)])
+        );
+    }
+
+    #[test]
+    fn unknown_and_removed_ids_are_refused() {
+        let mut r = registry(8);
+        let t = now();
+        for op in [get("k"), put("k", "v"), delete("k"), StoreOp::List] {
+            assert_eq!(store_refusal(&mut r, PartyId(99), op), "unknown party 99");
+        }
+        let s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+        r.store(c, put("k", "v")).unwrap();
+        let _ = r.remove(c);
+        let _ = r.remove(s);
+        for id in [s, c] {
+            for op in [get("k"), put("k", "v"), delete("k"), StoreOp::List] {
+                assert_eq!(store_refusal(&mut r, id, op), format!("unknown party {id}"));
+            }
+        }
+    }
+
+    #[test]
+    fn the_orphan_keeps_its_store_until_it_is_re_paired() {
+        let mut r = registry(8);
+        let t = now();
+        let s1 = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+        r.store(s1, put("from-a", "1")).unwrap();
+        assert_eq!(
+            r.remove(s1),
+            Removed::Service {
+                orphaned_clients: vec![c]
+            }
+        );
+        // No service at all: unlike deliver, the client keeps full access.
+        assert_eq!(
+            r.store(c, put("orphan", "2")).unwrap(),
+            stored(c, 2, vec![entry("orphan", "2", 2)])
+        );
+        assert_eq!(
+            r.store(c, StoreOp::List).unwrap(),
+            stored(c, 2, vec![entry("from-a", "1", 1), entry("orphan", "2", 2)])
+        );
+        assert_eq!(
+            store_refusal(&mut r, s1, get("from-a")),
+            format!("unknown party {s1}")
+        );
+    }
+
+    #[test]
+    fn the_store_survives_a_re_pairing_with_versions_continuing() {
+        let mut r = registry(8);
+        let t = now();
+        let a = publish(&mut r, KEY, false, t);
+        let b = publish(&mut r, KEY, false, t);
+        let other_service = publish(&mut r, KEY + 1, false, t);
+        let (c, h) = claim(&mut r, KEY, false, t);
+        assert_eq!(h.id, a);
+        let (other, _) = claim(&mut r, KEY + 1, false, t);
+
+        r.store(c, put("from-client", "c")).unwrap(); // 1
+        r.store(a, put("from-a", "a")).unwrap(); // 2
+        // Another claim's writes take numbers from the same counter.
+        assert_eq!(
+            r.store(other_service, put("elsewhere", "x")).unwrap(),
+            stored(other, 3, vec![entry("elsewhere", "x", 3)])
+        );
+        // Until the reclaim, b is an unclaimed service like any other.
+        let _ = r.remove(a);
+        assert_eq!(r.store(b, StoreOp::List).unwrap(), empty_unclaimed());
+        assert_eq!(
+            store_refusal(&mut r, b, put("early", "e")),
+            format!("service {b} is not claimed")
+        );
+
+        assert_eq!(r.reclaim(c).map(|h| h.id), Some(b));
+        assert_eq!(
+            r.store(b, StoreOp::List).unwrap(),
+            stored(
+                c,
+                2,
+                vec![entry("from-a", "a", 2), entry("from-client", "c", 1)]
+            ),
+            "the replacement reads the client's and the dead service's writes"
+        );
+        assert_eq!(
+            r.store(b, put("from-b", "b")).unwrap(),
+            stored(c, 4, vec![entry("from-b", "b", 4)]),
+            "versions continue from the broker-wide counter"
+        );
+        assert_eq!(r.store(c, get("from-b")).unwrap().revision, 4);
+        assert_eq!(
+            r.store(other, StoreOp::List).unwrap(),
+            stored(other, 3, vec![entry("elsewhere", "x", 3)]),
+            "the other claim's store is untouched"
+        );
+    }
+
+    #[test]
+    fn removing_the_client_drops_the_store_and_the_next_claim_starts_empty() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let (c1, _) = claim(&mut r, KEY, false, t);
+        r.store(c1, put("secret", "for c1")).unwrap();
+        r.store(s, put("step", "5")).unwrap();
+        assert_eq!(
+            r.remove(c1),
+            Removed::Client {
+                freed_service: Some(s)
+            }
+        );
+        assert_eq!(
+            store_refusal(&mut r, c1, StoreOp::List),
+            format!("unknown party {c1}")
+        );
+        assert_eq!(r.store(s, StoreOp::List).unwrap(), empty_unclaimed());
+        assert_eq!(
+            store_refusal(&mut r, s, put("step", "6")),
+            format!("service {s} is not claimed")
+        );
+
+        let (c2, h) = claim(&mut r, KEY, false, t);
+        assert_eq!(h.id, s);
+        assert_ne!(c2, c1);
+        assert_eq!(r.store(s, StoreOp::List).unwrap(), stored(c2, 0, vec![]));
+        assert_eq!(
+            r.store(c2, put("step", "1")).unwrap(),
+            stored(c2, 3, vec![entry("step", "1", 3)]),
+            "a new store, but numbers never repeat"
+        );
+    }
+
+    #[test]
+    fn a_store_is_bounded_by_the_registry_limit() {
+        let mut r = Registry::new(Limits {
+            max_store_bytes: 256,
+            ..Limits::default()
+        });
+        let t = now();
+        let _s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+        let fits = "x".repeat(256 - entry_cost(&skey("k"), ""));
+        r.store(c, put("k", &fits)).unwrap();
+        assert_eq!(r.client(c).unwrap().store.bytes(), 256);
+        let reason = store_refusal(&mut r, c, put("j", ""));
+        assert!(reason.starts_with("store full:"), "{reason}");
+        assert!(!reason.contains('x') && !reason.contains('j'), "{reason}");
+        assert_eq!(r.store(c, StoreOp::List).unwrap().revision, 1);
+    }
+
+    #[test]
+    fn an_exhausted_version_counter_refuses_writes_and_changes_nothing() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+        r.versions = VersionCounter(u64::MAX - 1);
+        assert_eq!(
+            r.store(c, put("k", "v")).unwrap(),
+            stored(c, u64::MAX - 1, vec![entry("k", "v", u64::MAX - 1)])
+        );
+        for (from, op) in [(c, put("k", "w")), (s, put("j", "w")), (c, delete("k"))] {
+            assert_eq!(store_refusal(&mut r, from, op), "store versions exhausted");
+        }
+        assert_eq!(
+            r.store(s, StoreOp::List).unwrap(),
+            stored(c, u64::MAX - 1, vec![entry("k", "v", u64::MAX - 1)])
+        );
+    }
+
+    /// What the churn test expects of one claim's store.
+    #[derive(Debug, Default)]
+    struct ModelStore {
+        entries: BTreeMap<StoreKey, (String, u64)>,
+        revision: u64,
+    }
+
+    impl ModelStore {
+        fn bytes(&self) -> usize {
+            self.entries
+                .iter()
+                .map(|(k, (v, _))| entry_cost(k, v))
+                .sum()
+        }
+
+        fn list(&self) -> Vec<StoreEntry> {
+            self.entries
+                .iter()
+                .map(|(k, (v, version))| StoreEntry {
+                    key: k.clone(),
+                    value: v.clone(),
+                    version: *version,
+                })
+                .collect()
+        }
+
+        fn get(&self, key: &StoreKey) -> Vec<StoreEntry> {
+            self.entries
+                .get(key)
+                .map(|(v, version)| StoreEntry {
+                    key: key.clone(),
+                    value: v.clone(),
+                    version: *version,
+                })
+                .into_iter()
+                .collect()
+        }
+    }
+
+    #[test]
+    fn random_churn_keeps_every_store_with_its_claim() {
+        const BUDGET: usize = 512;
+        let mut rng = Rng::new(0x5702e);
+        let mut r = Registry::new(Limits {
+            max_registrations: 40,
+            max_store_bytes: BUDGET,
+            ..Limits::default()
+        });
+        let t = now();
+        let keys: Vec<StoreKey> = (0..6).map(|_| rng.store_key()).collect();
+        let mut model: BTreeMap<PartyId, ModelStore> = BTreeMap::new();
+        let mut next_version = 1u64;
+        let mut issued: Vec<PartyId> = Vec::new();
+        let (mut writes, mut full, mut not_claimed, mut orphan_writes) = (0, 0, 0, 0);
+
+        for i in 0..4000 {
+            match rng.below(10) {
+                0 => {
+                    if let Ok(id) =
+                        r.publish(rng.range(1, 2) as Key, addr(1), addr(2), false, tok(), t)
+                    {
+                        issued.push(id);
+                    }
+                }
+                1 => {
+                    if let Ok((id, _)) = r.claim(rng.range(1, 2) as Key, addr(3), false, tok(), t) {
+                        issued.push(id);
+                        assert!(model.insert(id, ModelStore::default()).is_none());
+                    }
+                }
+                2 if !issued.is_empty() => {
+                    // Remove a party the way the monitor's drop_party does:
+                    // re-pair each orphan or remove it; sometimes the orphan
+                    // writes in between.
+                    let id = *rng.pick(&issued);
+                    match r.remove(id) {
+                        Removed::Service { orphaned_clients } => {
+                            for orphan in orphaned_clients {
+                                if rng.chance(2) {
+                                    let op = StoreOp::Put {
+                                        key: rng.pick(&keys).clone(),
+                                        value: rng.text(20),
+                                    };
+                                    let m = model.get_mut(&orphan).unwrap();
+                                    match r.store(orphan, op.clone()) {
+                                        Ok(reply) => {
+                                            let (StoreOp::Put { key, value }, [written]) =
+                                                (op, reply.entries.as_slice())
+                                            else {
+                                                panic!("iteration {i}: {reply:?}");
+                                            };
+                                            assert_eq!(
+                                                written.version, next_version,
+                                                "iteration {i}"
+                                            );
+                                            m.entries.insert(key, (value, next_version));
+                                            m.revision = next_version;
+                                            next_version += 1;
+                                            orphan_writes += 1;
+                                        }
+                                        Err(Error::Rejected(reason)) => {
+                                            assert!(
+                                                reason.starts_with("store full"),
+                                                "iteration {i}: {reason}"
+                                            );
+                                        }
+                                        Err(e) => panic!("iteration {i}: {e}"),
+                                    }
+                                }
+                                if r.reclaim(orphan).is_none() {
+                                    let _ = r.remove(orphan);
+                                    model.remove(&orphan);
+                                }
+                            }
+                        }
+                        Removed::Client { .. } => {
+                            model.remove(&id);
+                        }
+                        Removed::Unknown => {}
+                    }
+                }
+                _ if !issued.is_empty() => {
+                    // A store operation from any id ever issued, live or not.
+                    let from = *rng.pick(&issued);
+                    let key = rng.pick(&keys).clone();
+                    let op = match rng.below(5) {
+                        0 => StoreOp::Get { key },
+                        1 | 2 => StoreOp::Put {
+                            key,
+                            value: rng.text(60),
+                        },
+                        3 => StoreOp::Delete { key },
+                        _ => StoreOp::List,
+                    };
+                    let owner = match r.get(from) {
+                        None => None,
+                        Some(Party::Client(c)) => Some(Some(c.record.id)),
+                        Some(Party::Service(s)) => Some(s.claimed_by),
+                    };
+                    let result = r.store(from, op.clone());
+                    match (owner, result) {
+                        (None, Err(Error::Rejected(reason))) => {
+                            assert_eq!(reason, format!("unknown party {from}"), "iteration {i}");
+                        }
+                        (Some(None), Ok(reply)) => {
+                            assert!(!op.is_write(), "iteration {i}");
+                            assert_eq!(reply, empty_unclaimed(), "iteration {i}");
+                        }
+                        (Some(None), Err(Error::Rejected(reason))) => {
+                            assert!(op.is_write(), "iteration {i}");
+                            assert_eq!(
+                                reason,
+                                format!("service {from} is not claimed"),
+                                "iteration {i}"
+                            );
+                            not_claimed += 1;
+                        }
+                        (Some(Some(client)), result) => {
+                            let m = model.get_mut(&client).unwrap();
+                            let expected = match op {
+                                StoreOp::Get { key } => Ok(m.get(&key)),
+                                StoreOp::List => Ok(m.list()),
+                                StoreOp::Put { key, value } => {
+                                    let old =
+                                        m.entries.get(&key).map_or(0, |(v, _)| entry_cost(&key, v));
+                                    if m.bytes() - old + entry_cost(&key, &value) > BUDGET {
+                                        full += 1;
+                                        Err(())
+                                    } else {
+                                        let written = StoreEntry {
+                                            key: key.clone(),
+                                            value: value.clone(),
+                                            version: next_version,
+                                        };
+                                        m.entries.insert(key, (value, next_version));
+                                        m.revision = next_version;
+                                        next_version += 1;
+                                        writes += 1;
+                                        Ok(vec![written])
+                                    }
+                                }
+                                StoreOp::Delete { key } => {
+                                    let removed = m.get(&key);
+                                    if m.entries.remove(&key).is_some() {
+                                        m.revision = next_version;
+                                        next_version += 1;
+                                        writes += 1;
+                                    }
+                                    Ok(removed)
+                                }
+                            };
+                            match (expected, result) {
+                                (Ok(entries), Ok(reply)) => assert_eq!(
+                                    reply,
+                                    stored(client, m.revision, entries),
+                                    "iteration {i}"
+                                ),
+                                (Err(()), Err(Error::Rejected(reason))) => {
+                                    assert!(
+                                        reason.starts_with("store full"),
+                                        "iteration {i}: {reason}"
+                                    );
+                                }
+                                (expected, result) => {
+                                    panic!("iteration {i}: expected {expected:?}, got {result:?}")
+                                }
+                            }
+                        }
+                        (owner, result) => panic!("iteration {i}: {owner:?} gave {result:?}"),
+                    }
+                }
+                _ => {}
+            }
+
+            // After every step: every live client's store matches the model
+            // and is the one its service sees; unclaimed services see none.
+            assert_eq!(
+                r.client_ids(),
+                model.keys().copied().collect::<Vec<_>>(),
+                "iteration {i}"
+            );
+            for (&client, m) in &model {
+                let entry = r.client(client).unwrap();
+                let (bytes, service) = (entry.store.bytes(), entry.record.service);
+                assert_eq!(bytes, m.bytes(), "iteration {i}");
+                assert!(bytes <= BUDGET, "iteration {i}");
+                let expected = stored(client, m.revision, m.list());
+                assert_eq!(
+                    r.store(client, StoreOp::List).unwrap(),
+                    expected,
+                    "iteration {i}"
+                );
+                if r.service(service)
+                    .is_some_and(|s| s.claimed_by == Some(client))
+                {
+                    assert_eq!(
+                        r.store(service, StoreOp::List).unwrap(),
+                        expected,
+                        "iteration {i}"
+                    );
+                }
+            }
+            let unclaimed: Vec<PartyId> = r
+                .services()
+                .filter(|s| s.claimed_by.is_none())
+                .map(|s| s.record.id)
+                .collect();
+            for id in unclaimed {
+                assert_eq!(
+                    r.store(id, StoreOp::List).unwrap(),
+                    empty_unclaimed(),
+                    "iteration {i}"
+                );
+            }
+        }
+        assert!(
+            writes > 100 && full > 0 && not_claimed > 0 && orphan_writes > 0,
+            "the churn exercised too little: {writes} writes, {full} full, {not_claimed} unclaimed, {orphan_writes} orphan writes"
+        );
     }
 }
