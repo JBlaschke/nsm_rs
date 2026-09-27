@@ -81,6 +81,22 @@ version: 3.
   and read with `nsm collect` at the client (`POST /v1/send` and
   `POST /v1/collect` likewise). A client's `collect` answer carries both its
   pairing and its last text.
+- A shared store at the broker, one per claim (the command line and the
+  control plane reach it in later changes). Three new messages carry it:
+  `store` (operator to party), `store_relay` (party to broker, with its id
+  and token) and `stored`, the reply naming the claim's client, the store's
+  revision and the entries; they are new variants, so the wire protocol
+  stays version 3. The store is created empty when a claim is granted, kept
+  across re-pairings and dropped with the client; a service reaches it only
+  while it holds the claim. Store keys are 1 to 128 characters from
+  `A-Z a-z 0-9 . _ - : /`, not starting with `-`; versions come from one
+  counter for the broker's whole life. In the library: `protocol::StoreKey`,
+  `StoreOp`, `StoreEntry`, `Stored`, `broker::Store` and `Registry::store`.
+- `--max-store-bytes` on `listen` (default 16384, allowed 256 to 32768): the
+  budget of each store, counting every entry as its JSON-encoded key and
+  value plus 64 bytes. `listen` refuses to start when a full store's reply
+  would not fit `--max-frame-bytes`, so a frame limit below 17408 bytes now
+  needs a smaller store budget too.
 - Exit code 3: the party answered but has nothing to report yet (`collect`
   before the first text, `peer` before the pairing), distinct from a failed
   operation (1) and a usage error (2).
@@ -93,7 +109,8 @@ version: 3.
 - Flags for every timing and limit: `--heartbeat-interval`,
   `--heartbeat-timeout`, `--fail-threshold`, `--ping-staleness`,
   `--broker-watchdog`, `--request-timeout`, `--connect-timeout`,
-  `--max-frame-bytes`, `--max-connections`, `--max-registrations`.
+  `--max-frame-bytes`, `--max-connections`, `--max-registrations`,
+  `--max-store-bytes`.
 - `--bind-port 0` picks a free port; the bound address is printed on stderr.
 - Graceful shutdown on Ctrl-C and SIGTERM.
 - Tests: 160+ unit tests, end-to-end tests over all four transports, control

@@ -5,7 +5,9 @@ implemented in `src/protocol/` and `src/transport/`; the rustdoc of
 `nsm::protocol::Message` is the authoritative field-by-field reference.
 Version 3 let text flow both ways (`deliver` names no target); version 2 added
 the answering party's `role` to `collected`; version 1 was the first versioned
-format.
+format. Version 3 also carries the shared store's messages (`store`,
+`store_relay`, `stored`), added compatibly: they are new variants, which by
+the compatibility rule in section 6 need no bump.
 
 ## 1. Transports and framing
 
@@ -53,6 +55,9 @@ as `null` when absent and may be omitted when decoding.
 | `Addr` | string | `host:port`, `tls://host:port`, `http://host:port` or `https://host:port`; IPv6 literals bracketed and canonicalised (`[::1]:80`) |
 | `ServiceHandle` | `{"id":1,"host":"10.0.0.5","service_port":9000}` | what a client is told about its service; never carries the key |
 | `Role` | `"service"` or `"client"` | which kind of party answered a `collect`, hence which field of `collected` applies |
+| `StoreKey` | string | the name of one entry in a shared store: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`; anything else is a decode error. A store key is unrelated to the rendezvous key (`Key`) |
+| store operation | `{"op":"get","key":"step"}`, `{"op":"put","key":"step","value":"5"}`, `{"op":"delete","key":"step"}`, `{"op":"list"}` | carried inside `store` and `store_relay`, its fields next to `type`; a value is any UTF-8 text, empty text included |
+| `StoreEntry` | `{"key":"step","value":"5","version":3}` | one entry of a store; `version` is the number of its last write |
 
 ## 3. Messages
 
@@ -65,6 +70,8 @@ as `null` when absent and may be omitted when decoding.
 | `deliver` | party → broker (relay of a `send`) | `delivered` or `nack` |
 | `heartbeat` | broker → party (two-sided liveness) | `heartbeat_ack` or `nack` |
 | `collect` | operator → party | `collected` |
+| `store` | operator → party | `stored` or `nack` |
+| `store_relay` | party → broker (relay of a `store`) | `stored` or `nack` |
 
 ### `publish` → `registered`
 
@@ -170,6 +177,67 @@ yet); a client also answers with the handle of the service it is paired with
 registering), which a service leaves empty. The asker never has to guess from
 which field is set.
 
+### `store` → `stored`, `store_relay` → `stored`
+
+Each claim has one small key-value store, kept by the broker and shared by
+the client and the service that holds the claim. `store` is the operator's
+request to either party's bind address; the party keeps no copy and relays it
+to the broker as `store_relay`, naming itself and its token, the way `send`
+becomes `deliver`. The operation's fields sit next to `type`:
+
+```json
+{"type":"store","op":"put","key":"step","value":"5"}
+{"type":"store","op":"get","key":"step"}
+{"type":"store","op":"delete","key":"step"}
+{"type":"store","op":"list"}
+{"type":"store_relay","from":2,"token":"9e8d7c6b5a4f30211f2e3d4c5b6a7980","op":"put","key":"step","value":"5"}
+```
+
+The reply to both is `stored`: `client` is the id of the client whose claim
+owns the store, `revision` the number of the store's last write (0 before the
+first), and `entries` what the operation returns.
+
+```json
+{"type":"stored","client":2,"revision":3,"entries":[{"key":"step","value":"5","version":3}]}
+{"type":"stored","client":2,"revision":3,"entries":[]}
+{"type":"stored","client":null,"revision":0,"entries":[]}
+```
+
+| Operation | `entries` |
+|---|---|
+| `get` | the entry, or none when the key is not set |
+| `put` | the entry as written, with its new version |
+| `delete` | the removed entry, with the version of its last write, or none when the key was not set (which is not an error) |
+| `list` | every entry, in ascending byte order of key: one consistent snapshot |
+
+`store_relay` names no store: the broker finds it from `from`, as it finds
+the peer for `deliver`. A client uses its own claim's store, also between
+losing its service and being re-paired. A service uses the store of the
+client holding it; a service nobody holds reads an empty store
+(`client: null`, the last example above) and may not write. Every write (a
+put, or a delete that removed an entry) takes the next number from one
+counter for the broker's whole life, so versions never repeat, not even
+across claims, and one store's versions may skip numbers other stores took.
+Reads, refusals and deletes of an absent key take no number. The token check
+and the operation run in one critical section, so each operation is atomic
+against every other operation and against re-pairings; the last writer wins
+per key.
+
+The broker refuses a `store_relay` with a `nack`, changing nothing:
+
+| Reason | When |
+|---|---|
+| `unknown party or wrong token` | the id is unknown or removed, or the token is not its own (one text for both) |
+| `service <id> is not claimed` | a service nobody holds tried to put or delete |
+| `store full: the entry needs N bytes and F of M are free` | the put does not fit the store's budget (see the sizes rule) |
+| `store versions exhausted` | the version counter ran out, after about 1.8 × 10^19 writes |
+
+A `store` sent to the broker is `unexpected store at the broker`. Parties do
+not relay `store` yet: in this version of the code a party answers it with
+`unexpected store at a service` (or `client`). A malformed operation (an
+invalid store key, an unknown `op`, a put without a value) is a decode error
+like any other malformed message.
+
 ### `nack`
 
 ```json
@@ -269,13 +337,33 @@ one interval; a re-paired client learns its new service within one interval.
   be claimed again.
 - **Ids** are never reused within a broker process; a removed id stays
   unknown.
-- **Tokens** are required on `ping`, `deliver` and `heartbeat`; the broker's
+- **Stores follow the claim.** A claim's store is created empty when the
+  claim is granted, kept when the client is re-paired (the replacement
+  service reads everything written before, the dead service's writes
+  included) and dropped when the client is removed; the next claim of the
+  freed service starts with an empty store under a new client id. A service
+  reaches the store only while it holds the claim. Nothing store-related
+  rides on heartbeats or ping replies, a store relay does not count as proof
+  of life, and nothing survives a broker restart.
+- **Tokens** are required on `ping`, `deliver`, `store_relay` and `heartbeat`; the broker's
   refusals do not reveal whether an id exists. Tokens are 16 random bytes from
   the TLS crypto provider's secure random source.
 - **Sizes.** Every message is limited to the frame limit; text in `send`,
   `deliver`, `heartbeat` and `collected` is carried verbatim inside the JSON
-  string and shares that limit.
+  string and shares that limit. A store has a budget of its own
+  (`--max-store-bytes` on `listen`, default 16384, allowed 256 to 32768):
+  each entry counts as its key and value encoded as JSON strings, quotes and
+  escapes included, plus 64 bytes, and a put that would exceed the budget is
+  refused. A `stored` reply carrying every entry of a full store is then at
+  most the budget plus 1024 bytes, and `listen` refuses to start unless that
+  fits its own `--max-frame-bytes`. Parties use the default frame limit of
+  65536, which every allowed budget fits; parties started by `nsm serve`
+  inherit its `--max-frame-bytes`, so lowering it below a store's reply size
+  breaks large replies at those parties.
 - **Compatibility.** `PROTOCOL_VERSION` is bumped for any change an older
   peer could not decode: a renamed or removed field or variant, a changed
-  framing. Adding an optional field or a new variant does not require a bump.
-  There is no negotiation; brokers and parties must run the same version.
+  framing. Adding an optional field or a new variant does not require a bump;
+  that is how version 3 came to carry the store messages. There is no
+  negotiation; brokers and parties must run the same version. A broker that
+  predates the store closes the connection on a `store_relay` it cannot
+  decode.

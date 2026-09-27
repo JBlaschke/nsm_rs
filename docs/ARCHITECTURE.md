@@ -51,7 +51,7 @@ One library crate, `nsm`, and one binary of the same name built from
 | `protocol` | the tagged `Message` enum, the records it carries, JSON encoding and the length-prefixed `MessageCodec` for streams |
 | `tls` | rustls server and client configuration from PEM files; the trust model in one place; crypto provider selection |
 | `transport` | one request, one reply over TCP, TLS, HTTP or HTTPS behind the `Handler` trait, `serve()` and `Client::call()` |
-| `broker` | `Registry` (pure, synchronous state), `Broker` (monitor tasks and removal), `BrokerHandler` (admission and dispatch), `listen()` |
+| `broker` | `Registry` (pure, synchronous state), `Store` (the key-value store each claim shares with its service), `Broker` (monitor tasks and removal), `BrokerHandler` (admission and dispatch), `listen()` |
 | `party` | `Session` (bind, register, stay alive), `PartyHandler`, `PartyState` |
 | `ops` | typed requests and results for every operation |
 | `rest` | the axum control plane behind `nsm serve`: routes, jobs, bearer token |
@@ -121,14 +121,29 @@ reply. `codec::MessageCodec` is the tokio-util `Encoder`/`Decoder` for the
 4-byte length prefix used on streams; `encode`/`decode` are the JSON functions
 both transports use. `types` holds `PartyId`, `Key`, `RegToken` (a 128-bit
 secret with constant-time comparison and a redacted `Debug`), `ServiceHandle`
-(what a client is told about its service) and the broker's records.
+(what a client is told about its service), the broker's records, and the
+shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
+`StoreEntry` and `Stored` (the reply to every store operation).
 
 ### Broker (`broker`)
 
 - `registry.rs` is the model: services, clients, who holds whom, what is
-  pending for whom. It is synchronous, does no I/O, never reads the clock
-  (callers pass `now`), and is exhaustively unit-tested. Ids come from one
-  counter that never repeats.
+  pending for whom, and one store per claim. It is synchronous, does no I/O,
+  never reads the clock (callers pass `now`), and is exhaustively
+  unit-tested. Ids come from one counter that never repeats, and store
+  versions from another. A claim's store lives in the client's entry:
+  `claim` creates it empty, `reclaim` leaves it in place so the replacement
+  service reads every earlier write, and removing the client drops it, so
+  `remove`, `reclaim` and `drop_party` need no store code at all.
+  `Registry::store` finds the store the way `deliver` finds the peer: a
+  client uses its own, also while orphaned; a service uses the store of the
+  client holding it, and a service nobody holds reads an empty store and may
+  not write.
+- `store.rs` is `Store`: a key-value map with a byte budget, pure like the
+  registry. Each entry counts as its JSON-encoded key and value plus 64
+  bytes, which bounds the largest `stored` reply as well as memory; write
+  numbers come from the registry's counter, passed in; `Debug` shows counts
+  only.
 - `monitor.rs` is `Broker`: the registry behind its mutex, one heartbeat task
   per two-sided party (`watch`), a sweeper task for ping-mode parties, and
   the single removal path `drop_party`, which also re-pairs or removes the
@@ -136,8 +151,11 @@ secret with constant-time comparison and a redacted `Debug`), `ServiceHandle`
   for status output and tests.
 - `handler.rs` is `BrokerHandler`: admission (a real port, the optional
   matching-host check, the per-host cap) and one `match` over the request
-  variants, written once for every transport.
-- `listen.rs` wires the three together with a transport listener.
+  variants, written once for every transport. A relayed request (`deliver`,
+  `store_relay`) checks the sender's token and acts on the registry in one
+  critical section.
+- `listen.rs` wires the three together with a transport listener, after
+  checking that a full store's reply fits the frame limit.
 
 ### Party (`party`)
 
@@ -174,11 +192,24 @@ configured, and it is mandatory off loopback.
 All tunables live in `config`: `Timing` (heartbeat interval and timeout,
 failure threshold, ping staleness, broker watchdog, request and connect
 timeouts, registration retries, claim wait), `Limits` (frame size,
-concurrent connections, registrations), `BrokerPolicy` (matching-host check,
-per-host cap) and `TlsPaths`. Defaults are documented on the types and
-overridable from the CLI (`TimingOpts`, `LimitsOpts`, `BrokerOpts`,
-`TlsOpts`); `Timing::fast()` scales everything down for tests. Broker and
-parties should run with the same timing values.
+concurrent connections, registrations, store budget), `BrokerPolicy`
+(matching-host check, per-host cap) and `TlsPaths`. Defaults are documented
+on the types and overridable from the CLI (`TimingOpts`, `LimitsOpts`,
+`BrokerOpts`, `TlsOpts`); `Timing::fast()` scales everything down for tests.
+Broker and parties should run with the same timing values.
+
+Two limits only matter at a broker: `max_registrations` and
+`max_store_bytes` (`--max-store-bytes`, default 16384, allowed 256 to
+32768). `serve` accepts both with the other limits and ignores them.
+`listen` refuses to start, with a configuration error naming both flags,
+when a full store's reply (the budget plus 1024 bytes) would not fit its own
+`--max-frame-bytes`. Parties use the default 64 KiB frame, which every
+allowed budget fits; parties started by `nsm serve` inherit its
+`--max-frame-bytes`, so lowering it below a store's reply size breaks large
+replies at those parties. There is at most one store per client, and every
+client holds a distinct service, so at most `max_registrations / 2` stores
+exist: about 80 MiB of accounted store bytes with the defaults, and at most
+64 stores for the parties of one host under the default per-host cap.
 
 ## 6. Security model
 
@@ -206,13 +237,18 @@ parties should run with the same timing values.
 | a two-sided party stops answering | removed after `fail_threshold` failed heartbeats (each bounded by `heartbeat_timeout`); an acknowledgement resets the count |
 | a ping-mode party falls silent | removed once its last contact is older than `ping_staleness` |
 | a service is removed | each of its clients is re-paired with an unclaimed service of the same key and told in its next heartbeat; a client with no replacement is removed |
-| a client is removed | its service becomes unclaimed |
+| a service is removed, the client re-paired | the claim's store stays where it is: the client keeps using it while orphaned, and the replacement reads every earlier write, the dead service's included, with versions continuing |
+| a client is removed | its service becomes unclaimed; the claim's store is dropped, and the next claim of that service starts with an empty one |
+| a store relay arrives from a removed party | refused with `unknown party or wrong token`, as its token no longer verifies |
+| a put does not fit the store's budget | refused with `store full: ...`; the store is unchanged |
 | a party stops hearing its broker | `Session::run` returns `Err(BrokerLost)`; the process exits 1 |
 | a heartbeat's payload cannot be delivered | the pending inbox text or pairing is restored and carried by the next heartbeat |
 | the broker shuts down | every connection and task is cancelled; parties notice through their watchdog |
 
 Text delivery is "last message wins" per party: a second `send` before the
-receiving party's next heartbeat replaces the first.
+receiving party's next heartbeat replaces the first. The store is "last
+writer wins" per key, and lives in broker memory only: a broker restart
+loses every store with every registration.
 
 ## 8. Errors
 
@@ -227,8 +263,9 @@ misconfiguration; registration retries only on the former.
 ## 9. Tests
 
 - **Unit tests** next to the code, including randomized ones driven by the
-  seeded generator in `testing.rs` (address grammar, framing) and scripted
-  peers for the monitor's decisions.
+  seeded generator in `testing.rs` (address grammar, framing, store keys, the
+  store's byte accounting, a churn of claims and store operations checked
+  against a model) and scripted peers for the monitor's decisions.
 - **`tests/e2e.rs`**: a broker with services and clients in one process on
   ephemeral loopback ports, over all four transports, with `Timing::fast()`
   and generated certificates.
