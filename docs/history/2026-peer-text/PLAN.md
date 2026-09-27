@@ -1,9 +1,13 @@
-# Peer address and typed `collect`: plan
+# Peer address, typed `collect` and two-way text: plan and record
 
-> Written on 2026-09-27 against `main` at `1b76c288`, executed on the stacked
-> branches `peer/01` to `peer/04`. Section 0 is the live status; when the
-> branches are merged this file moves under [`history/`](history/) like the
-> [2026 refactor plan](history/2026-refactor/PLAN.md) before it.
+> This is the plan that drove the September 2026 work on the client side,
+> kept as a record. It was written on 2026-09-27 against `main` at
+> `1b76c288`, executed on the stacked branches `peer/01` to `peer/04`, and
+> merged through [#11](https://github.com/JBlaschke/nsm_rs/pull/11). The
+> status table in section 0 is final. The decisions in section 2 live on in
+> [`ARCHITECTURE.md`](../../ARCHITECTURE.md) under "Design decisions" as D13
+> to D16; the follow-ups in section 4 are still open. The plan before this
+> one is the [2026 refactor's](../2026-refactor/PLAN.md).
 
 ## 0. Status
 
@@ -15,7 +19,7 @@
 | `peer/04-two-way-text` | done | added 2026-09-27 after the first three were reviewed: `deliver` names no target, a client has an inbox, `send` and `collect` work at either party; protocol version 3 |
 
 Each branch builds on the previous one and passes the checks in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.
+[`CONTRIBUTING.md`](../../../CONTRIBUTING.md) at its tip.
 
 ## 1. The problem
 
