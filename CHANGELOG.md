@@ -41,7 +41,7 @@ version: 2.
   return `202` with a job that `GET`/`DELETE /v1/jobs/{id}` inspects and
   stops; request bodies never carry file paths; routes live under `/v1/`.
   Decision D9.
-- **Service handles** (the claim reply, `collect` on a client, REST job views)
+- **Service handles** (the claim reply, `peer` on a client, REST job views)
   no longer contain the rendezvous key.
 - **`collected` names the answering party.** The reply to `collect` carries
   `role` (`service` or `client`), so the asker knows which field applies

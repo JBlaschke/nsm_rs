@@ -165,11 +165,11 @@ impl fmt::Display for Role {
 
 /// What a claimer receives: enough to reach one service.
 ///
-/// This is the value printed by `nsm claim` and returned by `nsm collect`
-/// when asked of a client. It deliberately omits the service's heartbeat
-/// endpoint, which is the broker's business only, and the rendezvous key,
-/// which the claimer already holds and which must not leak to whoever asks a
-/// client what it is paired with.
+/// This is the value printed by `nsm claim` (once per pairing) and returned
+/// by `nsm peer` when asked of a client. It deliberately omits the service's
+/// heartbeat endpoint, which is the broker's business only, and the
+/// rendezvous key, which the claimer already holds and which must not leak
+/// to whoever asks a client what it is paired with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceHandle {
     /// The service's broker-assigned id.
