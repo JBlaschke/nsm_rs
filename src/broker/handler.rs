@@ -516,6 +516,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_store_relay_is_not_a_sign_of_life() {
+        use crate::protocol::StoreOp;
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            crate::tls::install_default_provider();
+            let h = handler(BrokerPolicy::default());
+            let _service = registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
+            let claim = Message::Claim {
+                key: 1,
+                bind_addr: Addr::tcp("127.0.0.1", 2),
+                ping: true,
+            };
+            let (client, token, _) = paired(h.handle(claim, peer()).await.unwrap());
+            let liveness = || {
+                h.broker
+                    .with_registry(|r| r.get(client).map(|p| (p.failures(), p.last_seen())))
+            };
+            let _ = h.broker.with_registry(|r| r.record_failure(client));
+            let before = liveness();
+            assert_eq!(before.map(|(failures, _)| failures), Some(1));
+
+            // Only heartbeats and pings count; a relay, like a deliver,
+            // leaves the failure count and the last contact alone.
+            let reply = h
+                .handle(
+                    Message::StoreRelay {
+                        from: client,
+                        token,
+                        op: StoreOp::List,
+                    },
+                    peer(),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(reply, Message::Stored(_)), "{reply:?}");
+            assert_eq!(liveness(), before);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn zero_port_is_refused() {
         let h = handler(BrokerPolicy::default());
         let reply = h.handle(publish("127.0.0.1", 0), peer()).await.unwrap();
