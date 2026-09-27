@@ -322,13 +322,11 @@ async fn store(command: StoreCommand) -> Result<ExitCode> {
     let mut lines = Vec::new();
     let mut code = ExitCode::SUCCESS;
     match &op {
-        // Only a put or a delete with --if-version can miss; the reply then
-        // carries the key's current entry, or none.
+        // Only a put or a delete with --if-version can miss (`ops::store`
+        // refuses anything else); the reply then carries the key's current
+        // entry, or none.
         _ if !stored.applied => {
-            match op.key() {
-                Some(key) => eprintln!("nsm: {}", stored.key_state(key)),
-                None => eprintln!("nsm: the {} was not applied", op.kind()),
-            }
+            eprintln!("nsm: {}", stored.not_applied_reason(&op));
             code = ExitCode::from(CONDITION_NOT_MET);
         }
         StoreOp::Get { key } => match stored.get(key) {

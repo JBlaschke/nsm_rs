@@ -489,13 +489,19 @@ impl Stored {
         self.entries.iter().map(|e| &e.key)
     }
 
-    /// What the reply says about `key`: `step is at version 7` when it
-    /// carries the key's entry, `step is not set` when it does not. This is
-    /// how the front-ends explain a conditional write that was not applied.
-    pub fn key_state(&self, key: &StoreKey) -> String {
-        match self.get(key) {
-            Some(entry) => format!("{key} is at version {}", entry.version),
-            None => format!("{key} is not set"),
+    /// Why `op` was not applied, from what this reply to it carries:
+    /// `step is at version 7` when it carries the key's entry, `step is not
+    /// set` when it does not. This is how the front-ends explain a
+    /// conditional write that missed. Only a put or a delete can miss, and
+    /// both name a key; for an operation without one the text says only
+    /// that it was not applied.
+    pub fn not_applied_reason(&self, op: &StoreOp) -> String {
+        match op.key() {
+            Some(key) => match self.get(key) {
+                Some(entry) => format!("{key} is at version {}", entry.version),
+                None => format!("{key} is not set"),
+            },
+            None => format!("the {} was not applied", op.kind()),
         }
     }
 }
@@ -880,8 +886,16 @@ mod tests {
         assert_eq!(stored.get(&key("c")), None);
         let keys: Vec<&str> = stored.keys().map(StoreKey::as_str).collect();
         assert_eq!(keys, ["a", "b"]);
-        assert_eq!(stored.key_state(&key("b")), "b is at version 7");
-        assert_eq!(stored.key_state(&key("c")), "c is not set");
+        let delete = |k| StoreOp::Delete {
+            key: key(k),
+            if_version: Some(1),
+        };
+        assert_eq!(stored.not_applied_reason(&delete("b")), "b is at version 7");
+        assert_eq!(stored.not_applied_reason(&delete("c")), "c is not set");
+        assert_eq!(
+            stored.not_applied_reason(&StoreOp::List),
+            "the list was not applied"
+        );
 
         let json = serde_json::to_string(&stored).unwrap();
         assert_eq!(
@@ -922,7 +936,12 @@ mod tests {
         let json = r#"{"client":2,"revision":9,"applied":false,"entries":[{"key":"step","value":"5","version":7}]}"#;
         assert_eq!(serde_json::to_string(&refused).unwrap(), json);
         assert_eq!(serde_json::from_str::<Stored>(json).unwrap(), refused);
-        assert_eq!(refused.key_state(&key("step")), "step is at version 7");
+        let put = StoreOp::Put {
+            key: key("step"),
+            value: "6".into(),
+            if_version: Some(0),
+        };
+        assert_eq!(refused.not_applied_reason(&put), "step is at version 7");
 
         // A reply from a broker that predates conditional writes has no
         // `applied`: every operation it answered was applied.

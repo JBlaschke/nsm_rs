@@ -592,19 +592,14 @@ struct NotApplied<'a> {
 
 async fn store(State(app): State<Arc<AppState>>, body: Bytes) -> ApiResult<Response> {
     let b: StoreBody = parse_body(&body)?;
-    let key = b.op.key().cloned();
-    let kind = b.op.kind();
-    let stored = ops::store(&b.party, b.op, &app.net).await?;
+    let stored = ops::store(&b.party, b.op.clone(), &app.net).await?;
     if stored.applied {
         return Ok(Json(stored).into_response());
     }
-    // Only a put or a delete with `if_version` can miss, and both name a key.
-    let error = match &key {
-        Some(key) => format!("store key {}", stored.key_state(key)),
-        None => format!("the {kind} was not applied"),
-    };
+    // Only a put or a delete with `if_version` can miss (`ops::store`
+    // refuses anything else), and both name a key.
     let body = NotApplied {
-        error,
+        error: format!("store key {}", stored.not_applied_reason(&b.op)),
         stored: &stored,
     };
     Ok((StatusCode::CONFLICT, Json(body)).into_response())

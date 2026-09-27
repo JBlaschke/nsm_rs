@@ -126,8 +126,8 @@ version: 3.
   with the reply and an `error` field. `applied` is on every `stored` reply
   (and on `--json` output) and decodes as true when absent; `if_version`
   decodes as none when absent; the wire protocol stays version 3. In the
-  library: `StoreOp::if_version`, `Stored::applied`, `Stored::key_state` and
-  `broker::store::Outcome`.
+  library: `StoreOp::if_version`, `Stored::applied`,
+  `Stored::not_applied_reason` and `broker::store::Outcome`.
 - `--max-store-bytes` on `listen` (default 16384, allowed 256 to 32768): the
   budget of each store, counting every entry as its JSON-encoded key and
   value plus 64 bytes. `listen` refuses to start when a full store's reply
