@@ -726,8 +726,9 @@ async fn store_works_in_ping_mode() {
             listed.keys().map(|k| k.as_str()).collect::<Vec<_>>(),
             ["done", "step"]
         );
-        // Relays do not count as proof of life, but the pings do: both
-        // parties are still registered after the staleness window.
+        // The pings keep both parties registered past the staleness
+        // window, and the store still answers. (That a relay alone is no
+        // sign of life is pinned in the broker handler's tests.)
         tokio::time::sleep(c.timing().ping_staleness * 2).await;
         assert_eq!(c.broker().snapshot().len(), 2);
         assert_eq!(store(&c, &service, StoreOp::List).await, listed);
