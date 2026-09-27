@@ -172,8 +172,13 @@ mod tests {
     #[tokio::test]
     async fn listen_refuses_a_budget_that_does_not_fit_before_binding() {
         tokio::time::timeout(Duration::from_secs(5), async {
+            // Hold the port: had `listen` tried to bind before checking, it
+            // would fail with "address in use" instead of the configuration
+            // error.
+            let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = held.local_addr().unwrap().port();
             let opts = ListenOpts {
-                bind: Addr::new(Transport::Tcp, "127.0.0.1", 0),
+                bind: Addr::new(Transport::Tcp, "127.0.0.1", port),
                 tls: TlsPaths::default(),
                 timing: Timing::fast(),
                 limits: limits(4096, 16 * 1024),
@@ -186,6 +191,7 @@ mod tests {
                 text.contains("--max-store-bytes 16384") && text.contains("--max-frame-bytes 4096"),
                 "{text}"
             );
+            drop(held);
         })
         .await
         .unwrap();
