@@ -30,8 +30,8 @@ nsm serve --bind 0.0.0.0:8080 --token "$NSM_TOKEN"   # any other address needs a
 | 400 | malformed or incomplete body, bad address or query value, a refusal by the broker or a party (unknown key, admission, a store write at a service nobody holds, a full store), oversized frame |
 | 401 | missing or wrong bearer token |
 | 404 | unknown job id, unknown route |
-| 409 | a store put or delete whose `if_version` did not match; the body is the store's reply with an `error` field added (see [`POST /v1/store`](#post-v1store)) |
 | 405 | wrong method on a known route |
+| 409 | a store put or delete whose `if_version` did not match; the body is the store's reply with an `error` field added (see [`POST /v1/store`](#post-v1store)) |
 | 413 | body larger than 64 KiB |
 | 502 | the broker or a party could not be reached (connection refused, timeout, connection closed, name resolution) |
 | 500 | anything else (for example the party's own listener could not be bound) |
@@ -211,6 +211,11 @@ the key is. Nothing changed, so the caller can retry from that entry:
 `"if_version":0` creates a key only if it is not set, so of several
 create-only puts of one key the first wins. A delete with 0 of a key that is
 not set is a 200 that removes nothing.
+
+Conditions need the broker and the party both to have conditional writes. A
+broker or a party that predates them drops `if_version`, applies the write
+anyway and answers 200 as if the condition held, so restart long-running
+parties on the new binary before relying on it.
 
 A service nobody holds reads an empty store (`{"client":null,"revision":0,"applied":true,"entries":[]}`)
 and its put and delete are a 400 `service <id> is not claimed`, with or

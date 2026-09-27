@@ -148,7 +148,9 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
 - `store.rs` is `Store`: a key-value map with a byte budget, pure like the
   registry. Each entry counts as its JSON-encoded key and value plus 64
   bytes, which bounds the largest `stored` reply as well as memory; write
-  numbers come from the registry's counter, passed in; `Debug` shows counts
+  numbers come from the registry's counter, passed in; a put or a delete
+  may carry an `if_version`, compared first, and one that does not match is
+  an answer with `applied` false that changes nothing; `Debug` shows counts
   only.
 - `monitor.rs` is `Broker`: the registry behind its mutex, one heartbeat task
   per two-sided party (`watch`), a sweeper task for ping-mode parties, and
@@ -286,8 +288,10 @@ exist: about 80 MiB of accounted store bytes with the defaults, and at most
 
 Text delivery is "last message wins" per party: a second `send` before the
 receiving party's next heartbeat replaces the first. The store is "last
-writer wins" per key, and lives in broker memory only: a broker restart
-loses every store with every registration.
+writer wins" per key unless a write states an `if_version`, which the broker
+compares in the same critical section that applies the write, and it lives
+in broker memory only: a broker restart loses every store with every
+registration.
 
 ## 8. Errors
 
@@ -351,7 +355,7 @@ are decisions P1 to P10.
 | D12 | Edition 2024 and `rust-version = "1.88"`, the minimum the current dependencies need; CI builds and tests on that toolchain as well as on stable. |
 | D13 | A party's `Role` is a protocol type (`service` / `client`), and the reply to `collect` names it, so a reply says which of its fields apply instead of leaving the asker to guess; `ops::Collected` is an enum keyed by the role. Protocol version 2. |
 | D14 | A client's pairing is a `tokio::sync::watch` channel (`Session::pairings`), not a slot: `nsm claim` prints one stdout line per pairing, the first at registration and one more each time the broker re-pairs it, so the last line is always the current service. |
-| D15 | One verb per question: `nsm peer` prints a client's paired service and nothing else, `nsm collect` a party's last text and nothing else; asking a service for its peer is `Error::WrongRole`. A party that answered but has nothing to report yet is exit status 3 (1 is a failed operation, 2 a usage error). The control plane needs no `peer` route, since `POST /v1/collect` is typed. |
+| D15 | One verb per question: `nsm peer` prints a client's paired service and nothing else, `nsm collect` a party's last text and nothing else; asking a service for its peer is `Error::WrongRole`. A party that answered but has nothing to report yet is exit status 3, and a `store put` or `store delete` whose `--if-version` did not match (answered, nothing changed) is exit status 4 (1 is a failed operation, 2 a usage error). The control plane needs no `peer` route, since `POST /v1/collect` is typed. |
 | D16 | Text flows both ways through one inbox per party: `send` at either party is relayed as a `deliver` that names no target, and the broker delivers to the sender's peer as it knows it (a client's current service, the client holding a service), so a text that races a re-pairing reaches the new service. Last text wins; a client's pending text survives a re-pairing. Protocol version 3. |
 
 ## 12. History
