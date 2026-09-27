@@ -853,6 +853,69 @@ fn claim_prints_a_line_for_every_pairing() {
     assert_eq!(client.stdout_line(), "127.0.0.1:9002");
 }
 
+/// A claim whose reader is gone before the first pairing line cannot hand
+/// over the one line a script needs, so it fails like any other command:
+/// exit 1 with a message, not a panic and not a party nobody learns about.
+/// (A reader that goes away later only stops the re-pairing lines; the
+/// party keeps running.)
+#[test]
+fn claim_with_a_closed_stdout_exits_1() {
+    let mut broker = Proc::spawn(
+        "listen",
+        &argv(&[&["listen", "--bind-port", "0"], IFACE, FAST]),
+    );
+    let line = broker.stderr_line_containing("broker listening on ");
+    let broker_addr = line.rsplit(' ').next().unwrap().to_owned();
+    let mut service = Proc::spawn(
+        "publish",
+        &argv(&[
+            &[
+                "publish",
+                &broker_addr,
+                "--bind-port",
+                "0",
+                "--service-port",
+                "9003",
+                "--key",
+                "78",
+            ],
+            IFACE,
+            FAST,
+        ]),
+    );
+    service.stderr_line_containing("service registered as ");
+
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    let mut child = nsm()
+        .args(argv(&[
+            &["claim", &broker_addr, "--bind-port", "0", "--key", "78"],
+            IFACE,
+            FAST,
+        ]))
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn nsm");
+    let stderr = pump(child.stderr.take().expect("stderr"));
+    let mut claim = Proc {
+        name: "claim",
+        child,
+        stdout: mpsc::channel().1,
+        stderr,
+        seen_stderr: Vec::new(),
+    };
+    let status = claim.wait_exit();
+    let stderr: Vec<String> = claim
+        .seen_stderr
+        .drain(..)
+        .chain(claim.stderr.iter())
+        .collect();
+    assert_eq!(status.code(), Some(1), "{status}; stderr: {stderr:?}");
+    assert!(stderr.iter().any(|l| l.starts_with("nsm: ")), "{stderr:?}");
+    assert!(!stderr.iter().any(|l| l.contains("panicked")), "{stderr:?}");
+}
+
 #[test]
 fn full_session_over_http() {
     full_session("http");

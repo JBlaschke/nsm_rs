@@ -182,7 +182,10 @@ text, `peer` before the pairing, `store get` of a key that is not set), so a
 polling script can tell "not yet" from "failed". Asking a service for its peer
 fails with a message naming the party's role. Stdout carries only a command's
 result, so it can be captured by scripts; logs and status lines go to stderr.
-A stdout nobody reads any more (a closed pipe) makes the command exit 1.
+A stdout nobody reads any more (a closed pipe) makes the command exit 1, with
+one exception: `nsm claim` exits 1 when its first line (the service address)
+cannot be written, but a reader that goes away after that only stops the
+re-pairing lines, and the party keeps running.
 
 ### Shared store
 

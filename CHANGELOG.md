@@ -204,8 +204,10 @@ version: 3.
   reports 502 as documented.
 - A closed stdout (a reader that went away, as in `nsm list-interfaces |
   head -0`) made `nsm` panic with exit 101; it now exits 1 with an `nsm: `
-  message, and `nsm claim` stops printing re-pairings but keeps its party
-  running.
+  message. `nsm claim` exits 1 the same way when its first line cannot be
+  written. Its re-pairing lines, which printed a panic message when the
+  reader had gone (the party kept running), now stop with a warning in the
+  log while the party keeps running.
 
 ### Security
 

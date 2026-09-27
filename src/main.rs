@@ -4,9 +4,11 @@
 //! operation succeeded, 1 when it failed (`nsm: <error>` on stderr), 2 for a
 //! usage error (clap's own), and [`NOTHING_YET`] when the party answered but
 //! has nothing to report yet (`collect` before the first text, `peer` before
-//! the pairing, `store get` of a key that is not set). Every line of stdout goes through
-//! [`print_line`], so a reader that went away (a closed pipe) makes the
-//! command fail with exit 1 instead of a panic.
+//! the pairing, `store get` of a key that is not set). Every line of stdout
+//! goes through [`print_line`], so a reader that went away (a closed pipe)
+//! makes the command fail with exit 1 instead of a panic. The one exception
+//! is `claim` after its first line: once the service address is out, a
+//! re-pairing line that cannot be written stops the printing, not the party.
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -205,7 +207,8 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
             let mut pairings = session.pairings();
             let first = pairings.borrow_and_update().clone();
             match first {
-                // The service address is the one line of stdout a script needs.
+                // The service address is the one line of stdout a script
+                // needs; if nobody can read it, the claim fails (exit 1).
                 Some(service) => print_line(service)?,
                 None => eprintln!("nsm: paired, but the broker sent no service handle"),
             }
@@ -215,8 +218,9 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
                 session.bound()
             );
             // Every re-pairing is one more line, so a script that keeps
-            // reading always holds the current service. When nobody reads
-            // any more, printing stops; the party itself keeps running.
+            // reading always holds the current service. When the reader
+            // goes away after the first line, printing stops with a warning
+            // in the log; the party itself keeps running.
             tokio::spawn(async move {
                 while pairings.changed().await.is_ok() {
                     let current = pairings.borrow_and_update().clone();

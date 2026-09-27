@@ -193,7 +193,9 @@ result to stdout and maps `Err` to exit code 1 with an `nsm: ` message on
 stderr (clap's own usage errors exit 2; a party that answered but has nothing
 to report yet, for `collect`, `peer` and `store get` of a key that is not
 set, is exit 3). Every stdout line goes through one writer that reports a
-closed pipe as an error, so a reader that went away is exit 1, not a panic.
+closed pipe as an error, so a reader that went away is exit 1, not a panic;
+`claim` exits 1 only when its first line cannot be written, and after that a
+failed re-pairing line stops the printing but not the party.
 `peer` and `collect` are the two accessors of `ops::Collected`, one per role;
 the binary adds no logic of its own. `ops::store` takes a `StoreOp` to either
 party and returns the broker's `Stored` as it is (a key that is not set is an
