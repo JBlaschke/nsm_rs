@@ -325,7 +325,7 @@ pub enum Command {
         timing: TimingOpts,
     },
 
-    /// Fetch the last text a service received.
+    /// Fetch the last text a party received from its peer.
     Collect {
         /// The party's heartbeat address.
         party: Addr,
@@ -355,9 +355,10 @@ pub enum Command {
         timing: TimingOpts,
     },
 
-    /// Send a message to a client, to be relayed through the broker to its service.
+    /// Send a message to a party, to be relayed through the broker to its peer.
     Send {
-        /// The client's heartbeat address.
+        /// The party's heartbeat address: a client's, for its service; a
+        /// service's, for the client holding it.
         party: Addr,
         /// Message text.
         #[arg(long, value_name = "TEXT")]

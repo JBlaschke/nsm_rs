@@ -501,7 +501,7 @@ fn full_session(transport: &str) {
         thread::sleep(Duration::from_millis(50));
     }
     // One verb per question: `peer` is the client's service and `collect`
-    // the service's text; asking the other role is an error naming it.
+    // a party's text; asking a service for its peer is an error naming it.
     let out = run(argv(&[&["peer", &client_hb], FAST]));
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert_eq!(out.stdout.trim(), "127.0.0.1:9000");
@@ -512,13 +512,29 @@ fn full_session(transport: &str) {
         "{}",
         out.stderr
     );
+    // Nothing has been sent to the client yet.
     let out = run(argv(&[&["collect", &client_hb], FAST]));
-    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
-    assert!(
-        out.stderr.starts_with("nsm: ") && out.stderr.contains("is a client"),
-        "{}",
-        out.stderr
-    );
+    assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+
+    // And back: the service answers the client holding it.
+    let out = run(argv(&[&["send", &service_hb, "--msg", "ready"], FAST]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let out = run(argv(&[&["collect", &client_hb], FAST]));
+        if out.code == 0 {
+            assert_eq!(out.stdout.trim(), "ready", "{}", out.stderr);
+            break;
+        }
+        assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+        assert!(
+            Instant::now() < deadline,
+            "client never received the text; last output {:?} / {:?}",
+            out.stdout,
+            out.stderr
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
 
     // Refusals: an unknown key, and a key whose only service is taken.
     for key in ["999", "1234"] {

@@ -239,7 +239,6 @@ mod tests {
         let msg = Message::Deliver {
             from: PartyId(4),
             token: test_token(),
-            to: PartyId(3),
             text: "split me".into(),
         };
         let bytes = frame(&msg);
@@ -446,7 +445,6 @@ mod tests {
             4 => Message::Deliver {
                 from: PartyId(rng.next_u64()),
                 token,
-                to: PartyId(rng.next_u64()),
                 text: rng.text(300),
             },
             5 => Message::Heartbeat {

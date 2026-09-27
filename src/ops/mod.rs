@@ -172,8 +172,8 @@ pub async fn claim(req: ClaimRequest) -> Result<Session> {
 /// The variant is the party's role, and each variant carries only what that
 /// role holds, so a caller never has to guess which field applies. For the
 /// control plane it serialises with the role as a `role` tag next to the
-/// variant's field: `{"role":"service","text":"job 17"}` or
-/// `{"role":"client","service":{...}}`.
+/// variant's fields: `{"role":"service","text":"job 17"}` or
+/// `{"role":"client","service":{...},"text":"ready"}`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Collected {
@@ -187,19 +187,17 @@ pub enum Collected {
         /// The service it is paired with; `None` only in the moment between
         /// binding its listener and registering.
         service: Option<ServiceHandle>,
+        /// The last text its service sent it; `None` before the first.
+        text: Option<String>,
     },
 }
 
 impl Collected {
-    /// The text a service holds: `None` before the first delivery. An
-    /// [`Error::WrongRole`] when the party is a client, which holds no text.
-    pub fn text(self) -> Result<Option<String>> {
+    /// The last text the party received from its peer: `None` before the
+    /// first delivery. Both roles receive text, so this never refuses.
+    pub fn text(self) -> Option<String> {
         match self {
-            Collected::Service { text } => Ok(text),
-            Collected::Client { .. } => Err(Error::WrongRole {
-                role: Role::Client,
-                hint: "text is collected from its service",
-            }),
+            Collected::Service { text } | Collected::Client { text, .. } => text,
         }
     }
 
@@ -208,7 +206,7 @@ impl Collected {
     /// which has no peer.
     pub fn service(self) -> Result<Option<ServiceHandle>> {
         match self {
-            Collected::Client { service } => Ok(service),
+            Collected::Client { service, .. } => Ok(service),
             Collected::Service { .. } => Err(Error::WrongRole {
                 role: Role::Service,
                 hint: "only a client has a peer",
@@ -227,9 +225,9 @@ pub async fn collect(party: &Addr, net: &NetOpts) -> Result<Collected> {
         } => Ok(Collected::Service { text }),
         Message::Collected {
             role: Role::Client,
+            text,
             service,
-            ..
-        } => Ok(Collected::Client { service }),
+        } => Ok(Collected::Client { service, text }),
         Message::Nack { reason } => Err(Error::Rejected(reason)),
         other => Err(Error::protocol(format!(
             "collect answered with {}",
@@ -238,7 +236,8 @@ pub async fn collect(party: &Addr, net: &NetOpts) -> Result<Collected> {
     }
 }
 
-/// Hand `text` to a client (by its heartbeat address) for its paired service.
+/// Hand `text` to a party (by its heartbeat address) for its peer: a
+/// client's service, or the client holding a service.
 pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
     match net.client().call(party, Message::Send { text }).await? {
         Message::Delivered => Ok(()),
@@ -264,10 +263,13 @@ mod tests {
             serde_json::to_string(&from_service).unwrap(),
             r#"{"role":"service","text":"job 17"}"#
         );
-        let from_client = Collected::Client { service: None };
+        let from_client = Collected::Client {
+            service: None,
+            text: None,
+        };
         assert_eq!(
             serde_json::to_string(&from_client).unwrap(),
-            r#"{"role":"client","service":null}"#
+            r#"{"role":"client","service":null,"text":null}"#
         );
         let handle = ServiceHandle {
             id: PartyId(1),
@@ -276,11 +278,12 @@ mod tests {
         };
         assert_eq!(
             serde_json::from_str::<Collected>(
-                r#"{"role":"client","service":{"id":1,"host":"h","service_port":2}}"#
+                r#"{"role":"client","service":{"id":1,"host":"h","service_port":2},"text":"ready"}"#
             )
             .unwrap(),
             Collected::Client {
-                service: Some(handle)
+                service: Some(handle),
+                text: Some("ready".into()),
             }
         );
         // Without the tag there is no way to tell what applies.
@@ -288,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn accessors_answer_their_own_role_and_refuse_the_other() {
+    fn accessors_answer_by_role() {
         let handle = ServiceHandle {
             id: PartyId(1),
             host: "h".into(),
@@ -299,17 +302,23 @@ mod tests {
         };
         let client = || Collected::Client {
             service: Some(handle.clone()),
+            text: Some("ready".into()),
         };
-        assert_eq!(service().text().unwrap().as_deref(), Some("job 17"));
+        // Text is held by either role.
+        assert_eq!(service().text().as_deref(), Some("job 17"));
+        assert_eq!(client().text().as_deref(), Some("ready"));
+        assert_eq!(Collected::Service { text: None }.text(), None);
+        // A peer only by a client; "nothing yet" is `None`, not an error.
         assert_eq!(client().service().unwrap(), Some(handle.clone()));
-        // "Nothing yet" is `None`, not an error.
-        assert_eq!(Collected::Service { text: None }.text().unwrap(), None);
-        assert_eq!(Collected::Client { service: None }.service().unwrap(), None);
-        // The other role is an error that names the role.
-        match client().text() {
-            Err(Error::WrongRole { role, .. }) => assert_eq!(role, Role::Client),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            Collected::Client {
+                service: None,
+                text: None
+            }
+            .service()
+            .unwrap(),
+            None
+        );
         match service().service() {
             Err(Error::WrongRole { role, .. }) => assert_eq!(role, Role::Service),
             other => panic!("{other:?}"),

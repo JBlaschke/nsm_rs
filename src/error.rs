@@ -68,7 +68,7 @@ pub enum Error {
     Rejected(String),
 
     /// A party was asked something its role cannot answer: a service for
-    /// its peer, or a client for text.
+    /// its peer.
     #[error("the party is a {role}; {hint}")]
     WrongRole {
         /// What the party turned out to be.

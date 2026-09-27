@@ -240,8 +240,27 @@ async fn publish_claim_send_collect_and_cancel_through_the_api() {
             .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(collected["role"], json!("client"), "{collected}");
-        assert!(collected.get("text").is_none(), "{collected}");
+        assert_eq!(collected["text"], Value::Null, "{collected}");
         assert_eq!(collected["service"]["service_port"], json!(9100));
+
+        // And back: the service answers the client holding it.
+        let (status, sent) = api
+            .post("/v1/send", &json!({ "party": service_hb, "msg": "ready" }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{sent}");
+        let text = loop {
+            let (status, collected) = api
+                .post("/v1/collect", &json!({ "party": client_hb }))
+                .await;
+            assert_eq!(status, StatusCode::OK, "{collected}");
+            assert_eq!(collected["role"], json!("client"), "{collected}");
+            assert_eq!(collected["service"]["service_port"], json!(9100));
+            if let Some(text) = collected["text"].as_str() {
+                break text.to_owned();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(text, "ready");
 
         // Cancelling the client keeps the job (as cancelled) and, once the
         // broker notices, frees the service.

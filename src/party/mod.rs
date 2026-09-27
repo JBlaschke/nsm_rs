@@ -107,7 +107,7 @@ impl PartyState {
         self.token.get().is_some_and(|own| own.ct_eq(presented))
     }
 
-    /// Last text delivered to this service, if any.
+    /// Last text delivered to this party by its peer, if any.
     pub fn inbox(&self) -> Option<String> {
         lock(&self.inbox).clone()
     }

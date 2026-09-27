@@ -336,7 +336,8 @@ pub struct PartyBody {
 /// `POST /v1/send`.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SendBody {
-    /// The client's heartbeat address.
+    /// The party's heartbeat address: a client's, for its service; a
+    /// service's, for the client holding it.
     pub party: Addr,
     /// Text to deliver.
     pub msg: String,

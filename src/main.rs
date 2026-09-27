@@ -219,7 +219,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
             timing,
         } => {
             let net = net_opts(&tls, &timing, &LimitsOpts::default());
-            match ops::collect(&party, &net).await?.text()? {
+            match ops::collect(&party, &net).await?.text() {
                 Some(text) => println!("{text}"),
                 None => {
                     eprintln!("nsm: nothing to collect yet");

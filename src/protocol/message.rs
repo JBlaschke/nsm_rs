@@ -17,8 +17,8 @@
 //! | [`Publish`](Message::Publish) | service → broker | [`Registered`](Message::Registered) or [`Nack`](Message::Nack) |
 //! | [`Claim`](Message::Claim) | client → broker | [`Paired`](Message::Paired) or [`Nack`](Message::Nack) |
 //! | [`Ping`](Message::Ping) | ping-mode party → broker, with its token | [`Heartbeat`](Message::Heartbeat) or [`Nack`](Message::Nack) |
-//! | [`Send`](Message::Send) | `send` → client | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
-//! | [`Deliver`](Message::Deliver) | client → broker (relay of a `Send`), with its token | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
+//! | [`Send`](Message::Send) | `send` → party | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
+//! | [`Deliver`](Message::Deliver) | party → broker (relay of a `Send`), with its token | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
 //! | [`Heartbeat`](Message::Heartbeat) | broker → party (two-sided liveness) | [`HeartbeatAck`](Message::HeartbeatAck) |
 //! | [`Collect`](Message::Collect) | `collect` → party | [`Collected`](Message::Collected) |
 //!
@@ -48,7 +48,8 @@ use crate::net::Addr;
 /// |---|---|
 /// | 1 | the first versioned format |
 /// | 2 | [`Collected`](Message::Collected) carries the answering party's `role` |
-pub const PROTOCOL_VERSION: u16 = 2;
+/// | 3 | [`Deliver`](Message::Deliver) names no target: the broker delivers to the sender's peer, so text flows both ways |
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// One wire message: a request to the broker or to a party, or a reply.
 ///
@@ -123,41 +124,43 @@ pub enum Message {
         token: RegToken,
     },
 
-    /// Hand `text` to a client for its paired service.
+    /// Hand `text` to a party for its peer.
     ///
-    /// Sent by the `send` operation to a *client's* bind address; `send`
-    /// knows only that address, not the service's id. The client relays the
-    /// text to the broker as [`Message::Deliver`] with its paired service as
-    /// the target and passes the broker's answer back.
+    /// Sent by the `send` operation to either party's bind address: a
+    /// client's, for its service, or a service's, for the client holding
+    /// it. The party relays the text to the broker as [`Message::Deliver`]
+    /// and passes the broker's answer back.
     ///
-    /// Reply: [`Message::Delivered`], or [`Message::Nack`] when the party is
-    /// a service, or a client that is not paired.
+    /// Reply: [`Message::Delivered`], or [`Message::Nack`] when the party has
+    /// not registered yet or, from the broker, when it has no peer (a
+    /// service no client holds).
     Send {
         /// The text itself, carried verbatim (no extra JSON encoding).
         text: String,
     },
 
-    /// Carry `text` to the service `to`, to be delivered in its next
+    /// Carry `text` to the sender's peer, to be delivered in the peer's next
     /// heartbeat.
     ///
-    /// Sent by a client to the broker when relaying a [`Message::Send`]. The
-    /// client identifies itself with `from` and its `token`, and the broker
-    /// accepts the text only when that client is currently paired with `to`;
-    /// it then stores the text as the service's pending `inbox` and hands it
-    /// over in the next [`Message::Heartbeat`] (or in the reply to the
-    /// service's next [`Message::Ping`]); `collect` on the service then
-    /// returns it. A later `Deliver` before the hand-over replaces the text.
+    /// Sent by a party to the broker when relaying a [`Message::Send`]. The
+    /// party identifies itself with `from` and its `token`; the broker knows
+    /// who its peer is (a client's current service, the client holding a
+    /// service) and no target is named on the wire, so a text that races a
+    /// re-pairing reaches the new service instead of being refused. The
+    /// broker stores the text as the peer's pending `inbox` and hands it
+    /// over in the peer's next [`Message::Heartbeat`] (or in the reply to
+    /// its next [`Message::Ping`]); `collect` on the peer then returns it. A
+    /// later `Deliver` before the hand-over replaces the text.
     ///
     /// Reply: [`Message::Delivered`], or [`Message::Nack`] when `from`/`token`
-    /// do not name a registered client, or that client is not paired with
-    /// `to`.
+    /// do not name a registered party, or the party has no peer (a service
+    /// no client holds; a client whose service died and that has not been
+    /// re-paired yet).
     Deliver {
-        /// Id of the relaying client.
+        /// Id of the relaying party.
         from: PartyId,
-        /// The relaying client's registration token.
+        /// The relaying party's registration token.
         token: RegToken,
-        /// Id of the service that should receive the text.
-        to: PartyId,
         /// The text itself, carried verbatim (no extra JSON encoding).
         text: String,
     },
@@ -168,7 +171,7 @@ pub enum Message {
     ///
     /// Sent by the broker to a party's bind address at the heartbeat
     /// interval, and also returned by the broker as the reply to a
-    /// [`Message::Ping`]. `inbox` is text a service has been sent (see
+    /// [`Message::Ping`]. `inbox` is text the party has been sent (see
     /// [`Message::Deliver`]); `service` is a client's new pairing after the
     /// broker re-claimed on its behalf because its previous service went
     /// away. Both are `None` on an ordinary beat, and each pending item is
@@ -185,7 +188,7 @@ pub enum Message {
     Heartbeat {
         /// The receiving party's registration token.
         token: RegToken,
-        /// Text pending for a service, delivered once.
+        /// Text pending for the party, delivered once.
         inbox: Option<String>,
         /// A client's new service after a re-pairing.
         service: Option<ServiceHandle>,
@@ -196,10 +199,10 @@ pub enum Message {
     ///
     /// Sent by the `collect` operation to a party's bind address.
     ///
-    /// Reply: [`Message::Collected`], which names the party's role. A
-    /// service answers with the last text it received in a heartbeat
-    /// (`text`, `None` if nothing was ever delivered); a client answers with
-    /// the handle of the service it is paired with (`service`).
+    /// Reply: [`Message::Collected`], which names the party's role. Either
+    /// party answers with the last text it received in a heartbeat (`text`,
+    /// `None` if nothing was ever delivered); a client also answers with the
+    /// handle of the service it is paired with (`service`).
     Collect,
 
     // ----- replies ----------------------------------------------------------
@@ -232,16 +235,16 @@ pub enum Message {
     Delivered,
 
     /// Reply to [`Message::Collect`]: what the party holds, and which kind
-    /// of party it is. A service (`role: service`) fills `text` with the
-    /// last text delivered to it (`None` before the first) and leaves
-    /// `service` empty; a client (`role: client`) fills `service` with its
-    /// current pairing (`None` only in the moment between binding its
-    /// listener and registering) and leaves `text` empty. The role tells the
-    /// asker which field applies, so it never has to guess from what is set.
+    /// of party it is. Both kinds fill `text` with the last text delivered
+    /// to them (`None` before the first). A client (`role: client`) also
+    /// fills `service` with its current pairing (`None` only in the moment
+    /// between binding its listener and registering); a service
+    /// (`role: service`) leaves it empty. The role tells the asker which
+    /// fields apply, so it never has to guess from what is set.
     Collected {
         /// Which kind of party answered.
         role: Role,
-        /// Last text delivered to a service.
+        /// Last text delivered to the party.
         text: Option<String>,
         /// The service a client is paired with.
         service: Option<ServiceHandle>,
@@ -340,7 +343,6 @@ pub(crate) fn all_variants() -> Vec<Message> {
         Message::Deliver {
             from: PartyId(4),
             token,
-            to: PartyId(3),
             text: "hello \"world\" \u{1F600} \\ / \n".into(),
         },
         Message::Heartbeat {
@@ -574,8 +576,40 @@ mod tests {
     fn wrong_field_type_is_an_error() {
         assert!(decode(r#"{"type":"ping","id":"1"}"#).is_err());
         assert!(decode(r#"{"type":"ping","id":-1}"#).is_err());
-        assert!(decode(r#"{"type":"deliver","to":1,"text":null}"#).is_err());
+        let hex = "07".repeat(16);
+        assert!(
+            decode(&format!(
+                r#"{{"type":"deliver","from":1,"token":"{hex}","text":1}}"#
+            ))
+            .is_err()
+        );
         assert!(decode(r#"{"type":"claim","key":1,"bind_addr":1,"ping":false}"#).is_err());
+    }
+
+    #[test]
+    fn deliver_names_no_target() {
+        let hex = "07".repeat(16);
+        let msg = decode(&format!(
+            r#"{{"type":"deliver","from":2,"token":"{hex}","text":"job 17"}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            msg,
+            Message::Deliver {
+                from: PartyId(2),
+                token: test_token(),
+                text: "job 17".into(),
+            }
+        );
+        assert!(!serde_json::to_string(&msg).unwrap().contains("\"to\""));
+        // A version-2 deliver still decodes: its target is an unknown field.
+        assert_eq!(
+            decode(&format!(
+                r#"{{"type":"deliver","from":2,"token":"{hex}","to":1,"text":"job 17"}}"#
+            ))
+            .unwrap(),
+            msg
+        );
     }
 
     #[test]
