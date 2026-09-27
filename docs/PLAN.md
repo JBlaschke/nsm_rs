@@ -1,7 +1,7 @@
 # Peer address and typed `collect`: plan
 
 > Written on 2026-09-27 against `main` at `1b76c288`, executed on the stacked
-> branches `peer/01` to `peer/03`. Section 0 is the live status; when the
+> branches `peer/01` to `peer/04`. Section 0 is the live status; when the
 > branches are merged this file moves under [`history/`](history/) like the
 > [2026 refactor plan](history/2026-refactor/PLAN.md) before it.
 
@@ -12,6 +12,7 @@
 | `peer/01-typed-collect` | done | `Role` in `protocol`; `collected` carries `role`; protocol version 2; `ops::Collected` is an enum; no command's output changes |
 | `peer/02-pairing-updates` | done | the pairing is a `watch` channel; `Session::pairings`; `nsm claim` prints every pairing; three-process CLI test |
 | `peer/03-peer-command` | done | `nsm peer`; `collect` prints text only; `Collected::text` / `Collected::service` with `Error::WrongRole`; exit status 3 for "nothing yet" |
+| `peer/04-two-way-text` | in progress | added 2026-09-27 after the first three were reviewed: text flows from a service to its client too |
 
 Each branch builds on the previous one and passes the checks in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.
@@ -35,6 +36,12 @@ no reliable way to get it.
 - The REST control plane has neither problem: `POST /v1/collect` returns
   typed JSON fields and the job view re-reads the pairing on every `GET`.
 
+A second request came after the first three branches were reviewed: text
+should flow both ways. Today `send` is accepted only at a client, which relays
+it to its service; a service has no way to hand a text to the client that
+holds it. The side channel is meant for short texts (a job id, a "ready"), so
+"both ways" means the same verbs work at either party, not a new data path.
+
 ## 2. Decisions
 
 | # | Decision | Taken | If you disagree |
@@ -46,6 +53,9 @@ no reliable way to get it.
 | P5 | **One verb per question.** New `nsm peer PARTY` prints exactly the paired service's `host:port`; `nsm collect PARTY` prints exactly a service's last text. Asking a service for its peer, or a client for text, is a run-time error (exit 1) with the party's role in the message. | As stated. Scripts that collected an address from a client switch to `peer`. | Keep the fallback on `collect` for a deprecation period, or add `collect --peer`. |
 | P6 | **"Nothing yet" is distinguishable.** When the party answered but has nothing to report (`collect` before any text, `peer` before a pairing), the command prints a note on stderr and exits **3**. Exit 1 stays "the operation failed" and 2 is clap's usage error. | As stated. | Exit 0 with empty stdout. |
 | P7 | **No new REST route.** `POST /v1/collect` already returns typed fields, now tagged with `role`, and the job view follows re-pairing; `peer` is a CLI presentation of the same operation, implemented as accessors on `Collected` in `ops` so the binary grows no logic of its own. | As stated. | Add `POST /v1/peer` returning `{"service": ...}`. |
+| P8 | **Two-way text uses the same verbs.** `send PARTY` hands a text to either party for its peer (a client's service, or a service's client); `collect PARTY` reads either party's last text; `Collected::Client` gains `text`. No new verb, route or message. | As stated; `collect` on a client stops being an error. | A separate pair of verbs (`reply` / `receive`) for the service-to-client direction. |
+| P9 | **`deliver` names no target.** The broker resolves "my peer" from its own state: a client's current service, a service's holding client. The `to` field is gone, so a service, which is never told its client's id, can relay too, and a text that races a re-pairing reaches the new service instead of being refused. An unclaimed service's text is refused (`service is not claimed`). Protocol version 3. | As stated. | Keep `to` and tell services their client's id through heartbeats (the follow-up in section 4), so the sender names the target and a stale target is refused. |
+| P10 | **One inbox per party.** A client has an inbox like a service: last text wins, delivered once on the next heartbeat (or ping reply), restored if that heartbeat fails, dropped with the party. A client's pending text survives a re-pairing, since it is addressed to the client, not to the pairing. | As stated. | Drop a client's pending text when its service dies. |
 
 ## 3. Branches
 
@@ -86,12 +96,25 @@ no reliable way to get it.
 - Docs: README (how it works, quickstart, command table, exit codes),
   `docs/ARCHITECTURE.md` (roles diagram, exit codes), `CHANGELOG.md`.
 
+### `peer/04-two-way-text`
+
+- `Message::Deliver { from, token, text }` (P9); `PROTOCOL_VERSION = 3`;
+  `ClientEntry.inbox`; `Registry::deliver(from, text)` resolves the peer;
+  `heartbeat_for` and `restore` carry a client's inbox (P10).
+- `PartyHandler` relays `Send` for both roles; `Collected::Client { service,
+  text }`; `Collected::text` answers for both roles (P8).
+- Tests: registry (both directions, unclaimed service, restore, removal),
+  broker handler (tokens, unclaimed, text riding the ping reply both ways),
+  party handler, end-to-end over every transport and in ping mode, REST,
+  the CLI session.
+- Docs: README, `docs/PROTOCOL.md` (version 3, `deliver`, `heartbeat`,
+  `collected`, sequences), `docs/REST_API.md`, `docs/ARCHITECTURE.md`,
+  `CHANGELOG.md`.
+
 ## 4. Out of scope
 
 - A service learning which client holds it. The broker has the data
   (`claimed_by` and the client's bind address); a `client` field on the
-  service's heartbeat and on `Collected::Service` would add it. Nothing
-  above needs it.
-- Text flowing from a service back to its client. `Collected::Client` would
-  gain a `text` field; `collect` on a client would then stop being an error.
+  service's heartbeat and on `Collected::Service` would add it. With P9 a
+  service does not need it to reach its client.
 - Queueing beyond "last message wins".
