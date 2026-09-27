@@ -365,5 +365,6 @@ one interval; a re-paired client learns its new service within one interval.
   framing. Adding an optional field or a new variant does not require a bump;
   that is how version 3 came to carry the store messages. There is no
   negotiation; brokers and parties must run the same version. A broker that
-  predates the store closes the connection on a `store_relay` it cannot
-  decode.
+  predates the store cannot decode a `store_relay`: over TCP and TLS it
+  closes the connection, over HTTP and HTTPS it answers status 400 with a
+  `nack` (see section 1).
