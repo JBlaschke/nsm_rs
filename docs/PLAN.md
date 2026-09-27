@@ -9,8 +9,8 @@
 
 | Branch | State | Notes |
 |---|---|---|
-| `peer/01-typed-collect` | in progress | |
-| `peer/02-pairing-updates` | pending | |
+| `peer/01-typed-collect` | done | `Role` in `protocol`; `collected` carries `role`; protocol version 2; `ops::Collected` is an enum; no command's output changes |
+| `peer/02-pairing-updates` | in progress | |
 | `peer/03-peer-command` | pending | |
 
 Each branch builds on the previous one and passes the checks in

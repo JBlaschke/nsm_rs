@@ -7,7 +7,7 @@ All notable changes to NSM are recorded here. The format follows
 
 The 2026-09 cleanup rewrote the backend once for every transport. Everything
 below compares against the last pre-cleanup state of `main`. Wire protocol
-version: 1 (the first versioned format).
+version: 2.
 
 ### Breaking changes
 
@@ -43,6 +43,11 @@ version: 1 (the first versioned format).
   Decision D9.
 - **Service handles** (the claim reply, `collect` on a client, REST job views)
   no longer contain the rendezvous key.
+- **`collected` names the answering party.** The reply to `collect` carries
+  `role` (`service` or `client`), so the asker knows which field applies
+  instead of guessing from what is set; this is wire protocol version 2.
+  `POST /v1/collect` answers `{"role":"service","text":...}` or
+  `{"role":"client","service":...}` instead of an object with both fields.
 - `collect` and `send` ignore `--key` (still accepted, hidden).
 - **Logging** uses `tracing`; `NSM_LOG_LEVEL` and `NSM_LOG_STYLE` keep their
   meaning, `--log-level` overrides them, logs go to stderr and stdout carries

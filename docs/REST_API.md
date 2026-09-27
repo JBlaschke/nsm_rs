@@ -127,11 +127,14 @@ the party once its heartbeats fail. Returns the view with `state` set to
 ```
 
 ```json
-{"text":"job 17","service":null}
+{"role":"service","text":"job 17"}
+{"role":"client","service":{"id":7,"host":"10.128.0.7","service_port":9000}}
 ```
 
-For a service, `text` is the last text it received (`null` if none yet); for a
-client, `service` is its paired service. An unreachable party is a 502.
+`role` names the kind of party that answered and therefore the other field:
+for a service, `text` is the last text it received (`null` if none yet); for a
+client, `service` is its paired service (`null` only before it has
+registered). An unreachable party is a 502.
 
 ### `POST /v1/send`
 

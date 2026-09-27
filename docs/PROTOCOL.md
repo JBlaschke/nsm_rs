@@ -1,8 +1,10 @@
 # Wire protocol
 
-Protocol version **1** (`nsm::protocol::PROTOCOL_VERSION`). Everything below is
+Protocol version **2** (`nsm::protocol::PROTOCOL_VERSION`). Everything below is
 implemented in `src/protocol/` and `src/transport/`; the rustdoc of
 `nsm::protocol::Message` is the authoritative field-by-field reference.
+Version 2 added the answering party's `role` to `collected`; version 1 was the
+first versioned format.
 
 ## 1. Transports and framing
 
@@ -49,6 +51,7 @@ as `null` when absent and may be omitted when decoding.
 | `RegToken` | string of 32 lowercase hex digits | 128 random bits issued at registration; compared in constant time; never logged |
 | `Addr` | string | `host:port`, `tls://host:port`, `http://host:port` or `https://host:port`; IPv6 literals bracketed and canonicalised (`[::1]:80`) |
 | `ServiceHandle` | `{"id":1,"host":"10.0.0.5","service_port":9000}` | what a client is told about its service; never carries the key |
+| `Role` | `"service"` or `"client"` | which kind of party answered a `collect`, hence which field of `collected` applies |
 
 ## 3. Messages
 
@@ -151,12 +154,16 @@ registered, is refused.
 
 ```json
 {"type":"collect"}
-{"type":"collected","text":"job 17","service":null}
-{"type":"collected","text":null,"service":{"id":1,"host":"10.0.0.5","service_port":9000}}
+{"type":"collected","role":"service","text":"job 17","service":null}
+{"type":"collected","role":"client","text":null,"service":{"id":1,"host":"10.0.0.5","service_port":9000}}
 ```
 
-A service answers with the last text it received (`text`, `null` if none
-yet); a client answers with the handle of the service it is paired with.
+The reply names the party's `role`, and the role says which field applies. A
+service answers with the last text it received (`text`, `null` if none yet)
+and leaves `service` empty; a client answers with the handle of the service
+it is paired with (`service`, `null` only in the moment between binding its
+listener and registering) and leaves `text` empty. The asker never has to
+guess from which field is set.
 
 ### `nack`
 
