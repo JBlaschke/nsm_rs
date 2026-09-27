@@ -114,6 +114,20 @@ version: 3.
   (`{"client":...,"revision":...,"entries":[...]}`); an unset key is 200 with
   no entries, a refusal 400, an unreachable party 502. In the library:
   `rest::StoreBody`.
+- Conditional store writes: a put or a delete may carry `if_version`
+  (`--if-version N` on `nsm store put` and `nsm store delete`), applied only
+  if the key is at version N, or only if it is not set when N is 0. The
+  broker compares in the same step as the write, so two writers that read
+  the same version cannot both get through, and a counter both parties
+  increment loses no update. A write whose condition does not hold changes
+  nothing and is answered with `stored` carrying `applied: false` and the
+  key's current entry; `nsm store` then exits 4 with `nsm: KEY is at version
+  V` or `nsm: KEY is not set` on stderr, and `POST /v1/store` answers 409
+  with the reply and an `error` field. `applied` is on every `stored` reply
+  (and on `--json` output) and decodes as true when absent; `if_version`
+  decodes as none when absent; the wire protocol stays version 3. In the
+  library: `StoreOp::if_version`, `Stored::applied`, `Stored::key_state` and
+  `broker::store::Outcome`.
 - `--max-store-bytes` on `listen` (default 16384, allowed 256 to 32768): the
   budget of each store, counting every entry as its JSON-encoded key and
   value plus 64 bytes. `listen` refuses to start when a full store's reply
@@ -125,6 +139,8 @@ version: 3.
   before the first text, `peer` before the pairing, `store get` of a key
   that is not set), distinct from a failed operation (1) and a usage error
   (2).
+- Exit status 4: a `store put` or `store delete` with `--if-version` was
+  answered but not applied, because the key was not at the version it named.
 - Four transports from one implementation: TCP, TCP+TLS (`tls://`, new),
   HTTP, HTTPS.
 - Registration tokens: 128-bit secrets issued at registration and required on

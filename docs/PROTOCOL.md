@@ -7,7 +7,9 @@ Version 3 let text flow both ways (`deliver` names no target); version 2 added
 the answering party's `role` to `collected`; version 1 was the first versioned
 format. Version 3 also carries the shared store's messages (`store`,
 `store_relay`, `stored`), added compatibly: they are new variants, which by
-the compatibility rule in section 6 need no bump.
+the compatibility rule in section 6 need no bump. The conditional writes that
+came after them (`if_version` on a put or a delete, `applied` on `stored`)
+are optional fields that decode when absent, so version 3 carries them too.
 
 ## 1. Transports and framing
 
@@ -56,7 +58,7 @@ as `null` when absent and may be omitted when decoding.
 | `ServiceHandle` | `{"id":1,"host":"10.0.0.5","service_port":9000}` | what a client is told about its service; never carries the key |
 | `Role` | `"service"` or `"client"` | which kind of party answered a `collect`, hence which field of `collected` applies |
 | `StoreKey` | string | the name of one entry in a shared store: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`; anything else is a decode error. A store key is unrelated to the rendezvous key (`Key`) |
-| store operation | `{"op":"get","key":"step"}`, `{"op":"put","key":"step","value":"5"}`, `{"op":"delete","key":"step"}`, `{"op":"list"}` | carried inside `store` and `store_relay`, its fields next to `type`; a value is any UTF-8 text, empty text included |
+| store operation | `{"op":"get","key":"step"}`, `{"op":"put","key":"step","value":"5","if_version":null}`, `{"op":"delete","key":"step","if_version":null}`, `{"op":"list"}` | carried inside `store` and `store_relay`, its fields next to `type`; a value is any UTF-8 text, empty text included; `if_version` (an unsigned integer or `null`, which is also what a missing field means) makes a put or a delete conditional |
 | `StoreEntry` | `{"key":"step","value":"5","version":3}` | one entry of a store; `version` is the number of its last write |
 
 ## 3. Messages
@@ -189,21 +191,23 @@ to the operator unchanged. The operator never sees a token. The operation's
 fields sit next to `type`:
 
 ```json
-{"type":"store","op":"put","key":"step","value":"5"}
+{"type":"store","op":"put","key":"step","value":"5","if_version":null}
 {"type":"store","op":"get","key":"step"}
-{"type":"store","op":"delete","key":"step"}
+{"type":"store","op":"delete","key":"step","if_version":null}
 {"type":"store","op":"list"}
-{"type":"store_relay","from":2,"token":"9e8d7c6b5a4f30211f2e3d4c5b6a7980","op":"put","key":"step","value":"5"}
+{"type":"store_relay","from":2,"token":"9e8d7c6b5a4f30211f2e3d4c5b6a7980","op":"put","key":"step","value":"5","if_version":null}
 ```
 
 The reply to both is `stored`: `client` is the id of the client whose claim
 owns the store, `revision` the number of the store's last write (0 before the
-first), and `entries` what the operation returns.
+first), `applied` whether a write went through (false only for a conditional
+write whose condition did not hold, see below), and `entries` what the
+operation returns.
 
 ```json
-{"type":"stored","client":2,"revision":3,"entries":[{"key":"step","value":"5","version":3}]}
-{"type":"stored","client":2,"revision":3,"entries":[]}
-{"type":"stored","client":null,"revision":0,"entries":[]}
+{"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"step","value":"5","version":3}]}
+{"type":"stored","client":2,"revision":3,"applied":true,"entries":[]}
+{"type":"stored","client":null,"revision":0,"applied":true,"entries":[]}
 ```
 
 | Operation | `entries` |
@@ -224,7 +228,37 @@ across claims, and one store's versions may skip numbers other stores took.
 Reads, refusals and deletes of an absent key take no number. The token check
 and the operation run in one critical section, so each operation is atomic
 against every other operation and against re-pairings; the last writer wins
-per key.
+per key, unless the writer states a condition.
+
+**Conditional writes.** A put or a delete may carry `if_version`, compared
+with the key's current version in the same critical section that applies
+the write. Versions start at 1, so 0 stands for "not set":
+
+| `if_version` | The write is applied when |
+|---|---|
+| `null` or missing | always (the last writer wins) |
+| `0` | the key is not set; a put creates it, a delete removes nothing |
+| `n` > 0 | the key is set and its current version is `n` |
+
+When the condition does not hold, the answer is still `stored`, not a
+`nack`: `applied` is `false`, `entries` carries the key's current entry (or
+none when it is not set), `revision` is the store's revision as it was, and
+nothing changes; no version number is taken. The condition is checked before
+the budget, so a stale write is answered this way even when its value would
+not have fitted. A service nobody holds is refused its writes with
+`service <id> is not claimed` whatever the condition.
+
+```json
+{"type":"store","op":"put","key":"step","value":"8","if_version":7}
+{"type":"stored","client":2,"revision":9,"applied":false,"entries":[{"key":"step","value":"7","version":9}]}
+{"type":"store","op":"put","key":"task","value":"mine","if_version":0}
+{"type":"stored","client":2,"revision":10,"applied":true,"entries":[{"key":"task","value":"mine","version":10}]}
+```
+
+Of two writers that read the same version and both write with it as their
+condition, exactly one is applied; the other learns the winner's entry and
+can retry from it. That is how two parties update one key without losing
+each other's changes.
 
 The broker refuses a `store_relay` with a `nack`, changing nothing:
 
@@ -429,8 +463,11 @@ one interval; a re-paired client learns its new service within one interval.
 - **Compatibility.** `PROTOCOL_VERSION` is bumped for any change an older
   peer could not decode: a renamed or removed field or variant, a changed
   framing. Adding an optional field or a new variant does not require a bump;
-  that is how version 3 came to carry the store messages. There is no
-  negotiation; brokers and parties must run the same version. A broker that
-  predates the store cannot decode a `store_relay`: over TCP and TLS it
-  closes the connection, over HTTP and HTTPS it answers status 400 with a
-  `nack` (see section 1).
+  that is how version 3 came to carry the store messages and then their
+  conditions. There is no negotiation; brokers and parties must run the same
+  version. A broker that predates the store cannot decode a `store_relay`:
+  over TCP and TLS it closes the connection, over HTTP and HTTPS it answers
+  status 400 with a `nack` (see section 1). A broker that has the store but
+  predates conditional writes ignores `if_version` like any unknown field and
+  applies the write unconditionally; its `stored` has no `applied`, which
+  decodes as true.

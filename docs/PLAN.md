@@ -15,7 +15,7 @@ work](history/2026-peer-text/PLAN.md).
 | `store/01-broker-store` | done | store types and messages; one store per claim in the registry; the broker answers `store_relay`; `--max-store-bytes`; a party answered `store` with "unexpected" until `store/02` |
 | `store/02-party-relay` | done | both parties relay `store` to the broker through one helper shared with `send`; `ops::store`; end-to-end tests over every transport and in ping mode; store traffic in the stress test |
 | `store/03-cli-and-rest` | done | `nsm store get\|put\|delete\|list` with `--json` and exit 3 for an unset key; `POST /v1/store`; every stdout line in `main` goes through one writer, so a closed stdout is exit 1 instead of a panic |
-| `store/04-conditional-writes` | planned | `if_version` on put and delete; exit status 4 and HTTP 409 for a version mismatch; can be dropped without touching 01 to 03 |
+| `store/04-conditional-writes` | done | `if_version` on put and delete (0: the key must not be set), compared before the budget; `applied` on `stored`, false for a mismatch, which changes nothing and takes no version; `--if-version` with exit status 4 and HTTP 409 for a mismatch; can be dropped without touching 01 to 03 |
 
 Each branch builds on the previous one and passes the checks in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.

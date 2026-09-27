@@ -157,8 +157,8 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm peer PARTY [options]` | the service a client is paired with | the service's `host:port` |
 | `nsm send PARTY --msg TEXT [options]` | hand text to a party for delivery to its peer | nothing |
 | `nsm store get PARTY KEY [--json] [options]` | read one entry of the store a client shares with its service | the value (exit 3 when the key is not set) |
-| `nsm store put PARTY KEY --value TEXT [--json] [options]` | set an entry, replacing what was there | the write's version |
-| `nsm store delete PARTY KEY [--json] [options]` | remove an entry; succeeds whether or not it was set | nothing (stderr says which) |
+| `nsm store put PARTY KEY --value TEXT [--if-version N] [--json] [options]` | set an entry, replacing what was there; with `--if-version`, only if the key is at version N (0: not set) | the write's version (exit 4 when the condition does not hold) |
+| `nsm store delete PARTY KEY [--if-version N] [--json] [options]` | remove an entry; succeeds whether or not it was set; with `--if-version`, only if the key is at version N | nothing (stderr says which; exit 4 when the condition does not hold) |
 | `nsm store list PARTY [--json] [options]` | every key in the store | one key per line, sorted |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
 
@@ -179,11 +179,13 @@ broker and the parties print the address they actually bound on stderr.
 (a message prefixed `nsm: ` goes to stderr); 2 for a command-line error; 3 when
 the party answered but has nothing to report yet (`collect` before the first
 text, `peer` before the pairing, `store get` of a key that is not set), so a
-polling script can tell "not yet" from "failed". Exit 1 from a `send`, a
-`store put` or a `store delete` means the outcome is unknown, not that nothing
-changed: the broker may have applied it before the reply was lost (read the
-key to find out). Asking a service for its peer fails with a message naming
-the party's role. Stdout carries only a command's
+polling script can tell "not yet" from "failed"; 4 when a `store put` or
+`store delete` with `--if-version` did not find the key at the version it
+named, so nothing changed and a script can read the key again and retry.
+Exit 1 from a `send`, a `store put` or a `store delete` means the outcome is
+unknown, not that nothing changed: the broker may have applied it before the
+reply was lost (read the key to find out). Asking a service for its peer
+fails with a message naming the party's role. Stdout carries only a command's
 result, so it can be captured by scripts; logs and status lines go to stderr.
 A stdout nobody reads any more (a closed pipe) makes the command exit 1, with
 one exception: `nsm claim` exits 1 when its first line (the service address)
@@ -208,13 +210,23 @@ options](#limit-options)); a put that does not fit is refused.
   takes text starting with `-` as it is.
 - `delete` prints nothing on stdout and says `nsm: deleted KEY` or
   `nsm: KEY was not set` on stderr; both are exit 0.
+- `--if-version N` makes a `put` or a `delete` conditional: it is applied
+  only if the key's current version is N, and `--if-version 0` only if the
+  key is not set (a `delete` with 0 of a key that is not set succeeds and
+  removes nothing). The condition is checked by the broker in the same step
+  as the write, so of two writers that read the same version only one gets
+  through. When the condition does not hold, nothing changes, stdout stays
+  empty, stderr says `nsm: KEY is at version V` or `nsm: KEY is not set`,
+  and the exit status is 4. Without `--if-version` the last writer wins.
 - `list` prints the keys, one per line, in sorted order, and nothing for an
   empty store (exit 0).
 - `--json` prints the broker's reply instead, as one line:
-  `{"client":8,"revision":3,"entries":[{"key":"step","value":"5","version":3}]}`,
+  `{"client":8,"revision":3,"applied":true,"entries":[{"key":"step","value":"5","version":3}]}`,
   the same body `POST /v1/store` returns. `client` is the id of the client
-  whose claim owns the store (`null` at a service nobody holds), and `list`
-  carries every value. Stderr and the exit status stay the same.
+  whose claim owns the store (`null` at a service nobody holds), `applied`
+  is false only for a write whose `--if-version` did not hold (the entry is
+  then the key's current one), and `list` carries every value. Stderr and
+  the exit status stay the same.
 
 A service nobody holds yet reads an empty store (so `get` exits 3) and is
 refused writes (exit 1, `not claimed`). The store is readable and writable by
@@ -268,6 +280,42 @@ nsm store put "$SERVICE_HB" checkpoint --value "$step" > /dev/null
 The wait is what makes the recipe work: without it, a spare reads its store
 before the broker has re-paired the client with it, gets exit 3 and starts
 again from step 0.
+
+```bash
+# A counter both sides add to without losing an update (compare and set):
+# read the count and its version, write the count plus one only if the key
+# is still at that version, and read again when another writer got there
+# first (exit 4). --json carries the version; a count is only digits, so
+# shell patterns take the reply apart.
+while :; do
+  reply=$(nsm store get "$CLIENT_HB" done --json)
+  case $? in
+    0) count=${reply#*\"value\":\"}; count=${count%%[!0-9]*}
+       version=${reply##*\"version\":}; version=${version%%[!0-9]*} ;;
+    3) count=0; version=0 ;;   # not set yet: create it
+    *) exit 1 ;;
+  esac
+  nsm store put "$CLIENT_HB" done --value $((count + 1)) --if-version "$version" > /dev/null
+  case $? in
+    0) break ;;
+    4) ;;                      # someone else wrote first: read again
+    *) exit 1 ;;
+  esac
+done
+```
+
+```bash
+# First one wins: any number of scripts, at the client or at the service,
+# may try to take a task, and only the put that finds the key not set
+# (--if-version 0) is applied. The others exit 4 and change nothing.
+if nsm store put "$SERVICE_HB" task/17/owner --value "$HOSTNAME" --if-version 0 > /dev/null; then
+  echo "task 17 is mine"
+elif [ $? -eq 4 ]; then
+  echo "task 17 was taken by $(nsm store get "$SERVICE_HB" task/17/owner)"
+else
+  exit 1
+fi
+```
 
 ### Address selection
 
