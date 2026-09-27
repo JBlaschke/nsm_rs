@@ -283,6 +283,10 @@ fn version_and_help_for_every_command() {
         );
     }
     assert!(run(["store", "put", "--help"]).stdout.contains("--value"));
+    for op in ["put", "delete"] {
+        let help = run(["store", op, "--help"]).stdout;
+        assert!(help.contains("--if-version <N>"), "store {op}: {help}");
+    }
 
     let listen = run(["listen", "--help"]).stdout;
     for flag in [
@@ -361,6 +365,34 @@ fn usage_errors_exit_2_and_explain() {
         ),
         (&["store", "delete", "127.0.0.1:1", "-x"], "-x"),
         (&["store", "put", "127.0.0.1:1", "step"], "--value"),
+        (
+            &[
+                "store",
+                "put",
+                "127.0.0.1:1",
+                "step",
+                "--value",
+                "1",
+                "--if-version",
+                "-1",
+            ],
+            "-1",
+        ),
+        (
+            &[
+                "store",
+                "delete",
+                "127.0.0.1:1",
+                "step",
+                "--if-version",
+                "x",
+            ],
+            "--if-version",
+        ),
+        (
+            &["store", "get", "127.0.0.1:1", "step", "--if-version", "1"],
+            "--if-version",
+        ),
         (&["store", "list"], "<PARTY>"),
         (&["store", "frobnicate"], "unrecognized subcommand"),
         (&["serve", "--bind", "not-an-address"], "not-an-address"),
@@ -543,11 +575,23 @@ fn full_session(transport: &str) {
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert_eq!(
         out.stdout,
-        "{\"client\":null,\"revision\":0,\"entries\":[]}\n"
+        "{\"client\":null,\"revision\":0,\"applied\":true,\"entries\":[]}\n"
     );
+    // A condition changes nothing about that: still a refusal, exit 1,
+    // not a missed condition.
     for write in [
         &["put", service_hb.as_str(), "input", "--value", "x"][..],
         &["delete", service_hb.as_str(), "input"][..],
+        &[
+            "put",
+            service_hb.as_str(),
+            "input",
+            "--value",
+            "x",
+            "--if-version",
+            "0",
+        ][..],
+        &["delete", service_hb.as_str(), "input", "--if-version", "0"][..],
     ] {
         let out = run(argv(&[&["store"], write, FAST]));
         assert_eq!(
@@ -764,6 +808,7 @@ fn store_session(client_hb: &str, service_hb: &str) {
     assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
     let written: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
     let version = written["revision"].as_u64().expect("revision");
+    assert_eq!(written["applied"], true, "{written}");
     assert_eq!(
         written["entries"],
         serde_json::json!([{ "key": "scratch", "value": "x", "version": version }]),
@@ -794,6 +839,134 @@ fn store_session(client_hb: &str, service_hb: &str) {
     assert_eq!(out.stderr, "nsm: step was not set\n");
     let out = store(&["get", client_hb, "step"]);
     assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+
+    conditional_store_session(client_hb, service_hb);
+}
+
+/// `--if-version` on `store put` and `store delete`: a write that finds the
+/// key where it expected prints what an unconditional one prints; one that
+/// does not changes nothing, says where the key is and exits 4.
+fn conditional_store_session(client_hb: &str, service_hb: &str) {
+    let store = |args: &[&str]| run(argv(&[&["store"], args, FAST]));
+    let version_of = |out: &Output| -> u64 {
+        out.stdout
+            .strip_suffix('\n')
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("expected a version, got {:?}", out.stdout))
+    };
+
+    // Create-only: --if-version 0 creates a key that is not set...
+    let out = store(&[
+        "put",
+        client_hb,
+        "task",
+        "--value",
+        "a",
+        "--if-version",
+        "0",
+    ]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    let created = version_of(&out);
+
+    // ...and a second create-only put of the same key loses: exit 4,
+    // nothing on stdout, stderr names the winner's version.
+    let out = store(&[
+        "put",
+        service_hb,
+        "task",
+        "--value",
+        "b",
+        "--if-version",
+        "0",
+    ]);
+    assert_eq!((out.code, out.stdout.as_str()), (4, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, format!("nsm: task is at version {created}\n"));
+    let out = store(&["get", service_hb, "task"]);
+    assert_eq!(out.stdout, "a\n", "the losing put changed nothing");
+
+    // A put at the current version prints the new version.
+    let out = store(&[
+        "put",
+        service_hb,
+        "task",
+        "--value",
+        "c",
+        "--if-version",
+        &created.to_string(),
+    ]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    let updated = version_of(&out);
+    assert!(updated > created, "{updated} after {created}");
+
+    // With --json a missed condition prints the reply, applied false and
+    // the current entry, and still exits 4.
+    let stale = created.to_string();
+    let out = store(&[
+        "put",
+        client_hb,
+        "task",
+        "--value",
+        "d",
+        "--if-version",
+        &stale,
+        "--json",
+    ]);
+    assert_eq!(out.code, 4, "{}", out.stderr);
+    assert_eq!(out.stderr, format!("nsm: task is at version {updated}\n"));
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(reply["applied"], false, "{reply}");
+    assert_eq!(
+        reply["entries"],
+        serde_json::json!([{ "key": "task", "value": "c", "version": updated }]),
+        "{reply}"
+    );
+
+    // A delete with a stale version misses; at the current version it
+    // removes the key.
+    let out = store(&["delete", client_hb, "task", "--if-version", &stale]);
+    assert_eq!((out.code, out.stdout.as_str()), (4, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, format!("nsm: task is at version {updated}\n"));
+    let out = store(&[
+        "delete",
+        client_hb,
+        "task",
+        "--if-version",
+        &updated.to_string(),
+    ]);
+    assert_eq!((out.code, out.stdout.as_str()), (0, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: deleted task\n");
+
+    // The key is gone: a version other than 0 misses with "not set", and a
+    // create-only delete succeeds, removing nothing.
+    for args in [
+        &[
+            "put",
+            service_hb,
+            "task",
+            "--value",
+            "e",
+            "--if-version",
+            "1",
+        ][..],
+        &["delete", service_hb, "task", "--if-version", stale.as_str()][..],
+    ] {
+        let out = store(args);
+        assert_eq!(
+            (out.code, out.stdout.as_str()),
+            (4, ""),
+            "{args:?}: {}",
+            out.stderr
+        );
+        assert_eq!(out.stderr, "nsm: task is not set\n", "{args:?}");
+    }
+    let out = store(&["delete", service_hb, "task", "--if-version", "0"]);
+    assert_eq!((out.code, out.stdout.as_str()), (0, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: task was not set\n");
+    let out = store(&["get", client_hb, "task"]);
+    assert_eq!(out.code, 3, "{}", out.stderr);
 }
 
 #[test]

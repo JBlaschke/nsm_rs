@@ -446,7 +446,7 @@ pub enum StoreCommand {
     },
 
     /// Store a value under a key, replacing what was there, and print the
-    /// write's version.
+    /// write's version (exit 4 when --if-version does not match).
     Put {
         /// Either party's heartbeat address.
         party: Addr,
@@ -456,6 +456,10 @@ pub enum StoreCommand {
         /// The value: any text, including empty text.
         #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
         value: String,
+        /// Write only if the key is at version N (0: only if it is not set);
+        /// otherwise change nothing and exit 4.
+        #[arg(long, value_name = "N")]
+        if_version: Option<u64>,
         /// Print the broker's reply as one line of JSON instead.
         #[arg(long)]
         json: bool,
@@ -467,13 +471,18 @@ pub enum StoreCommand {
         timing: TimingOpts,
     },
 
-    /// Remove a key; succeeds whether or not it was set.
+    /// Remove a key; succeeds whether or not it was set (exit 4 when
+    /// --if-version does not match).
     Delete {
         /// Either party's heartbeat address.
         party: Addr,
         /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
         /// starting with -.
         key: StoreKey,
+        /// Remove only if the key is at version N (0: only if it is not
+        /// set); otherwise change nothing and exit 4.
+        #[arg(long, value_name = "N")]
+        if_version: Option<u64>,
         /// Print the broker's reply as one line of JSON.
         #[arg(long)]
         json: bool,
@@ -519,6 +528,7 @@ impl StoreCommand {
                 party,
                 key,
                 value,
+                if_version,
                 json,
                 tls,
                 timing,
@@ -527,7 +537,7 @@ impl StoreCommand {
                 StoreOp::Put {
                     key,
                     value,
-                    if_version: None,
+                    if_version,
                 },
                 tls,
                 timing,
@@ -536,15 +546,13 @@ impl StoreCommand {
             StoreCommand::Delete {
                 party,
                 key,
+                if_version,
                 json,
                 tls,
                 timing,
             } => (
                 party,
-                StoreOp::Delete {
-                    key,
-                    if_version: None,
-                },
+                StoreOp::Delete { key, if_version },
                 tls,
                 timing,
                 json,
@@ -692,6 +700,70 @@ mod tests {
             tls.root_ca.as_deref(),
             Some(std::path::Path::new("/ca.pem"))
         );
+    }
+
+    #[test]
+    fn if_version_makes_put_and_delete_conditional() {
+        let (_, op, _, _, _) = store(&["put", "c:1", "step", "--value", "6", "--if-version", "5"]);
+        assert_eq!(
+            op,
+            StoreOp::Put {
+                key: store_key("step"),
+                value: "6".into(),
+                if_version: Some(5),
+            }
+        );
+        let (_, op, _, _, json) = store(&["delete", "c:1", "step", "--if-version", "0", "--json"]);
+        assert_eq!(
+            op,
+            StoreOp::Delete {
+                key: store_key("step"),
+                if_version: Some(0),
+            }
+        );
+        assert!(json);
+        let max = u64::MAX.to_string();
+        let (_, op, _, _, _) = store(&["put", "c:1", "k", "--if-version", &max, "--value", ""]);
+        assert_eq!(op.if_version(), Some(u64::MAX));
+
+        for bad in [
+            &[
+                "store",
+                "put",
+                "c:1",
+                "k",
+                "--value",
+                "v",
+                "--if-version",
+                "-1",
+            ][..],
+            &[
+                "store",
+                "put",
+                "c:1",
+                "k",
+                "--value",
+                "v",
+                "--if-version",
+                "x",
+            ],
+            &["store", "delete", "c:1", "k", "--if-version"],
+            &[
+                "store",
+                "delete",
+                "c:1",
+                "k",
+                "--if-version",
+                "18446744073709551616",
+            ],
+            // Reads take no condition.
+            &["store", "get", "c:1", "k", "--if-version", "1"],
+            &["store", "list", "c:1", "--if-version", "1"],
+        ] {
+            let err =
+                Cli::try_parse_from(std::iter::once("nsm").chain(bad.iter().copied())).unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{bad:?}: {err}");
+        }
     }
 
     #[test]

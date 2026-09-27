@@ -2,9 +2,12 @@
 //! the command line, runs one operation and prints its result. This is the
 //! only place that prints to stdout or decides exit codes: 0 when the
 //! operation succeeded, 1 when it failed (`nsm: <error>` on stderr), 2 for a
-//! usage error (clap's own), and [`NOTHING_YET`] when the party answered but
+//! usage error (clap's own), [`NOTHING_YET`] (3) when the party answered but
 //! has nothing to report yet (`collect` before the first text, `peer` before
-//! the pairing, `store get` of a key that is not set). Every line of stdout
+//! the pairing, `store get` of a key that is not set), and
+//! [`CONDITION_NOT_MET`] (4) when a `store put` or `store delete` with
+//! `--if-version` found the key at another version, so nothing changed.
+//! Neither 3 nor 4 is a failure: the party answered. Every line of stdout
 //! goes through [`print_line`], so a reader that went away (a closed pipe)
 //! makes the command fail with exit 1 instead of a panic. The one exception
 //! is `claim` after its first line: once the service address is out, a
@@ -27,6 +30,12 @@ use nsm::{Error, Result};
 /// a failed operation (1) so a polling script can tell "not yet" from
 /// "failed" without parsing stderr.
 const NOTHING_YET: u8 = 3;
+
+/// Exit status when a conditional write was answered but not applied: the
+/// key was not at the version `--if-version` named (or was set when it named
+/// 0). stderr says where the key is, and nothing changed, so a script can
+/// read the key again and retry.
+const CONDITION_NOT_MET: u8 = 4;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -313,6 +322,15 @@ async fn store(command: StoreCommand) -> Result<ExitCode> {
     let mut lines = Vec::new();
     let mut code = ExitCode::SUCCESS;
     match &op {
+        // Only a put or a delete with --if-version can miss; the reply then
+        // carries the key's current entry, or none.
+        _ if !stored.applied => {
+            match op.key() {
+                Some(key) => eprintln!("nsm: {}", stored.key_state(key)),
+                None => eprintln!("nsm: the {} was not applied", op.kind()),
+            }
+            code = ExitCode::from(CONDITION_NOT_MET);
+        }
         StoreOp::Get { key } => match stored.get(key) {
             Some(entry) => lines.push(entry.value.clone()),
             None => {
