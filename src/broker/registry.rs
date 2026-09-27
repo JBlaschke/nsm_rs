@@ -28,8 +28,9 @@
 //!   [`ServiceHandle`] as *pending*, to be carried by the client's next
 //!   heartbeat. If no service is available the owner removes the client.
 //! - Removing a client frees its service for the next claim.
-//! - [`deliver`](Registry::deliver) parks text as a service's pending
-//!   *inbox* (a later delivery replaces an earlier one), and
+//! - [`deliver`](Registry::deliver) parks text as the sender's peer's
+//!   pending *inbox* (a later delivery replaces an earlier one): a client's
+//!   text goes to its service, a service's text to the client holding it.
 //!   [`heartbeat_for`](Registry::heartbeat_for) builds the
 //!   [`Message::Heartbeat`] for a party, taking the pending inbox text or
 //!   service handle with it so each is delivered exactly once.
@@ -86,6 +87,9 @@ pub struct ClientEntry {
     /// A new pairing from [`Registry::reclaim`] that the client has not been
     /// told about yet; carried by its next heartbeat.
     pub pending_service: Option<ServiceHandle>,
+    /// Text delivered to this client by its service and not yet carried by
+    /// a heartbeat. A later [`Registry::deliver`] replaces an earlier one.
+    pub inbox: Option<String>,
     /// Consecutive failed heartbeats since the broker last heard from the
     /// client.
     pub failures: u32,
@@ -312,6 +316,7 @@ impl Registry {
                     ping,
                 },
                 pending_service: None,
+                inbox: None,
                 failures: 0,
                 last_seen: now,
             },
@@ -325,7 +330,7 @@ impl Registry {
     /// registered, keep naming the dead service in `record.service`, lose any
     /// pending handle for it, and are listed in the result so the owner can
     /// [`reclaim`](Registry::reclaim) them. Removing a client frees the
-    /// service it held. Pending inbox text of a removed service is dropped.
+    /// service it held. Pending inbox text of a removed party is dropped.
     /// Ids are never reissued, so a removed id stays unknown from now on.
     pub fn remove(&mut self, id: PartyId) -> Removed {
         if self.services.remove(&id).is_some() {
@@ -385,23 +390,36 @@ impl Registry {
 
     // ----- delivery ---------------------------------------------------------
 
-    /// Park `text` as the pending inbox of service `to`, replacing whatever
-    /// was pending; the next [`heartbeat_for`](Registry::heartbeat_for) that
-    /// service carries it.
+    /// Park `text` as the pending inbox of the peer of party `from`,
+    /// replacing whatever was pending; the peer's next
+    /// [`heartbeat_for`](Registry::heartbeat_for) carries it. A client's peer
+    /// is its current service, a service's peer the client holding it.
     ///
     /// # Errors
     ///
-    /// [`Error::Rejected`] (`"unknown service <id>"`) when `to` is not a
-    /// registered service; a client id is rejected too, because text is
-    /// only ever delivered to services.
-    pub fn deliver(&mut self, to: PartyId, text: String) -> Result<()> {
-        match self.services.get_mut(&to) {
-            Some(service) => {
-                service.inbox = Some(text);
-                Ok(())
-            }
-            None => Err(Error::Rejected(format!("unknown service {to}"))),
+    /// [`Error::Rejected`] when `from` is not a registered party
+    /// (`"unknown party <id>"`), when it is a service no client holds
+    /// (`"service <id> is not claimed"`), or when it is a client whose
+    /// service died and that has not been re-paired yet
+    /// (`"client <id> has no service"`).
+    pub fn deliver(&mut self, from: PartyId, text: String) -> Result<()> {
+        if let Some(service) = self.services.get(&from) {
+            let client = service
+                .claimed_by
+                .and_then(|id| self.clients.get_mut(&id))
+                .ok_or_else(|| Error::Rejected(format!("service {from} is not claimed")))?;
+            client.inbox = Some(text);
+            return Ok(());
         }
+        let Some(client) = self.clients.get(&from) else {
+            return Err(Error::Rejected(format!("unknown party {from}")));
+        };
+        let service = self
+            .services
+            .get_mut(&client.record.service)
+            .ok_or_else(|| Error::Rejected(format!("client {from} has no service")))?;
+        service.inbox = Some(text);
+        Ok(())
     }
 
     /// Build the [`Message::Heartbeat`] for a party, taking whatever is
@@ -424,7 +442,7 @@ impl Registry {
         let client = self.clients.get_mut(&id)?;
         Some(Message::Heartbeat {
             token: client.token,
-            inbox: None,
+            inbox: client.inbox.take(),
             service: client.pending_service.take(),
         })
     }
@@ -443,13 +461,6 @@ impl Registry {
         }
     }
 
-    /// The service a client is currently paired with (or, after its service
-    /// died and before a re-pairing, the dead service's id). `None` for
-    /// anything that is not a registered client.
-    pub fn paired_service(&self, client: PartyId) -> Option<PartyId> {
-        self.clients.get(&client).map(|c| c.record.service)
-    }
-
     /// Put back pending items taken by [`Registry::heartbeat_for`] when the
     /// heartbeat that carried them failed, unless something newer arrived in
     /// the meantime (a later `deliver` or re-pairing wins). A no-op for
@@ -459,10 +470,13 @@ impl Registry {
             if entry.inbox.is_none() {
                 entry.inbox = inbox;
             }
-        } else if let Some(entry) = self.clients.get_mut(&id)
-            && entry.pending_service.is_none()
-        {
-            entry.pending_service = service;
+        } else if let Some(entry) = self.clients.get_mut(&id) {
+            if entry.inbox.is_none() {
+                entry.inbox = inbox;
+            }
+            if entry.pending_service.is_none() {
+                entry.pending_service = service;
+            }
         }
     }
 
@@ -752,6 +766,7 @@ mod tests {
                     ping: true,
                 },
                 pending_service: None,
+                inbox: None,
                 failures: 0,
                 last_seen: t,
             }
@@ -1032,18 +1047,21 @@ mod tests {
     // ----- delivery ---------------------------------------------------------
 
     #[test]
-    fn deliver_then_heartbeat_carries_the_inbox_once() {
+    fn deliver_then_heartbeat_carries_the_inbox_once_in_either_direction() {
         let mut r = registry(8);
         let t = now();
         let s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
         assert_eq!(
             r.heartbeat_for(s),
             Some(heartbeat(None, None)),
             "nothing pending"
         );
 
-        r.deliver(s, "hello".into()).unwrap();
+        // Client to service.
+        r.deliver(c, "hello".into()).unwrap();
         assert_eq!(r.service(s).unwrap().inbox.as_deref(), Some("hello"));
+        assert_eq!(r.client(c).unwrap().inbox, None, "parked on the peer only");
         assert_eq!(r.heartbeat_for(s), Some(heartbeat(Some("hello"), None)));
         assert_eq!(
             r.heartbeat_for(s),
@@ -1051,38 +1069,102 @@ mod tests {
             "delivered once"
         );
         assert_eq!(r.service(s).unwrap().inbox, None);
-    }
 
-    #[test]
-    fn inbox_last_write_wins() {
-        let mut r = registry(8);
-        let t = now();
-        let s = publish(&mut r, KEY, false, t);
-        r.deliver(s, "first".into()).unwrap();
-        r.deliver(s, "second".into()).unwrap();
-        assert_eq!(r.heartbeat_for(s), Some(heartbeat(Some("second"), None)));
-        assert_eq!(r.heartbeat_for(s), Some(heartbeat(None, None)));
-    }
-
-    #[test]
-    fn deliver_to_a_client_or_unknown_id_is_rejected() {
-        let mut r = registry(8);
-        let t = now();
-        let _s = publish(&mut r, KEY, false, t);
-        let (c, _) = claim(&mut r, KEY, false, t);
-        for to in [c, PartyId(99)] {
-            match r.deliver(to, "x".into()) {
-                Err(Error::Rejected(reason)) => {
-                    assert_eq!(reason, format!("unknown service {to}"));
-                }
-                other => panic!("deliver to {to}: {other:?}"),
-            }
-        }
+        // Service to client.
+        r.deliver(s, "ready".into()).unwrap();
+        assert_eq!(r.client(c).unwrap().inbox.as_deref(), Some("ready"));
+        assert_eq!(r.service(s).unwrap().inbox, None, "parked on the peer only");
+        assert_eq!(r.heartbeat_for(c), Some(heartbeat(Some("ready"), None)));
         assert_eq!(
             r.heartbeat_for(c),
             Some(heartbeat(None, None)),
-            "nothing was stored on the client"
+            "delivered once"
         );
+    }
+
+    #[test]
+    fn inbox_last_write_wins_for_either_party() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+        r.deliver(c, "first".into()).unwrap();
+        r.deliver(c, "second".into()).unwrap();
+        assert_eq!(r.heartbeat_for(s), Some(heartbeat(Some("second"), None)));
+        assert_eq!(r.heartbeat_for(s), Some(heartbeat(None, None)));
+        r.deliver(s, "one".into()).unwrap();
+        r.deliver(s, "two".into()).unwrap();
+        assert_eq!(r.heartbeat_for(c), Some(heartbeat(Some("two"), None)));
+        assert_eq!(r.heartbeat_for(c), Some(heartbeat(None, None)));
+    }
+
+    #[test]
+    fn deliver_needs_a_registered_sender_with_a_peer() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let rejected =
+            |r: &mut Registry, from: PartyId, expected: &str| match r.deliver(from, "x".into()) {
+                Err(Error::Rejected(reason)) => assert_eq!(reason, expected),
+                other => panic!("deliver from {from}: {other:?}"),
+            };
+        // Unknown sender; a service nobody holds.
+        rejected(&mut r, PartyId(99), "unknown party 99");
+        rejected(&mut r, s, &format!("service {s} is not claimed"));
+        assert_eq!(r.service(s).unwrap().inbox, None);
+
+        // A client whose service died, before it is re-paired.
+        let (c, _) = claim(&mut r, KEY, false, t);
+        let _ = r.remove(s);
+        rejected(&mut r, c, &format!("client {c} has no service"));
+        assert_eq!(
+            r.heartbeat_for(c),
+            Some(heartbeat(None, None)),
+            "nothing was stored anywhere"
+        );
+    }
+
+    #[test]
+    fn a_clients_pending_text_survives_its_re_pairing() {
+        let mut r = registry(8);
+        let t = now();
+        let s1 = publish(&mut r, KEY, false, t);
+        let s2 = publish(&mut r, KEY, false, t);
+        let (c, h1) = claim(&mut r, KEY, false, t);
+        assert_eq!(h1.id, s1);
+        r.deliver(s1, "last words".into()).unwrap();
+        let _ = r.remove(s1);
+        let h2 = r.reclaim(c).unwrap();
+        assert_eq!(h2.id, s2);
+        // The text is the client's; the next heartbeat carries it together
+        // with the new pairing.
+        assert_eq!(
+            r.heartbeat_for(c),
+            Some(heartbeat(Some("last words"), Some(h2)))
+        );
+        assert_eq!(r.heartbeat_for(c), Some(heartbeat(None, None)));
+    }
+
+    #[test]
+    fn restore_puts_back_a_clients_text_unless_something_newer_arrived() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let (c, _) = claim(&mut r, KEY, false, t);
+        r.deliver(s, "ready".into()).unwrap();
+        let taken = r.heartbeat_for(c);
+        assert_eq!(taken, Some(heartbeat(Some("ready"), None)));
+        // The heartbeat failed: put the text back, it rides the next one.
+        r.restore(c, Some("ready".into()), None);
+        assert_eq!(r.heartbeat_for(c), Some(heartbeat(Some("ready"), None)));
+        // Newer text arrived before the restore: the newer one wins.
+        r.deliver(s, "newer".into()).unwrap();
+        r.restore(c, Some("ready".into()), None);
+        assert_eq!(r.heartbeat_for(c), Some(heartbeat(Some("newer"), None)));
+        // Removing the client drops what is pending for it.
+        r.deliver(s, "gone".into()).unwrap();
+        let _ = r.remove(c);
+        assert_eq!(r.heartbeat_for(c), None);
     }
 
     #[test]

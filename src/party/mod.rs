@@ -13,39 +13,24 @@ pub mod session;
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::net::Addr;
 use crate::protocol::{Key, PartyId, RegToken, ServiceHandle};
 use crate::transport::Client;
 
+pub use crate::protocol::Role;
 pub use handler::PartyHandler;
 pub use session::{ClaimOpts, PartyOpts, PublishOpts, Session};
 
-/// Which side of a pairing a party is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    /// A published service.
-    Publisher,
-    /// A client that claimed a service.
-    Claimer,
-}
-
-impl std::fmt::Display for Role {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Role::Publisher => "service",
-            Role::Claimer => "client",
-        })
-    }
-}
-
 /// State shared between a party's server handler and its liveness loop.
 ///
-/// All fields are behind `std::sync` primitives and every accessor takes the
-/// lock only for the duration of a copy, so nothing here is ever held across
-/// an `.await`.
+/// Every field is behind a `std::sync` primitive (the pairing behind a
+/// `tokio::sync::watch` channel, which is one too), and every accessor takes
+/// the lock only for the duration of a copy, so nothing here is ever held
+/// across an `.await`. The pairing is a channel rather than a slot so that
+/// whoever needs the current service can also be woken when it changes.
 #[derive(Debug)]
 pub struct PartyState {
     role: Role,
@@ -54,7 +39,7 @@ pub struct PartyState {
     id: OnceLock<PartyId>,
     token: OnceLock<RegToken>,
     inbox: Mutex<Option<String>>,
-    service: Mutex<Option<ServiceHandle>>,
+    service: watch::Sender<Option<ServiceHandle>>,
     last_contact: Mutex<Instant>,
     client: Arc<Client>,
 }
@@ -69,7 +54,7 @@ impl PartyState {
             id: OnceLock::new(),
             token: OnceLock::new(),
             inbox: Mutex::new(None),
-            service: Mutex::new(None),
+            service: watch::Sender::new(None),
             last_contact: Mutex::new(Instant::now()),
             client,
         })
@@ -122,19 +107,35 @@ impl PartyState {
         self.token.get().is_some_and(|own| own.ct_eq(presented))
     }
 
-    /// Last text delivered to this service, if any.
+    /// Last text delivered to this party by its peer, if any.
     pub fn inbox(&self) -> Option<String> {
         lock(&self.inbox).clone()
     }
 
     /// The service this client is paired with, if any.
     pub fn service(&self) -> Option<ServiceHandle> {
-        lock(&self.service).clone()
+        self.service.borrow().clone()
     }
 
-    /// Record a new pairing (from the claim reply or a later re-pairing).
-    pub fn set_service(&self, handle: ServiceHandle) {
-        *lock(&self.service) = Some(handle);
+    /// Record a pairing (from the claim reply or a later re-pairing) and
+    /// wake the [`pairings`](Self::pairings) receivers. Returns `false`, and
+    /// wakes nobody, when `handle` is the pairing already held.
+    pub fn set_service(&self, handle: ServiceHandle) -> bool {
+        self.service.send_if_modified(|current| {
+            if current.as_ref() == Some(&handle) {
+                false
+            } else {
+                *current = Some(handle);
+                true
+            }
+        })
+    }
+
+    /// A receiver of this party's pairings: `borrow` is the current service,
+    /// `changed` resolves whenever the broker re-pairs the party. For a
+    /// service it never changes.
+    pub fn pairings(&self) -> watch::Receiver<Option<ServiceHandle>> {
+        self.service.subscribe()
     }
 
     /// When the broker was last heard from.
@@ -154,7 +155,7 @@ impl PartyState {
             *lock(&self.inbox) = Some(text);
         }
         if let Some(handle) = service {
-            *lock(&self.service) = Some(handle);
+            self.set_service(handle);
         }
         self.touch();
     }
@@ -182,7 +183,7 @@ mod tests {
 
     #[test]
     fn id_is_set_once() {
-        let s = state(Role::Publisher);
+        let s = state(Role::Service);
         assert_eq!(s.id(), None);
         assert!(s.set_id(PartyId(5)));
         assert!(!s.set_id(PartyId(6)));
@@ -191,7 +192,7 @@ mod tests {
 
     #[test]
     fn heartbeat_contents_are_stored_and_contact_refreshed() {
-        let s = state(Role::Claimer);
+        let s = state(Role::Client);
         let before = s.last_contact();
         std::thread::sleep(std::time::Duration::from_millis(2));
         let handle = ServiceHandle {
@@ -209,13 +210,30 @@ mod tests {
         assert_eq!(s.service(), Some(handle));
     }
 
-    #[test]
-    fn role_displays_as_service_or_client() {
-        assert_eq!(Role::Publisher.to_string(), "service");
-        assert_eq!(Role::Claimer.to_string(), "client");
-        assert_eq!(
-            serde_json::to_string(&Role::Claimer).unwrap(),
-            "\"claimer\""
-        );
+    #[tokio::test]
+    async fn pairings_report_each_new_service_once() {
+        let s = state(Role::Client);
+        let handle = |id: u64| ServiceHandle {
+            id: PartyId(id),
+            host: "10.0.0.1".into(),
+            service_port: 9000,
+        };
+        let mut rx = s.pairings();
+        assert_eq!(*rx.borrow_and_update(), None);
+
+        // The claim reply: a change.
+        assert!(s.set_service(handle(1)));
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(rx.borrow_and_update().clone(), Some(handle(1)));
+        // The same pairing again: not a change, nobody is woken.
+        assert!(!s.set_service(handle(1)));
+        assert!(!rx.has_changed().unwrap());
+        // A heartbeat that re-pairs: a change, seen through `changed`.
+        s.apply_heartbeat(None, Some(handle(2)));
+        rx.changed().await.unwrap();
+        assert_eq!(rx.borrow_and_update().clone(), Some(handle(2)));
+        assert_eq!(s.service(), Some(handle(2)));
+        // A receiver taken later starts from the current pairing.
+        assert_eq!(*s.pairings().borrow(), Some(handle(2)));
     }
 }

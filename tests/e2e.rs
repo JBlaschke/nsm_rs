@@ -104,17 +104,25 @@ async fn dead_service_is_removed_and_its_client_repaired() {
         let client = c.claim(5).await;
         let first = client.service().unwrap();
         assert_eq!(first.id, s1.id(), "lowest id first");
+        let mut pairings = client.pairings();
+        assert_eq!(pairings.borrow_and_update().clone(), Some(first.clone()));
 
         // Kill the first service without telling the broker.
         c.kill(s1).await;
         c.wait_until(|snap| !snap.iter().any(|p| p.id == first.id))
             .await;
 
-        // The client learns its new service on the next heartbeat.
-        c.wait_until_true(|| client.service().map(|h| h.id) == Some(s2.id()))
-            .await;
+        // The client learns its new service on the next heartbeat; the
+        // pairing receiver wakes up with it.
+        pairings.changed().await.unwrap();
+        let repaired = pairings.borrow_and_update().clone();
+        assert_eq!(repaired.map(|h| h.id), Some(s2.id()));
+        assert_eq!(client.service().map(|h| h.id), Some(s2.id()));
         let collected = ops::collect(&client.bound(), c.net()).await.unwrap();
-        assert_eq!(collected.service.unwrap().id, s2.id());
+        assert!(
+            matches!(&collected, ops::Collected::Client { service: Some(h), .. } if h.id == s2.id()),
+            "{collected:?}"
+        );
         c.stop().await;
     })
     .await;
@@ -142,7 +150,7 @@ async fn client_without_replacement_is_removed_and_its_session_ends() {
 }
 
 #[tokio::test]
-async fn send_reaches_the_service_and_collect_reads_it() {
+async fn text_flows_both_ways_and_collect_reads_it() {
     for &t in TRANSPORTS {
         with_deadline(async {
             let c = Cluster::start(t).await;
@@ -154,16 +162,48 @@ async fn send_reaches_the_service_and_collect_reads_it() {
             c.wait_until_true(|| service.state().inbox().is_some())
                 .await;
             let got = ops::collect(&service.bound(), c.net()).await.unwrap();
-            assert_eq!(got.text.as_deref(), Some("job 17"), "{t:?}");
-            // Sending to a service is refused.
-            let err = ops::send(&service.bound(), "x".into(), c.net())
+            assert_eq!(
+                got,
+                ops::Collected::Service {
+                    text: Some("job 17".into())
+                },
+                "{t:?}"
+            );
+            // And back: the service answers the client holding it.
+            ops::send(&service.bound(), "ready".into(), c.net())
                 .await
-                .unwrap_err();
-            assert!(matches!(err, Error::Rejected(_)), "{err}");
+                .unwrap();
+            c.wait_until_true(|| client.state().inbox().is_some()).await;
+            let got = ops::collect(&client.bound(), c.net()).await.unwrap();
+            assert_eq!(
+                got,
+                ops::Collected::Client {
+                    service: client.service(),
+                    text: Some("ready".into())
+                },
+                "{t:?}"
+            );
             c.stop().await;
         })
         .await;
     }
+}
+
+#[tokio::test]
+async fn send_to_an_unclaimed_service_is_refused() {
+    with_deadline(async {
+        let c = Cluster::start(Transport::Tcp).await;
+        let service = c.publish(11, 9000).await;
+        let err = ops::send(&service.bound(), "x".into(), c.net())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Rejected(reason) if reason.contains("not claimed")),
+            "{err}"
+        );
+        c.stop().await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -182,6 +222,11 @@ async fn ping_mode_parties_stay_alive_and_receive_pending_items() {
         c.wait_until_true(|| service.state().inbox().is_some())
             .await;
         assert_eq!(service.state().inbox().as_deref(), Some("via ping"));
+        ops::send(&service.bound(), "back via ping".into(), c.net())
+            .await
+            .unwrap();
+        c.wait_until_true(|| client.state().inbox().is_some()).await;
+        assert_eq!(client.state().inbox().as_deref(), Some("back via ping"));
         c.stop().await;
         // With the broker gone the pinging parties give up.
         assert!(matches!(
@@ -330,30 +375,32 @@ async fn ping_and_deliver_require_the_registration_token() {
             "{reply:?}"
         );
 
-        // Deliver: needs the paired client's token and the right target.
-        let deliver = |from, token, to| Message::Deliver {
+        // Deliver: needs the sender's own token and a peer to deliver to.
+        let deliver = |from, token| Message::Deliver {
             from,
             token,
-            to,
             text: "injected".into(),
         };
-        for (from, token, to) in [
-            (client.id(), wrong_token(), two_sided.id()),
-            (client.id(), client.token(), pinger.id()),
-            (two_sided.id(), two_sided.token(), two_sided.id()),
+        for (from, token) in [
+            (client.id(), wrong_token()),
+            (pinger.id(), wrong_token()),
+            // The right token, but nobody holds this service.
+            (pinger.id(), pinger.token()),
         ] {
-            let reply = raw.call(&broker, deliver(from, token, to)).await.unwrap();
+            let reply = raw.call(&broker, deliver(from, token)).await.unwrap();
             assert!(matches!(reply, Message::Nack { .. }), "{reply:?}");
         }
-        assert_eq!(
-            raw.call(
-                &broker,
-                deliver(client.id(), client.token(), two_sided.id())
-            )
-            .await
-            .unwrap(),
-            Message::Delivered
-        );
+        // The paired client and the service it holds can both deliver.
+        for (from, token) in [
+            (client.id(), client.token()),
+            (two_sided.id(), two_sided.token()),
+        ] {
+            assert_eq!(
+                raw.call(&broker, deliver(from, token)).await.unwrap(),
+                Message::Delivered,
+                "{from}"
+            );
+        }
         c.stop().await;
     })
     .await;

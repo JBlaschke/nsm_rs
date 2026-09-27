@@ -1,9 +1,9 @@
 //! The request handler a party mounts on its bind address.
 //!
 //! It answers three kinds of caller: the broker (two-sided heartbeats), the
-//! `collect` operation, and, for clients only, the `send` operation whose
-//! text is relayed to the broker for the paired service. Anything else is a
-//! [`Message::Nack`]; nothing here panics on the request contents.
+//! `collect` operation, and the `send` operation, whose text is relayed to
+//! the broker for the party's peer. Anything else is a [`Message::Nack`];
+//! nothing here panics on the request contents.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -49,8 +49,8 @@ impl PartyHandler {
                 }
                 // A service has no pairing to update.
                 let service = match self.state.role() {
-                    Role::Publisher => None,
-                    Role::Claimer => service,
+                    Role::Service => None,
+                    Role::Client => service,
                 };
                 self.state.apply_heartbeat(inbox, service);
                 Ok(Message::HeartbeatAck {
@@ -58,44 +58,32 @@ impl PartyHandler {
                 })
             }
             Message::Collect => Ok(Message::Collected {
+                role: self.state.role(),
                 text: self.state.inbox(),
                 service: self.state.service(),
             }),
-            Message::Send { text } => match self.state.role() {
-                Role::Publisher => Ok(Message::nack(
-                    "services do not accept send; address the client",
-                )),
-                Role::Claimer => {
-                    let Some(service) = self.state.service() else {
-                        return Ok(Message::nack("client is not paired with a service"));
-                    };
-                    let (Some(from), Some(token)) = (self.state.id(), self.state.token()) else {
-                        return Ok(Message::nack("client is not registered yet"));
-                    };
-                    debug!(to = %service.id, "relaying message to the broker");
-                    let reply = self
-                        .state
-                        .client()
-                        .call(
-                            self.state.broker(),
-                            Message::Deliver {
-                                from,
-                                token,
-                                to: service.id,
-                                text,
-                            },
-                        )
-                        .await?;
-                    Ok(match reply {
-                        Message::Delivered => Message::Delivered,
-                        Message::Nack { reason } => Message::Nack { reason },
-                        other => Message::nack(format!(
-                            "broker answered a deliver with {}",
-                            other.kind()
-                        )),
-                    })
-                }
-            },
+            Message::Send { text } => {
+                // Either role relays to its peer; the broker knows who that is.
+                let (Some(from), Some(token)) = (self.state.id(), self.state.token()) else {
+                    return Ok(Message::nack(format!(
+                        "{} is not registered yet",
+                        self.state.role()
+                    )));
+                };
+                debug!(%from, "relaying text to the broker for the peer");
+                let reply = self
+                    .state
+                    .client()
+                    .call(self.state.broker(), Message::Deliver { from, token, text })
+                    .await?;
+                Ok(match reply {
+                    Message::Delivered => Message::Delivered,
+                    Message::Nack { reason } => Message::Nack { reason },
+                    other => {
+                        Message::nack(format!("broker answered a deliver with {}", other.kind()))
+                    }
+                })
+            }
             other => Ok(Message::nack(format!(
                 "unexpected {} at a {}",
                 other.kind(),
@@ -156,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn heartbeat_is_acked_and_applied_only_with_our_token() {
-        let h = handler(Role::Publisher);
+        let h = handler(Role::Service);
         let forged = Message::Heartbeat {
             token: RegToken::from_bytes([0xee; 16]),
             inbox: Some("planted".into()),
@@ -194,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn services_ignore_pairings_and_clients_take_them() {
-        let s = handler(Role::Publisher);
+        let s = handler(Role::Service);
         registered(&s, 1);
         s.handle(
             Message::Heartbeat {
@@ -208,7 +196,7 @@ mod tests {
         .unwrap();
         assert_eq!(s.state().service(), None);
 
-        let c = handler(Role::Claimer);
+        let c = handler(Role::Client);
         registered(&c, 2);
         c.handle(
             Message::Heartbeat {
@@ -225,10 +213,11 @@ mod tests {
 
     #[tokio::test]
     async fn collect_returns_inbox_for_services_and_service_for_clients() {
-        let s = handler(Role::Publisher);
+        let s = handler(Role::Service);
         assert_eq!(
             s.handle(Message::Collect, peer()).await.unwrap(),
             Message::Collected {
+                role: Role::Service,
                 text: None,
                 service: None
             }
@@ -237,16 +226,27 @@ mod tests {
         assert_eq!(
             s.handle(Message::Collect, peer()).await.unwrap(),
             Message::Collected {
+                role: Role::Service,
                 text: Some("x".into()),
                 service: None
             }
         );
 
-        let c = handler(Role::Claimer);
+        // A client answers with its role even before it is paired.
+        let c = handler(Role::Client);
+        assert_eq!(
+            c.handle(Message::Collect, peer()).await.unwrap(),
+            Message::Collected {
+                role: Role::Client,
+                text: None,
+                service: None
+            }
+        );
         c.state().set_service(handle());
         assert_eq!(
             c.handle(Message::Collect, peer()).await.unwrap(),
             Message::Collected {
+                role: Role::Client,
                 text: None,
                 service: Some(handle())
             }
@@ -254,26 +254,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_is_refused_by_services_and_unpaired_clients() {
-        let s = handler(Role::Publisher);
-        assert!(matches!(
-            s.handle(Message::Send { text: "hi".into() }, peer())
+    async fn send_is_relayed_for_either_role_once_registered() {
+        for role in [Role::Service, Role::Client] {
+            // Before registration there is nothing to relay with.
+            let h = handler(role);
+            match h
+                .handle(Message::Send { text: "hi".into() }, peer())
                 .await
-                .unwrap(),
-            Message::Nack { .. }
-        ));
-        let c = handler(Role::Claimer);
-        assert!(matches!(
-            c.handle(Message::Send { text: "hi".into() }, peer())
-                .await
-                .unwrap(),
-            Message::Nack { .. }
-        ));
+                .unwrap()
+            {
+                Message::Nack { reason } => {
+                    assert!(reason.contains("not registered"), "{role}: {reason}")
+                }
+                other => panic!("{role}: {other:?}"),
+            }
+            // Registered, the relay is attempted: with no broker at the
+            // configured address it fails as a transport error.
+            registered(&h, 3);
+            assert!(
+                h.handle(Message::Send { text: "hi".into() }, peer())
+                    .await
+                    .is_err(),
+                "{role}"
+            );
+        }
     }
 
     #[tokio::test]
     async fn unexpected_messages_are_nacked_not_panicked() {
-        let h = handler(Role::Claimer);
+        let h = handler(Role::Client);
         for msg in [
             Message::Publish {
                 key: 1,
@@ -293,7 +302,6 @@ mod tests {
             Message::Deliver {
                 from: PartyId(2),
                 token: tok(),
-                to: PartyId(1),
                 text: "x".into(),
             },
             Message::Registered {

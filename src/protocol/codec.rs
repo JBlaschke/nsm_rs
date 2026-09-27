@@ -239,7 +239,6 @@ mod tests {
         let msg = Message::Deliver {
             from: PartyId(4),
             token: test_token(),
-            to: PartyId(3),
             text: "split me".into(),
         };
         let bytes = frame(&msg);
@@ -417,7 +416,7 @@ mod tests {
     // ---- randomized properties (deterministic seeds; see crate::testing) ----
 
     fn random_message(rng: &mut crate::testing::Rng) -> Message {
-        use crate::protocol::ServiceHandle;
+        use crate::protocol::{Role, ServiceHandle};
         let token = rng.token();
         let handle = ServiceHandle {
             id: PartyId(rng.next_u64()),
@@ -446,7 +445,6 @@ mod tests {
             4 => Message::Deliver {
                 from: PartyId(rng.next_u64()),
                 token,
-                to: PartyId(rng.next_u64()),
                 text: rng.text(300),
             },
             5 => Message::Heartbeat {
@@ -469,6 +467,11 @@ mod tests {
             },
             10 => Message::Delivered,
             11 => Message::Collected {
+                role: if rng.chance(2) {
+                    Role::Service
+                } else {
+                    Role::Client
+                },
                 text: rng.chance(2).then(|| rng.text(300)),
                 service: rng.chance(2).then_some(handle),
             },

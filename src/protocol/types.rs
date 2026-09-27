@@ -1,11 +1,13 @@
 //! Payload records carried by [`Message`](super::Message).
 //!
-//! Three views of a registered party:
+//! Three views of a registered party, and its [`Role`]:
 //!
 //! - [`ServiceRecord`] and [`ClientRecord`] are what the broker keeps for a
 //!   published service and for a claiming client;
 //! - [`ServiceHandle`] is the part of a service record a claimer receives and
-//!   prints: enough to connect to the service's data-plane endpoint.
+//!   prints: enough to connect to the service's data-plane endpoint;
+//! - [`Role`] says which of the two kinds a party is, so that a reply from a
+//!   party can state which of its fields apply.
 //!
 //! All of them serialise as plain JSON objects and travel inside
 //! [`Message`](super::Message) variants; none of them is ever sent bare.
@@ -135,13 +137,39 @@ impl<'de> Deserialize<'de> for RegToken {
 /// of them. The key carries no other meaning to the broker.
 pub type Key = u64;
 
+/// Which side of a pairing a party is.
+///
+/// A service ([`Message::Publish`](super::Message::Publish)) receives text;
+/// a client ([`Message::Claim`](super::Message::Claim)) holds a pairing and
+/// relays `send`. A party states its role in
+/// [`Message::Collected`](super::Message::Collected) so that whoever asks
+/// knows which of the reply's fields applies. On the wire a role is the
+/// string `"service"` or `"client"`; `Display` uses the same spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// A published service.
+    Service,
+    /// A client that claimed a service.
+    Client,
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Role::Service => "service",
+            Role::Client => "client",
+        })
+    }
+}
+
 /// What a claimer receives: enough to reach one service.
 ///
-/// This is the value printed by `nsm claim` and returned by `nsm collect`
-/// when asked of a client. It deliberately omits the service's heartbeat
-/// endpoint, which is the broker's business only, and the rendezvous key,
-/// which the claimer already holds and which must not leak to whoever asks a
-/// client what it is paired with.
+/// This is the value printed by `nsm claim` (once per pairing) and returned
+/// by `nsm peer` when asked of a client. It deliberately omits the service's
+/// heartbeat endpoint, which is the broker's business only, and the
+/// rendezvous key, which the claimer already holds and which must not leak
+/// to whoever asks a client what it is paired with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceHandle {
     /// The service's broker-assigned id.
@@ -300,6 +328,24 @@ mod tests {
         let a = RegToken::generate().unwrap();
         let b = RegToken::generate().unwrap();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn role_is_spelled_service_or_client() {
+        assert_eq!(
+            serde_json::to_string(&Role::Service).unwrap(),
+            "\"service\""
+        );
+        assert_eq!(serde_json::to_string(&Role::Client).unwrap(), "\"client\"");
+        assert_eq!(
+            serde_json::from_str::<Role>("\"client\"").unwrap(),
+            Role::Client
+        );
+        for wrong in ["\"Service\"", "\"claimer\"", "\"publisher\"", "0", "null"] {
+            assert!(serde_json::from_str::<Role>(wrong).is_err(), "{wrong}");
+        }
+        assert_eq!(Role::Service.to_string(), "service");
+        assert_eq!(Role::Client.to_string(), "client");
     }
 
     #[test]

@@ -245,6 +245,7 @@ fn version_and_help_for_every_command() {
         "publish",
         "claim",
         "collect",
+        "peer",
         "send",
         "serve",
     ] {
@@ -378,6 +379,7 @@ fn runtime_failures_exit_1_with_a_prefixed_message() {
     let dead = format!("127.0.0.1:{}", unused_port());
     for args in [
         argv(&[&["collect", &dead], FAST]),
+        argv(&[&["peer", &dead], FAST]),
         argv(&[&["send", &dead, "--msg", "x"], FAST]),
         argv(&[&["collect", &format!("http://{dead}")], FAST]),
     ] {
@@ -465,19 +467,31 @@ fn full_session(transport: &str) {
     let client_hb = heartbeat_addr(&client.stderr_line_containing("client registered as "));
     assert!(client_hb.starts_with(prefix), "{client_hb}");
 
+    // Reached, but nothing delivered yet: exit 3, so a polling script can
+    // tell "not yet" from "failed".
+    let out = run(argv(&[&["collect", &service_hb], FAST]));
+    assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("nothing to collect yet"),
+        "{}",
+        out.stderr
+    );
+
     let out = run(argv(&[&["send", &client_hb, "--msg", "hello job"], FAST]));
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert!(out.stdout.is_empty(), "{}", out.stdout);
     assert!(out.stderr.contains("nsm: delivered"), "{}", out.stderr);
 
-    // The text rides on the service's next heartbeat.
+    // The text rides on the service's next heartbeat; until then every
+    // poll is exit 3 with nothing on stdout, the way a script would wait.
     let deadline = Instant::now() + WAIT;
     loop {
         let out = run(argv(&[&["collect", &service_hb], FAST]));
-        assert_eq!(out.code, 0, "{}", out.stderr);
-        if out.stdout.trim() == "hello job" {
+        if out.code == 0 {
+            assert_eq!(out.stdout.trim(), "hello job", "{}", out.stderr);
             break;
         }
+        assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
         assert!(
             Instant::now() < deadline,
             "service never received the text; last output {:?} / {:?}",
@@ -486,9 +500,41 @@ fn full_session(transport: &str) {
         );
         thread::sleep(Duration::from_millis(50));
     }
-    let out = run(argv(&[&["collect", &client_hb], FAST]));
+    // One verb per question: `peer` is the client's service and `collect`
+    // a party's text; asking a service for its peer is an error naming it.
+    let out = run(argv(&[&["peer", &client_hb], FAST]));
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert_eq!(out.stdout.trim(), "127.0.0.1:9000");
+    let out = run(argv(&[&["peer", &service_hb], FAST]));
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(
+        out.stderr.starts_with("nsm: ") && out.stderr.contains("is a service"),
+        "{}",
+        out.stderr
+    );
+    // Nothing has been sent to the client yet.
+    let out = run(argv(&[&["collect", &client_hb], FAST]));
+    assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+
+    // And back: the service answers the client holding it.
+    let out = run(argv(&[&["send", &service_hb, "--msg", "ready"], FAST]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let out = run(argv(&[&["collect", &client_hb], FAST]));
+        if out.code == 0 {
+            assert_eq!(out.stdout.trim(), "ready", "{}", out.stderr);
+            break;
+        }
+        assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+        assert!(
+            Instant::now() < deadline,
+            "client never received the text; last output {:?} / {:?}",
+            out.stdout,
+            out.stderr
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
 
     // Refusals: an unknown key, and a key whose only service is taken.
     for key in ["999", "1234"] {
@@ -529,6 +575,58 @@ fn full_session(transport: &str) {
 #[test]
 fn full_session_over_tcp() {
     full_session("tcp");
+}
+
+/// A client prints one stdout line per pairing: when its service dies and
+/// the broker re-pairs it, the new address follows the first one, so a
+/// script that keeps reading always holds the current service.
+#[test]
+fn claim_prints_a_line_for_every_pairing() {
+    let mut broker = Proc::spawn(
+        "listen",
+        &argv(&[&["listen", "--bind-port", "0"], IFACE, FAST]),
+    );
+    let line = broker.stderr_line_containing("broker listening on ");
+    let broker_addr = line.rsplit(' ').next().unwrap().to_owned();
+    let publish = |name: &'static str, port: &str| {
+        let mut service = Proc::spawn(
+            name,
+            &argv(&[
+                &[
+                    "publish",
+                    &broker_addr,
+                    "--bind-port",
+                    "0",
+                    "--service-port",
+                    port,
+                    "--key",
+                    "77",
+                ],
+                IFACE,
+                FAST,
+            ]),
+        );
+        // Registered in order, so the first one has the lowest id.
+        service.stderr_line_containing("service registered as ");
+        service
+    };
+    let mut first = publish("publish-1", "9001");
+    let _second = publish("publish-2", "9002");
+
+    let mut client = Proc::spawn(
+        "claim",
+        &argv(&[
+            &["claim", &broker_addr, "--bind-port", "0", "--key", "77"],
+            IFACE,
+            FAST,
+        ]),
+    );
+    assert_eq!(client.stdout_line(), "127.0.0.1:9001", "lowest id first");
+
+    // The first service dies without a word. The broker notices, re-pairs
+    // the client with the spare, and the client reports the new address.
+    first.kill();
+    assert_eq!(client.stdout_line(), "127.0.0.1:9002");
 }
 
 #[test]

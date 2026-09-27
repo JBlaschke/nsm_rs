@@ -22,7 +22,7 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
    │ Session + PartyHandler         │ ◄── data traffic ── │ Session + PartyHandler         │
    │ listener on the bind port      │   (not NSM's job)   │ listener on the bind port      │
    └─────────────────────▲──────────┘                     └─────────────▲──────────────────┘
-                         │ collect                                      │ send / collect
+                         │ send / collect                               │ send / collect / peer
                     operator, script, or `nsm serve` (REST control plane) driving `ops`
 ```
 
@@ -30,8 +30,9 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
   clients with services, monitors liveness and relays short texts. It never
   sees the service's own traffic.
 - A **party** is a service or a client. Both run the same small server on
-  their bind address and differ only in role: a service stores the text it is
-  sent, a client stores the service it is paired with and relays `send`.
+  their bind address, keep the last text they were sent and relay `send` to
+  their peer through the broker; a client also keeps the service it is
+  paired with.
 - **Operations** (`ops`) are the verbs, written once, without printing. The
   CLI (`main`) and the REST control plane (`rest`) are two front-ends for
   them.
@@ -150,14 +151,20 @@ up after `fail_threshold` failures or when the broker no longer knows the
 party. `PartyHandler` answers the broker's `Heartbeat` (only with the party's
 own token), `Collect`, and `Send` (relayed to the broker as `Deliver`).
 `PartyState` is the shared state: id, token, inbox, paired service, last
-contact.
+contact. The pairing sits in a `tokio::sync::watch` channel:
+`Session::pairings` hands out receivers, which is how `nsm claim` prints
+every re-pairing as one more stdout line instead of keeping the new address
+to itself.
 
 ### Operations and front-ends (`ops`, `cli`, `main`, `rest`)
 
 `ops` turns typed requests into typed results. `main` parses the CLI, installs
 the crypto provider and the signal handler, runs one operation, prints its
 result to stdout and maps `Err` to exit code 1 with an `nsm: ` message on
-stderr (clap's own usage errors exit 2). `rest` serves the same operations
+stderr (clap's own usage errors exit 2; a party that answered but has nothing
+to report yet, for `collect` and `peer`, is exit 3). `peer` and `collect` are
+the two accessors of `ops::Collected`, one per role; the binary adds no
+logic of its own. `rest` serves the same operations
 over HTTP: `publish` and `claim` become background jobs with a view the API
 reports, cancels and reaps; a bearer token guards every route when one is
 configured, and it is mandatory off loopback.
@@ -204,15 +211,15 @@ parties should run with the same timing values.
 | a heartbeat's payload cannot be delivered | the pending inbox text or pairing is restored and carried by the next heartbeat |
 | the broker shuts down | every connection and task is cancelled; parties notice through their watchdog |
 
-Text delivery is "last message wins": a second `send` before the service's
-next heartbeat replaces the first.
+Text delivery is "last message wins" per party: a second `send` before the
+receiving party's next heartbeat replaces the first.
 
 ## 8. Errors
 
 `Error` is one `thiserror` enum. The binary maps every variant to exit code 1
 with its `Display` text; the control plane maps input errors (`Json`, `Addr`,
-`Config`, `Protocol`, `Rejected`, `NoService`, `AmbiguousAddress`,
-`FrameTooLarge`) to 400, unreachable peers (`Timeout`, `BrokerLost`,
+`Config`, `Protocol`, `Rejected`, `WrongRole`, `NoService`,
+`AmbiguousAddress`, `FrameTooLarge`) to 400, unreachable peers (`Timeout`, `BrokerLost`,
 `PeerLost`, `Closed`, `Resolve`, connection-level `Io`) to 502, and the rest
 to 500. `Error::is_disconnect` tells transient peer loss from local
 misconfiguration; registration retries only on the former.
@@ -245,7 +252,10 @@ checks on.
 
 Numbered as in the 2026 refactor plan, because the code and the changelog
 cite them by number (`decision D7` in the registry, `D9` in the control
-plane, `D10` in the TLS module). Each is a fact about the current code.
+plane, `D10` in the TLS module). Each is a fact about the current code. D13
+to D16 come from the peer-address and two-way text plan of September 2026
+([`history/2026-peer-text/`](history/2026-peer-text/PLAN.md)), where they
+are decisions P1 to P10.
 
 | # | Decision |
 |---|---|
@@ -261,6 +271,10 @@ plane, `D10` in the TLS module). Each is a fact about the current code.
 | D10 | Trust anchors are operator configuration (`--root-ca`, or `--system-roots` as an explicit opt-in) and never travel on the wire; a connection configured for TLS never falls back to plaintext. Mutual TLS is a follow-up ([#7](https://github.com/JBlaschke/nsm_rs/issues/7)). |
 | D11 | The rustls crypto provider is a feature: `aws-lc-rs` (default) or `ring` (pure Rust, used for static musl builds and the container image); exactly one is installed per process. |
 | D12 | Edition 2024 and `rust-version = "1.88"`, the minimum the current dependencies need; CI builds and tests on that toolchain as well as on stable. |
+| D13 | A party's `Role` is a protocol type (`service` / `client`), and the reply to `collect` names it, so a reply says which of its fields apply instead of leaving the asker to guess; `ops::Collected` is an enum keyed by the role. Protocol version 2. |
+| D14 | A client's pairing is a `tokio::sync::watch` channel (`Session::pairings`), not a slot: `nsm claim` prints one stdout line per pairing, the first at registration and one more each time the broker re-pairs it, so the last line is always the current service. |
+| D15 | One verb per question: `nsm peer` prints a client's paired service and nothing else, `nsm collect` a party's last text and nothing else; asking a service for its peer is `Error::WrongRole`. A party that answered but has nothing to report yet is exit status 3 (1 is a failed operation, 2 a usage error). The control plane needs no `peer` route, since `POST /v1/collect` is typed. |
+| D16 | Text flows both ways through one inbox per party: `send` at either party is relayed as a `deliver` that names no target, and the broker delivers to the sender's peer as it knows it (a client's current service, the client holding a service), so a text that races a re-pairing reaches the new service. Last text wins; a client's pending text survives a re-pairing. Protocol version 3. |
 
 ## 12. History
 
@@ -270,3 +284,8 @@ short read, no tests and no library target. The refactor that replaced it is
 recorded under [`history/2026-refactor/`](history/2026-refactor/PLAN.md): the
 plan with its branch-by-branch status, and the audit of the old code with its
 216 findings, which the code still cites by id (`audit S31`, `S20`, ...).
+
+The September 2026 work on the client side, recorded under
+[`history/2026-peer-text/`](history/2026-peer-text/PLAN.md), gave scripts a
+reliable way to the paired service's address (`nsm peer`, one `claim` line
+per pairing) and let text flow both ways; its decisions are D13 to D16.

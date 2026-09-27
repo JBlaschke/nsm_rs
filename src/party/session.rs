@@ -10,6 +10,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use tokio::sync::watch;
 use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -88,7 +89,7 @@ impl Session {
     /// Bind, then register as a service.
     pub async fn publish(opts: PublishOpts) -> Result<Session> {
         let service_port = opts.service_port;
-        Session::start(Role::Publisher, opts.party, move |bind_addr, key, ping| {
+        Session::start(Role::Service, opts.party, move |bind_addr, key, ping| {
             Message::Publish {
                 key,
                 service_port,
@@ -101,7 +102,7 @@ impl Session {
 
     /// Bind, then register as a client; [`Session::service`] is the pairing.
     pub async fn claim(opts: ClaimOpts) -> Result<Session> {
-        Session::start(Role::Claimer, opts.party, |bind_addr, key, ping| {
+        Session::start(Role::Client, opts.party, |bind_addr, key, ping| {
             Message::Claim {
                 key,
                 bind_addr,
@@ -183,6 +184,14 @@ impl Session {
         self.state.service()
     }
 
+    /// For a client: a receiver of its pairings. `borrow` is the current
+    /// service and `changed` resolves when the broker re-pairs the client
+    /// after its service went away, so a caller can follow the pairing
+    /// instead of polling [`Session::service`].
+    pub fn pairings(&self) -> watch::Receiver<Option<ServiceHandle>> {
+        self.state.pairings()
+    }
+
     /// Shared state, for inspection.
     pub fn state(&self) -> &Arc<PartyState> {
         &self.state
@@ -255,8 +264,8 @@ impl Session {
                 }) if self.state.accepts_token(&token) => {
                     failures = 0;
                     let service = match self.state.role() {
-                        Role::Publisher => None,
-                        Role::Claimer => service,
+                        Role::Service => None,
+                        Role::Client => service,
                     };
                     self.state.apply_heartbeat(inbox, service);
                 }
@@ -296,12 +305,12 @@ async fn register(
             sleep(t.register_backoff).await;
         }
         match client.call(&opts.broker, request.clone()).await {
-            Ok(Message::Registered { id, token }) if state.role() == Role::Publisher => {
+            Ok(Message::Registered { id, token }) if state.role() == Role::Service => {
                 state.set_token(token);
                 state.set_id(id);
                 return Ok((id, token));
             }
-            Ok(Message::Paired { id, token, service }) if state.role() == Role::Claimer => {
+            Ok(Message::Paired { id, token, service }) if state.role() == Role::Client => {
                 state.set_service(service);
                 state.set_token(token);
                 state.set_id(id);

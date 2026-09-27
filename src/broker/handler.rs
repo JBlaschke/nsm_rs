@@ -143,20 +143,13 @@ impl BrokerHandler {
                 })
             }
 
-            Message::Deliver {
-                from,
-                token,
-                to,
-                text,
-            } => {
+            Message::Deliver { from, token, text } => {
+                // The registry knows the sender's peer; the sender names none.
                 let outcome = self.broker.with_registry(|r| {
                     if !r.verify(from, &token) {
                         return Ok(Err("unknown party or wrong token"));
                     }
-                    if r.paired_service(from) != Some(to) {
-                        return Ok(Err("client is not paired with that service"));
-                    }
-                    r.deliver(to, text).map(Ok)
+                    r.deliver(from, text).map(Ok)
                 });
                 match outcome {
                     Ok(Ok(())) => Ok(Message::Delivered),
@@ -307,12 +300,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deliver_needs_the_paired_clients_token() {
+    async fn deliver_needs_a_token_and_a_peer_and_flows_both_ways() {
         crate::tls::install_default_provider();
         let h = handler(BrokerPolicy::default());
         let (service, service_token) =
             registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
-        let (other, _) = registered(h.handle(publish("10.0.0.2", 3), peer()).await.unwrap());
+        let deliver = |from, token, text: &str| Message::Deliver {
+            from,
+            token,
+            text: text.into(),
+        };
+        let ping = |id, token| Message::Ping { id, token };
+        let heartbeat = |token, inbox: Option<&str>| Message::Heartbeat {
+            token,
+            inbox: inbox.map(str::to_owned),
+            service: None,
+        };
+
+        // Wrong token: refused like an unknown id.
+        assert!(matches!(
+            h.handle(deliver(service, wrong(), "x"), peer())
+                .await
+                .unwrap(),
+            Message::Nack { .. }
+        ));
+        // Right token, but nobody holds the service yet.
+        match h
+            .handle(deliver(service, service_token, "x"), peer())
+            .await
+            .unwrap()
+        {
+            Message::Nack { reason } => assert!(reason.contains("not claimed"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+
         let claim = Message::Claim {
             key: 1,
             bind_addr: Addr::tcp("127.0.0.1", 2),
@@ -321,58 +342,34 @@ mod tests {
         let (client, client_token, paired_with) = paired(h.handle(claim, peer()).await.unwrap());
         assert_eq!(paired_with, service);
 
-        let deliver = |from, token, to| Message::Deliver {
-            from,
-            token,
-            to,
-            text: "x".into(),
-        };
-        // Wrong token.
-        assert!(matches!(
-            h.handle(deliver(client, wrong(), service), peer())
-                .await
-                .unwrap(),
-            Message::Nack { .. }
-        ));
-        // A service's own token cannot deliver (it is not a client).
-        assert!(matches!(
-            h.handle(deliver(service, service_token, service), peer())
-                .await
-                .unwrap(),
-            Message::Nack { .. }
-        ));
-        // Right client, but not its service.
-        assert!(matches!(
-            h.handle(deliver(client, client_token, other), peer())
-                .await
-                .unwrap(),
-            Message::Nack { .. }
-        ));
-        // The paired client with its token.
+        // Client to service: the text rides on the service's next ping reply.
         assert_eq!(
-            h.handle(deliver(client, client_token, service), peer())
+            h.handle(deliver(client, client_token, "job 17"), peer())
                 .await
                 .unwrap(),
             Message::Delivered
         );
-        // The text reached the service's inbox and rides on its next heartbeat.
-        let hb = h
-            .handle(
-                Message::Ping {
-                    id: service,
-                    token: service_token,
-                },
-                peer(),
-            )
-            .await
-            .unwrap();
         assert_eq!(
-            hb,
-            Message::Heartbeat {
-                token: service_token,
-                inbox: Some("x".into()),
-                service: None
-            }
+            h.handle(ping(service, service_token), peer())
+                .await
+                .unwrap(),
+            heartbeat(service_token, Some("job 17"))
+        );
+        // Service to client: the same picture mirrored.
+        assert_eq!(
+            h.handle(deliver(service, service_token, "ready"), peer())
+                .await
+                .unwrap(),
+            Message::Delivered
+        );
+        assert_eq!(
+            h.handle(ping(client, client_token), peer()).await.unwrap(),
+            heartbeat(client_token, Some("ready"))
+        );
+        // Delivered once.
+        assert_eq!(
+            h.handle(ping(client, client_token), peer()).await.unwrap(),
+            heartbeat(client_token, None)
         );
     }
 

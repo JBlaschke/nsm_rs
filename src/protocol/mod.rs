@@ -3,7 +3,8 @@
 //! - [`message`]: the tagged [`Message`] enum, one variant per request and
 //!   reply, with the request/reply table and the JSON shape;
 //! - [`types`]: the records it carries ([`PartyId`], [`Key`],
-//!   [`ServiceHandle`], [`ServiceRecord`], [`ClientRecord`]);
+//!   [`ServiceHandle`], [`ServiceRecord`], [`ClientRecord`]) and a party's
+//!   [`Role`];
 //! - [`codec`]: JSON [`encode`]/[`decode`] used by every transport, and the
 //!   length-prefixed [`MessageCodec`] framing for TCP and TLS streams.
 //!
@@ -15,4 +16,4 @@ pub mod types;
 
 pub use codec::{Framed, MessageCodec, decode, encode, framed};
 pub use message::{Message, PROTOCOL_VERSION};
-pub use types::{ClientRecord, Key, PartyId, RegToken, ServiceHandle, ServiceRecord};
+pub use types::{ClientRecord, Key, PartyId, RegToken, Role, ServiceHandle, ServiceRecord};
