@@ -311,13 +311,16 @@ done
 ```bash
 # First one wins: any number of scripts, at the client or at the service,
 # may try to take a task, and only the put that finds the key not set
-# (--if-version 0) is applied. The others exit 4 and change nothing.
-if nsm store put "$SERVICE_HB" task/17/owner --value "$HOSTNAME" --if-version 0 > /dev/null; then
+# (--if-version 0) is applied; the others exit 4 and change nothing. The
+# owner is read back whatever the put answered, because a put that failed
+# with exit 1 may still have been applied.
+me="$HOSTNAME:$$"
+nsm store put "$SERVICE_HB" task/17/owner --value "$me" --if-version 0 > /dev/null
+owner=$(nsm store get "$SERVICE_HB" task/17/owner) || exit 1
+if [ "$owner" = "$me" ]; then
   echo "task 17 is mine"
-elif [ $? -eq 4 ]; then
-  echo "task 17 was taken by $(nsm store get "$SERVICE_HB" task/17/owner)"
 else
-  exit 1
+  echo "task 17 was taken by $owner"
 fi
 ```
 
