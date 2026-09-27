@@ -379,6 +379,24 @@ fn listing_commands_print_results_on_stdout_only() {
     assert_eq!((none.code, none.stdout.as_str()), (0, ""));
 }
 
+/// A reader that went away is a failure like any other: exit 1 with a
+/// message, not the panic (exit 101) `println!` gives on a closed pipe.
+#[test]
+fn a_closed_stdout_exits_1_with_a_message() {
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    let out = nsm()
+        .arg("list-interfaces")
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .output()
+        .expect("nsm runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.starts_with("nsm: "), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
 #[test]
 fn runtime_failures_exit_1_with_a_prefixed_message() {
     let dead = format!("127.0.0.1:{}", unused_port());

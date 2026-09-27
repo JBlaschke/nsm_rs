@@ -3,8 +3,11 @@
 //! only place that prints to stdout or decides exit codes: 0 when the
 //! operation succeeded, 1 when it failed (`nsm: <error>` on stderr), 2 for a
 //! usage error (clap's own), and [`NOTHING_YET`] when the party answered but
-//! has nothing to report yet.
+//! has nothing to report yet. Every line of stdout goes through
+//! [`print_line`], so a reader that went away (a closed pipe) makes the
+//! command fail with exit 1 instead of a panic.
 
+use std::io::Write;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -68,6 +71,16 @@ fn spawn_signal_handler(shutdown: CancellationToken) {
     });
 }
 
+/// Write `line` and a newline to stdout and flush it. A failed write (most
+/// often a closed pipe: the reader went away) is an error like any other, so
+/// the command exits 1 with a message instead of the panic `println!` gives.
+fn print_line(line: impl std::fmt::Display) -> Result<()> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(format!("{line}\n").as_bytes())?;
+    out.flush()?;
+    Ok(())
+}
+
 fn net_opts(tls: &TlsOpts, timing: &TimingOpts, limits: &LimitsOpts) -> NetOpts {
     NetOpts {
         tls: tls.paths(),
@@ -96,22 +109,22 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
         } => {
             let names = ops::list_interfaces(ip_version)?;
             if verbose {
-                println!("Interfaces:");
+                print_line("Interfaces:")?;
             }
             for n in names {
-                println!("{}{n}", if verbose { " - " } else { "" });
+                print_line(format_args!("{}{n}", if verbose { " - " } else { "" }))?;
             }
         }
         Command::ListIps { iface, verbose } => {
             let addrs = ops::list_ips(&iface.selector())?;
             if verbose {
-                println!("Addresses:");
+                print_line("Addresses:")?;
             }
             for a in addrs {
                 if verbose {
-                    println!(" - {} ({})", a.ip, a.interface);
+                    print_line(format_args!(" - {} ({})", a.ip, a.interface))?;
                 } else {
-                    println!("{}", a.ip);
+                    print_line(a.ip)?;
                 }
             }
         }
@@ -191,7 +204,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
             let first = pairings.borrow_and_update().clone();
             match first {
                 // The service address is the one line of stdout a script needs.
-                Some(service) => println!("{service}"),
+                Some(service) => print_line(service)?,
                 None => eprintln!("nsm: paired, but the broker sent no service handle"),
             }
             eprintln!(
@@ -200,12 +213,16 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
                 session.bound()
             );
             // Every re-pairing is one more line, so a script that keeps
-            // reading always holds the current service.
+            // reading always holds the current service. When nobody reads
+            // any more, printing stops; the party itself keeps running.
             tokio::spawn(async move {
                 while pairings.changed().await.is_ok() {
                     let current = pairings.borrow_and_update().clone();
-                    if let Some(service) = current {
-                        println!("{service}");
+                    if let Some(service) = current
+                        && let Err(e) = print_line(service)
+                    {
+                        tracing::warn!(error = %e, "cannot print the new pairing; no longer printing pairings");
+                        break;
                     }
                 }
             });
@@ -220,7 +237,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
         } => {
             let net = net_opts(&tls, &timing, &LimitsOpts::default());
             match ops::collect(&party, &net).await?.text() {
-                Some(text) => println!("{text}"),
+                Some(text) => print_line(text)?,
                 None => {
                     eprintln!("nsm: nothing to collect yet");
                     return Ok(ExitCode::from(NOTHING_YET));
@@ -230,7 +247,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
         Command::Peer { party, tls, timing } => {
             let net = net_opts(&tls, &timing, &LimitsOpts::default());
             match ops::collect(&party, &net).await?.service()? {
-                Some(service) => println!("{service}"),
+                Some(service) => print_line(service)?,
                 None => {
                     eprintln!("nsm: not paired yet");
                     return Ok(ExitCode::from(NOTHING_YET));
