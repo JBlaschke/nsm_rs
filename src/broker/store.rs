@@ -20,11 +20,11 @@
 //!
 //! # Conditions
 //!
-//! A put or a delete may carry an `if_version` (plan decision S11): `Some(0)`
-//! holds when the key is not set, `Some(n)` when the key's current version is
-//! `n`, and `None` always holds. Since versions start at 1, both cases are
-//! one comparison with the key's current version, counting an absent key as
-//! 0. The condition is checked first, before the budget and before a number
+//! A put or a delete may carry an `if_version` (store plan, decision S11):
+//! `Some(0)` holds when the key is not set, `Some(n)` when the key's current
+//! version is `n`, and `None` always holds. Since versions start at 1, both
+//! cases are one comparison with the key's current version, counting an
+//! absent key as 0. The condition is checked first, before the budget and before a number
 //! is taken, so a write whose condition does not hold is answered the same
 //! way whether or not it would have fit: an [`Outcome`] with `applied`
 //! false carrying the key's current entry, or none. That is an answer, not
