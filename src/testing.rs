@@ -6,7 +6,7 @@
 //! and the iteration number in the assertion message identify it.
 
 use crate::net::{Addr, Transport};
-use crate::protocol::RegToken;
+use crate::protocol::{MAX_STORE_KEY_BYTES, RegToken, StoreKey};
 
 /// xorshift64*: small, fast, and good enough to shake out parser and codec
 /// corner cases.
@@ -105,6 +105,42 @@ impl Rng {
         let transport = self.transport();
         let host = self.host();
         Addr::new(transport, host, self.next_u64() as u16)
+    }
+
+    /// A valid store key: 1 to 128 characters of the store-key alphabet,
+    /// short ones more often than long ones, never starting with `-`.
+    pub(crate) fn store_key(&mut self) -> StoreKey {
+        const ALPHABET: &[char] = &['a', 'k', 'z', 'A', 'Z', '0', '9', '.', '_', '-', ':', '/'];
+        let max = if self.chance(8) {
+            MAX_STORE_KEY_BYTES
+        } else {
+            8
+        };
+        let len = self.range(1, max);
+        let mut text: String = (0..len).map(|_| *self.pick(ALPHABET)).collect();
+        if text.starts_with('-') {
+            text.replace_range(..1, "k");
+        }
+        match StoreKey::try_from(text) {
+            Ok(key) => key,
+            Err(e) => panic!("generated an invalid store key: {e}"),
+        }
+    }
+
+    /// Text that is a valid store key about half the time: the key alphabet
+    /// mixed with characters it excludes, empty, too long or starting with
+    /// `-` now and then.
+    pub(crate) fn store_key_text(&mut self) -> String {
+        const ALPHABET: &[char] = &[
+            'a', 'Z', '5', '.', '_', '-', ':', '/', ' ', '\n', '*', '"', '\\', 'é', '\u{7f}', '~',
+        ];
+        match self.below(6) {
+            0 => String::new(),
+            1 => "k".repeat(self.range(MAX_STORE_KEY_BYTES - 1, MAX_STORE_KEY_BYTES + 2)),
+            2 => format!("-{}", self.store_key()),
+            3 => self.store_key().to_string(),
+            _ => self.string(ALPHABET, 12),
+        }
     }
 
     pub(crate) fn token(&mut self) -> RegToken {

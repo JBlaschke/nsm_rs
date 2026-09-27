@@ -310,6 +310,21 @@ mod tests {
             },
             Message::Delivered,
             Message::nack("x"),
+            // The broker answers store relays; parties do not relay `store`
+            // yet, so it is as unexpected here as the relay and its reply.
+            Message::Store {
+                op: crate::protocol::StoreOp::List,
+            },
+            Message::StoreRelay {
+                from: PartyId(2),
+                token: tok(),
+                op: crate::protocol::StoreOp::List,
+            },
+            Message::Stored(crate::protocol::Stored {
+                client: None,
+                revision: 0,
+                entries: vec![],
+            }),
         ] {
             let kind = msg.kind();
             match h.handle(msg, peer()).await.unwrap() {

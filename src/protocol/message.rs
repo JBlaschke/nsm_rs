@@ -8,7 +8,10 @@
 //! A message is a JSON object whose `"type"` field is the snake_case variant
 //! name, followed by the variant's fields, e.g.
 //! `{"type":"publish","key":42,"service_port":9000,"bind_addr":"https://10.0.0.5:9001","ping":false}`.
-//! Variants without fields are just the tag: `{"type":"collect"}`. An unknown
+//! Variants without fields are just the tag: `{"type":"collect"}`. The store
+//! messages carry a [`StoreOp`] whose own fields sit next to `type`, and
+//! [`Stored`](Message::Stored) carries the fields of a [`Stored`] record the
+//! same way: `{"type":"store","op":"get","key":"step"}`. An unknown
 //! tag, a missing field, a wrong type or trailing bytes are decode errors;
 //! unknown fields are ignored so that a newer peer may add some.
 //!
@@ -21,13 +24,16 @@
 //! | [`Deliver`](Message::Deliver) | party → broker (relay of a `Send`), with its token | [`Delivered`](Message::Delivered) or [`Nack`](Message::Nack) |
 //! | [`Heartbeat`](Message::Heartbeat) | broker → party (two-sided liveness) | [`HeartbeatAck`](Message::HeartbeatAck) |
 //! | [`Collect`](Message::Collect) | `collect` → party | [`Collected`](Message::Collected) |
+//! | [`Store`](Message::Store) | `store` → party | [`Stored`](Message::Stored) or [`Nack`](Message::Nack) |
+//! | [`StoreRelay`](Message::StoreRelay) | party → broker (relay of a `Store`), with its token | [`Stored`](Message::Stored) or [`Nack`](Message::Nack) |
 //!
 //! "Party" means a service or a client; each runs a small server on its
 //! `bind_addr` that the broker (and the `send` / `collect` operations) talk
 //! to. The broker is the only party with a fixed, well-known address.
 //!
 //! Registration returns a [`RegToken`]: a random secret that the party
-//! quotes in every [`Ping`](Message::Ping) and [`Deliver`](Message::Deliver),
+//! quotes in every [`Ping`](Message::Ping), [`Deliver`](Message::Deliver) and
+//! [`StoreRelay`](Message::StoreRelay),
 //! and that the broker quotes in every [`Heartbeat`](Message::Heartbeat) it
 //! sends. Party ids are small sequential integers and are not secrets; the
 //! token is what stops a third party from acting on another party's behalf
@@ -35,7 +41,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{Key, PartyId, RegToken, Role, ServiceHandle};
+use super::types::{Key, PartyId, RegToken, Role, ServiceHandle, StoreOp, Stored};
 use crate::net::Addr;
 
 /// Version of the wire protocol described in this module.
@@ -49,6 +55,10 @@ use crate::net::Addr;
 /// | 1 | the first versioned format |
 /// | 2 | [`Collected`](Message::Collected) carries the answering party's `role` |
 /// | 3 | [`Deliver`](Message::Deliver) names no target: the broker delivers to the sender's peer, so text flows both ways |
+///
+/// Version 3 also carries [`Store`](Message::Store),
+/// [`StoreRelay`](Message::StoreRelay) and [`Stored`](Message::Stored), added
+/// later as new variants, which needs no bump.
 pub const PROTOCOL_VERSION: u16 = 3;
 
 /// One wire message: a request to the broker or to a party, or a reply.
@@ -165,6 +175,29 @@ pub enum Message {
         text: String,
     },
 
+    /// Apply `op` to the store the relaying party shares with its peer.
+    ///
+    /// Sent by a party to the broker when relaying a [`Message::Store`]. The
+    /// party identifies itself with `from` and its `token`, and names no
+    /// store: the broker keeps one store per claim and finds it from `from`,
+    /// as it finds the peer for [`Message::Deliver`]. A client uses its own
+    /// claim's store, also between losing its service and being re-paired;
+    /// a service uses the store of the client holding it. A service nobody
+    /// holds reads an empty store (`client: null`) and may not write.
+    ///
+    /// Reply: [`Message::Stored`], or [`Message::Nack`] when `from`/`token`
+    /// do not name a registered party, a service nobody holds tries to
+    /// write, or a put does not fit the store's budget.
+    StoreRelay {
+        /// Id of the relaying party.
+        from: PartyId,
+        /// The relaying party's registration token.
+        token: RegToken,
+        /// The operation, its fields next to `type` on the wire.
+        #[serde(flatten)]
+        op: StoreOp,
+    },
+
     // ----- broker → party ---------------------------------------------------
     /// Two-sided heartbeat: the broker checks that a party is alive and
     /// delivers whatever is pending for it.
@@ -204,6 +237,20 @@ pub enum Message {
     /// `None` if nothing was ever delivered); a client also answers with the
     /// handle of the service it is paired with (`service`).
     Collect,
+
+    /// Apply `op` to the store a party shares with its peer.
+    ///
+    /// Sent by the store operations to either party's bind address. The
+    /// party keeps no copy: it relays the operation to the broker as
+    /// [`Message::StoreRelay`] and passes the broker's answer back.
+    ///
+    /// Reply: [`Message::Stored`], or [`Message::Nack`] when the party has
+    /// not registered yet or the broker refused the operation.
+    Store {
+        /// The operation, its fields next to `type` on the wire.
+        #[serde(flatten)]
+        op: StoreOp,
+    },
 
     // ----- replies ----------------------------------------------------------
     /// Reply to [`Message::Publish`]: the service is registered.
@@ -250,6 +297,12 @@ pub enum Message {
         service: Option<ServiceHandle>,
     },
 
+    /// Reply to [`Message::StoreRelay`] and [`Message::Store`]: whose store
+    /// it is, its revision and the entries the operation returns. The
+    /// fields of the [`Stored`] record sit next to `type` on the wire:
+    /// `{"type":"stored","client":2,"revision":3,"entries":[...]}`.
+    Stored(Stored),
+
     /// Negative reply to any request: the request was understood but cannot
     /// be honoured (no service under the key, unknown id, broker full, ...).
     ///
@@ -279,6 +332,7 @@ impl Message {
                 | Message::HeartbeatAck { .. }
                 | Message::Delivered
                 | Message::Collected { .. }
+                | Message::Stored(_)
                 | Message::Nack { .. }
         )
     }
@@ -292,14 +346,24 @@ impl Message {
             Message::Send { .. } => "send",
             Message::Deliver { .. } => "deliver",
             Message::Heartbeat { .. } => "heartbeat",
+            Message::StoreRelay { .. } => "store_relay",
             Message::Collect => "collect",
+            Message::Store { .. } => "store",
             Message::Registered { .. } => "registered",
             Message::Paired { .. } => "paired",
             Message::HeartbeatAck { .. } => "heartbeat_ack",
             Message::Delivered => "delivered",
             Message::Collected { .. } => "collected",
+            Message::Stored(_) => "stored",
             Message::Nack { .. } => "nack",
         }
+    }
+}
+
+impl From<Stored> for Message {
+    /// The [`Message::Stored`] reply carrying `stored`.
+    fn from(stored: Stored) -> Self {
+        Message::Stored(stored)
     }
 }
 
@@ -313,6 +377,7 @@ pub(crate) fn test_token() -> RegToken {
 /// round-trip tests here and in the codec.
 #[cfg(test)]
 pub(crate) fn all_variants() -> Vec<Message> {
+    use super::types::StoreEntry;
     use crate::net::Transport;
 
     let handle = ServiceHandle {
@@ -367,8 +432,37 @@ pub(crate) fn all_variants() -> Vec<Message> {
             text: Some("last".into()),
             service: Some(handle),
         },
+        Message::StoreRelay {
+            from: PartyId(4),
+            token,
+            op: StoreOp::Put {
+                key: store_key("step"),
+                value: "5 \"quoted\"\n".into(),
+            },
+        },
+        Message::Store {
+            op: StoreOp::Delete {
+                key: store_key("input/path"),
+            },
+        },
+        Message::Stored(Stored {
+            client: Some(PartyId(4)),
+            revision: 9,
+            entries: vec![StoreEntry {
+                key: store_key("step"),
+                value: String::new(),
+                version: 9,
+            }],
+        }),
         Message::nack("no service available for key 42"),
     ]
+}
+
+/// A store key from a literal known to be valid, for tests.
+#[cfg(test)]
+pub(crate) fn store_key(text: &str) -> super::types::StoreKey {
+    text.parse()
+        .unwrap_or_else(|e| panic!("{text:?} is not a store key: {e}"))
 }
 
 #[cfg(test)]
@@ -391,7 +485,7 @@ mod tests {
             kinds.len(),
             "duplicate variant in all_variants"
         );
-        assert_eq!(kinds.len(), 13, "a variant was added; extend all_variants");
+        assert_eq!(kinds.len(), 16, "a variant was added; extend all_variants");
     }
 
     #[test]
@@ -650,9 +744,204 @@ mod tests {
         for msg in all_variants() {
             let expected = matches!(
                 msg.kind(),
-                "registered" | "paired" | "heartbeat_ack" | "delivered" | "collected" | "nack"
+                "registered"
+                    | "paired"
+                    | "heartbeat_ack"
+                    | "delivered"
+                    | "collected"
+                    | "stored"
+                    | "nack"
             );
             assert_eq!(msg.is_reply(), expected, "{}", msg.kind());
+        }
+    }
+
+    #[test]
+    fn store_json_shape_puts_the_operation_next_to_the_type() {
+        let cases = [
+            (
+                StoreOp::Put {
+                    key: store_key("step"),
+                    value: "5".into(),
+                },
+                r#"{"type":"store","op":"put","key":"step","value":"5"}"#,
+            ),
+            (
+                StoreOp::Get {
+                    key: store_key("step"),
+                },
+                r#"{"type":"store","op":"get","key":"step"}"#,
+            ),
+            (
+                StoreOp::Delete {
+                    key: store_key("step"),
+                },
+                r#"{"type":"store","op":"delete","key":"step"}"#,
+            ),
+            (StoreOp::List, r#"{"type":"store","op":"list"}"#),
+        ];
+        for (op, json) in cases {
+            let msg = Message::Store { op };
+            assert_eq!(serde_json::to_string(&msg).unwrap(), json);
+            assert_eq!(decode(json).unwrap(), msg, "{json}");
+        }
+        // Field order does not matter, and the tag may come last.
+        assert_eq!(
+            decode(r#"{"value":"","key":"k","op":"put","type":"store"}"#).unwrap(),
+            Message::Store {
+                op: StoreOp::Put {
+                    key: store_key("k"),
+                    value: String::new(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn store_relay_json_shape() {
+        let hex = "07".repeat(16);
+        let msg = Message::StoreRelay {
+            from: PartyId(2),
+            token: test_token(),
+            op: StoreOp::Put {
+                key: store_key("step"),
+                value: "5".into(),
+            },
+        };
+        let json = format!(
+            r#"{{"type":"store_relay","from":2,"token":"{hex}","op":"put","key":"step","value":"5"}}"#
+        );
+        assert_eq!(serde_json::to_string(&msg).unwrap(), json);
+        assert_eq!(decode(&json).unwrap(), msg);
+        let list = Message::StoreRelay {
+            from: PartyId(2),
+            token: test_token(),
+            op: StoreOp::List,
+        };
+        assert_eq!(
+            serde_json::to_string(&list).unwrap(),
+            format!(r#"{{"type":"store_relay","from":2,"token":"{hex}","op":"list"}}"#)
+        );
+    }
+
+    #[test]
+    fn stored_json_shape_carries_the_record_inline() {
+        use super::super::types::StoreEntry;
+        let msg = Message::from(Stored {
+            client: Some(PartyId(2)),
+            revision: 3,
+            entries: vec![StoreEntry {
+                key: store_key("step"),
+                value: "5".into(),
+                version: 3,
+            }],
+        });
+        let json = r#"{"type":"stored","client":2,"revision":3,"entries":[{"key":"step","value":"5","version":3}]}"#;
+        assert_eq!(serde_json::to_string(&msg).unwrap(), json);
+        assert_eq!(decode(json).unwrap(), msg);
+
+        let empty = r#"{"type":"stored","client":null,"revision":0,"entries":[]}"#;
+        let unclaimed = Message::Stored(Stored {
+            client: None,
+            revision: 0,
+            entries: vec![],
+        });
+        assert_eq!(serde_json::to_string(&unclaimed).unwrap(), empty);
+        assert_eq!(decode(empty).unwrap(), unclaimed);
+        // Like every `Option`, a missing client decodes as `None`.
+        assert_eq!(
+            decode(r#"{"type":"stored","revision":0,"entries":[]}"#).unwrap(),
+            unclaimed
+        );
+        // The largest ids and versions survive the round trip.
+        let max = format!(
+            r#"{{"type":"stored","client":{m},"revision":{m},"entries":[{{"key":"k","value":"v","version":{m}}}]}}"#,
+            m = u64::MAX
+        );
+        match decode(&max).unwrap() {
+            Message::Stored(stored) => {
+                assert_eq!(stored.client, Some(PartyId(u64::MAX)));
+                assert_eq!(stored.revision, u64::MAX);
+                assert_eq!(stored.entries[0].version, u64::MAX);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_store_messages_do_not_decode() {
+        let hex = "07".repeat(16);
+        let too_long = "k".repeat(129);
+        let mut cases: Vec<String> = [
+            "",
+            "-step",
+            "a b",
+            "a\\n",
+            "\\u00e9",
+            "a*",
+            too_long.as_str(),
+        ]
+        .iter()
+        .map(|key| format!(r#"{{"type":"store","op":"get","key":"{key}"}}"#))
+        .collect();
+        cases.extend(
+            [
+                r#"{"type":"store"}"#,
+                r#"{"type":"store","op":"increment","key":"k"}"#,
+                r#"{"type":"store","op":"Get","key":"k"}"#,
+                r#"{"type":"store","op":"put","key":"k"}"#,
+                r#"{"type":"store","op":"put","value":"v"}"#,
+                r#"{"type":"store","op":"put","key":"k","value":5}"#,
+                r#"{"type":"store","op":"get","key":7}"#,
+                r#"{"type":"store","op":"get"}"#,
+                r#"{"type":"store","op":null}"#,
+                r#"{"type":"store","op":{"op":"list"}}"#,
+                r#"{"type":"stored","client":1,"entries":[]}"#,
+                r#"{"type":"stored","client":1,"revision":0}"#,
+                r#"{"type":"stored","client":1,"revision":-1,"entries":[]}"#,
+                r#"{"type":"stored","client":1,"revision":0,"entries":[{"key":"k","value":"v"}]}"#,
+                r#"{"type":"stored","client":1,"revision":0,"entries":[{"key":"-k","value":"v","version":1}]}"#,
+            ]
+            .map(str::to_owned),
+        );
+        // A relay without credentials, or with a malformed token.
+        cases.extend([
+            format!(r#"{{"type":"store_relay","token":"{hex}","op":"list"}}"#),
+            r#"{"type":"store_relay","from":2,"op":"list"}"#.to_owned(),
+            r#"{"type":"store_relay","from":2,"token":"short","op":"list"}"#.to_owned(),
+            format!(r#"{{"type":"store_relay","from":"2","token":"{hex}","op":"list"}}"#),
+            format!(r#"{{"type":"store_relay","from":2,"token":"{hex}"}}"#),
+        ]);
+        for json in &cases {
+            assert!(decode(json).is_err(), "{json} should not decode");
+        }
+    }
+
+    #[test]
+    fn store_messages_ignore_unknown_fields() {
+        let hex = "07".repeat(16);
+        assert_eq!(
+            decode(r#"{"type":"store","op":"list","key":"ignored","extra":[1,2]}"#).unwrap(),
+            Message::Store { op: StoreOp::List }
+        );
+        assert_eq!(
+            decode(&format!(
+                r#"{{"type":"store_relay","from":2,"token":"{hex}","op":"get","key":"k","if_version":3}}"#
+            ))
+            .unwrap(),
+            Message::StoreRelay {
+                from: PartyId(2),
+                token: test_token(),
+                op: StoreOp::Get {
+                    key: store_key("k"),
+                },
+            }
+        );
+        match decode(r#"{"type":"stored","client":1,"revision":0,"entries":[],"applied":true}"#)
+            .unwrap()
+        {
+            Message::Stored(stored) => assert!(stored.entries.is_empty()),
+            other => panic!("{other:?}"),
         }
     }
 

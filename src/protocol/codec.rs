@@ -415,15 +415,32 @@ mod tests {
 
     // ---- randomized properties (deterministic seeds; see crate::testing) ----
 
+    fn random_store_op(rng: &mut crate::testing::Rng) -> crate::protocol::StoreOp {
+        use crate::protocol::StoreOp;
+        match rng.below(4) {
+            0 => StoreOp::Get {
+                key: rng.store_key(),
+            },
+            1 => StoreOp::Put {
+                key: rng.store_key(),
+                value: rng.text(300),
+            },
+            2 => StoreOp::Delete {
+                key: rng.store_key(),
+            },
+            _ => StoreOp::List,
+        }
+    }
+
     fn random_message(rng: &mut crate::testing::Rng) -> Message {
-        use crate::protocol::{Role, ServiceHandle};
+        use crate::protocol::{Role, ServiceHandle, StoreEntry, Stored};
         let token = rng.token();
         let handle = ServiceHandle {
             id: PartyId(rng.next_u64()),
             host: rng.host(),
             service_port: rng.next_u64() as u16,
         };
-        match rng.below(13) {
+        match rng.below(16) {
             0 => Message::Publish {
                 key: rng.next_u64(),
                 service_port: rng.next_u64() as u16,
@@ -475,6 +492,25 @@ mod tests {
                 text: rng.chance(2).then(|| rng.text(300)),
                 service: rng.chance(2).then_some(handle),
             },
+            12 => Message::StoreRelay {
+                from: PartyId(rng.next_u64()),
+                token,
+                op: random_store_op(rng),
+            },
+            13 => Message::Store {
+                op: random_store_op(rng),
+            },
+            14 => Message::Stored(Stored {
+                client: rng.chance(2).then(|| PartyId(rng.next_u64())),
+                revision: rng.next_u64(),
+                entries: (0..rng.below(4))
+                    .map(|_| StoreEntry {
+                        key: rng.store_key(),
+                        value: rng.text(100),
+                        version: rng.next_u64(),
+                    })
+                    .collect(),
+            }),
             _ => Message::nack(rng.text(100)),
         }
     }
@@ -483,10 +519,12 @@ mod tests {
     fn random_messages_survive_framing_in_random_chunks() {
         let mut rng = crate::testing::Rng::new(42);
         let mut codec = MessageCodec::default();
+        let mut kinds = std::collections::BTreeSet::new();
         for i in 0..400 {
             let msgs: Vec<Message> = (0..rng.range(1, 6))
                 .map(|_| random_message(&mut rng))
                 .collect();
+            kinds.extend(msgs.iter().map(Message::kind));
             let mut wire = BytesMut::new();
             for m in &msgs {
                 codec.encode(m, &mut wire).unwrap();
@@ -508,6 +546,11 @@ mod tests {
             assert!(buf.is_empty(), "iteration {i}: {} bytes left", buf.len());
             assert_eq!(decoded, msgs, "iteration {i}");
         }
+        assert_eq!(
+            kinds.len(),
+            crate::protocol::message::all_variants().len(),
+            "every variant is generated: {kinds:?}"
+        );
     }
 
     #[test]
