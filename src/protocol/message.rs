@@ -28,8 +28,8 @@
 //! | [`StoreRelay`](Message::StoreRelay) | party → broker (relay of a `Store`), with its token | [`Stored`](Message::Stored) or [`Nack`](Message::Nack) |
 //!
 //! "Party" means a service or a client; each runs a small server on its
-//! `bind_addr` that the broker (and the `send` / `collect` operations) talk
-//! to. The broker is the only party with a fixed, well-known address.
+//! `bind_addr` that the broker (and the `send`, `collect` and `store`
+//! operations) talk to. The broker is the only party with a fixed, well-known address.
 //!
 //! Registration returns a [`RegToken`]: a random secret that the party
 //! quotes in every [`Ping`](Message::Ping), [`Deliver`](Message::Deliver) and
