@@ -244,10 +244,9 @@ pub enum Message {
     /// relays the operation to the broker as [`Message::StoreRelay`] and
     /// passes the broker's answer back.
     ///
-    /// Reply: [`Message::Stored`], or [`Message::Nack`] when the party has
-    /// not registered yet or the broker refused the operation. Parties do
-    /// not relay it yet: in this version a party answers it with the
-    /// [`Message::Nack`] `unexpected store at a service` (or `client`).
+    /// Reply: [`Message::Stored`], passed back unchanged, or
+    /// [`Message::Nack`] when the party has not registered yet or the broker
+    /// refused the operation.
     Store {
         /// The operation, its fields next to `type` on the wire.
         #[serde(flatten)]

@@ -1,9 +1,13 @@
 //! The request handler a party mounts on its bind address.
 //!
-//! It answers three kinds of caller: the broker (two-sided heartbeats), the
-//! `collect` operation, and the `send` operation, whose text is relayed to
-//! the broker for the party's peer. Anything else is a [`Message::Nack`];
-//! nothing here panics on the request contents.
+//! It answers four kinds of caller: the broker (two-sided heartbeats), the
+//! `collect` operation, the `send` operation, whose text is relayed to the
+//! broker for the party's peer, and the `store` operation, which is relayed
+//! to the broker that keeps the store the party shares with its peer. Both
+//! relays go through one helper, which adds the party's id and token and
+//! refuses before registration, so the two cannot drift apart. Anything
+//! else is a [`Message::Nack`]; nothing here panics on the request contents,
+//! and store keys and values are never logged.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -12,7 +16,7 @@ use tracing::{debug, trace};
 
 use super::{PartyState, Role};
 use crate::Result;
-use crate::protocol::{Message, PartyId};
+use crate::protocol::{Message, PartyId, RegToken};
 use crate::transport::{Handler, PeerInfo};
 
 /// [`Handler`] for a party's own listener.
@@ -64,17 +68,11 @@ impl PartyHandler {
             }),
             Message::Send { text } => {
                 // Either role relays to its peer; the broker knows who that is.
-                let (Some(from), Some(token)) = (self.state.id(), self.state.token()) else {
-                    return Ok(Message::nack(format!(
-                        "{} is not registered yet",
-                        self.state.role()
-                    )));
-                };
-                debug!(%from, "relaying text to the broker for the peer");
                 let reply = self
-                    .state
-                    .client()
-                    .call(self.state.broker(), Message::Deliver { from, token, text })
+                    .relay(|from, token| {
+                        debug!(%from, "relaying text to the broker for the peer");
+                        Message::Deliver { from, token, text }
+                    })
                     .await?;
                 Ok(match reply {
                     Message::Delivered => Message::Delivered,
@@ -84,12 +82,49 @@ impl PartyHandler {
                     }
                 })
             }
+            Message::Store { op } => {
+                // Either role relays; the broker knows whose store it is.
+                let reply = self
+                    .relay(|from, token| {
+                        debug!(%from, op = op.kind(), "relaying a store request to the broker");
+                        Message::StoreRelay { from, token, op }
+                    })
+                    .await?;
+                Ok(match reply {
+                    stored @ Message::Stored(_) => stored,
+                    Message::Nack { reason } => Message::Nack { reason },
+                    other => Message::nack(format!(
+                        "broker answered a store relay with {}",
+                        other.kind()
+                    )),
+                })
+            }
             other => Ok(Message::nack(format!(
                 "unexpected {} at a {}",
                 other.kind(),
                 self.state.role()
             ))),
         }
+    }
+
+    /// Relay a request to the broker on this party's behalf and return the
+    /// broker's reply. `request` builds the message from the party's id and
+    /// token. Before registration there is nothing to relay with: the broker
+    /// is not dialled, and the reply is the party's own
+    /// `<role> is not registered yet` nack, which the callers pass through
+    /// like a nack from the broker. A failed broker call is an error, which
+    /// the transport turns into a closed connection or a 500.
+    async fn relay(&self, request: impl FnOnce(PartyId, RegToken) -> Message) -> Result<Message> {
+        let (Some(from), Some(token)) = (self.state.id(), self.state.token()) else {
+            return Ok(Message::nack(format!(
+                "{} is not registered yet",
+                self.state.role()
+            )));
+        };
+        self.state
+            .client()
+            .call(self.state.broker(), request(from, token))
+            .await
     }
 }
 
@@ -106,7 +141,8 @@ mod tests {
     use super::*;
     use crate::config::{Limits, Timing, TlsPaths};
     use crate::net::{Addr, Transport};
-    use crate::protocol::{RegToken, ServiceHandle};
+    use crate::protocol::message::store_key;
+    use crate::protocol::{RegToken, ServiceHandle, StoreEntry, StoreOp, Stored};
     use crate::transport::Client;
 
     fn tok() -> RegToken {
@@ -280,6 +316,157 @@ mod tests {
         }
     }
 
+    /// A broker stand-in that records every request and answers from a
+    /// script: `deliver` is delivered; a store `get` or `list` gets
+    /// [`scripted_stored`], a `put` the nack "store full", and a `delete` a
+    /// reply of the wrong kind.
+    #[derive(Default)]
+    struct ScriptedBroker {
+        seen: Arc<std::sync::Mutex<Vec<Message>>>,
+    }
+
+    fn scripted_stored() -> Message {
+        Message::Stored(Stored {
+            client: Some(PartyId(4)),
+            revision: 9,
+            entries: vec![StoreEntry {
+                key: store_key("step"),
+                value: "5 \"quoted\"\n".into(),
+                version: 9,
+            }],
+        })
+    }
+
+    impl Handler for ScriptedBroker {
+        async fn handle(&self, msg: Message, _peer: PeerInfo) -> Result<Message> {
+            self.seen
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(msg.clone());
+            Ok(match msg {
+                Message::Deliver { .. } => Message::Delivered,
+                Message::StoreRelay { op, .. } => match op {
+                    StoreOp::Get { .. } | StoreOp::List => scripted_stored(),
+                    StoreOp::Put { .. } => Message::nack("store full: scripted"),
+                    StoreOp::Delete { .. } => Message::Delivered,
+                },
+                other => Message::nack(format!("unexpected {} at the script", other.kind())),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn store_before_registration_is_refused_without_dialling() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for role in [Role::Service, Role::Client] {
+                // Nothing listens at the configured broker (port 1): a dial
+                // would fail as an error, not answer with a nack.
+                let h = handler(role);
+                for op in [
+                    StoreOp::List,
+                    StoreOp::Put {
+                        key: store_key("step"),
+                        value: "5".into(),
+                    },
+                ] {
+                    assert_eq!(
+                        h.handle(Message::Store { op }, peer()).await.unwrap(),
+                        Message::nack(format!("{role} is not registered yet")),
+                        "{role}"
+                    );
+                }
+            }
+        })
+        .await
+        .expect("the test finished in time");
+    }
+
+    #[tokio::test]
+    async fn relays_carry_the_partys_own_id_and_token_and_pass_replies_back() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let script = ScriptedBroker::default();
+            let seen = Arc::clone(&script.seen);
+            let (server, client, _certs) =
+                crate::transport::testing::start(Transport::Tcp, script).await;
+            let client = Arc::new(client);
+            for (i, role) in [Role::Service, Role::Client].into_iter().enumerate() {
+                let id = PartyId(3 + i as u64);
+                let h = PartyHandler::new(PartyState::new(
+                    role,
+                    server.bound(),
+                    42,
+                    Arc::clone(&client),
+                ));
+                h.state().set_id(id);
+                h.state().set_token(tok());
+                let store = |op| Message::Store { op };
+                let get = StoreOp::Get {
+                    key: store_key("step"),
+                };
+                let put = StoreOp::Put {
+                    key: store_key("step"),
+                    value: "6".into(),
+                };
+                let delete = StoreOp::Delete {
+                    key: store_key("step"),
+                };
+
+                // `stored` comes back exactly as the broker sent it.
+                assert_eq!(
+                    h.handle(store(get.clone()), peer()).await.unwrap(),
+                    scripted_stored(),
+                    "{role}"
+                );
+                assert_eq!(
+                    h.handle(store(StoreOp::List), peer()).await.unwrap(),
+                    scripted_stored(),
+                    "{role}"
+                );
+                // A refusal passes through with the broker's reason.
+                assert_eq!(
+                    h.handle(store(put.clone()), peer()).await.unwrap(),
+                    Message::nack("store full: scripted"),
+                    "{role}"
+                );
+                // A reply of the wrong kind is named, not passed on.
+                assert_eq!(
+                    h.handle(store(delete.clone()), peer()).await.unwrap(),
+                    Message::nack("broker answered a store relay with delivered"),
+                    "{role}"
+                );
+                // `send` goes through the same relay.
+                assert_eq!(
+                    h.handle(Message::Send { text: "hi".into() }, peer())
+                        .await
+                        .unwrap(),
+                    Message::Delivered,
+                    "{role}"
+                );
+
+                // Every relay named this party and carried its token and the
+                // operation unchanged.
+                let relayed = std::mem::take(&mut *seen.lock().unwrap());
+                let expected: Vec<Message> = [get, StoreOp::List, put, delete]
+                    .into_iter()
+                    .map(|op| Message::StoreRelay {
+                        from: id,
+                        token: tok(),
+                        op,
+                    })
+                    .chain([Message::Deliver {
+                        from: id,
+                        token: tok(),
+                        text: "hi".into(),
+                    }])
+                    .collect();
+                assert_eq!(relayed, expected, "{role}");
+            }
+            server.shutdown().await;
+        })
+        .await
+        .expect("the test finished in time");
+    }
+
     #[tokio::test]
     async fn unexpected_messages_are_nacked_not_panicked() {
         let h = handler(Role::Client);
@@ -310,17 +497,14 @@ mod tests {
             },
             Message::Delivered,
             Message::nack("x"),
-            // The broker answers store relays; parties do not relay `store`
-            // yet, so it is as unexpected here as the relay and its reply.
-            Message::Store {
-                op: crate::protocol::StoreOp::List,
-            },
+            // A party relays `store` but not `store_relay`, which only the
+            // broker answers, and a `stored` reply is never a request.
             Message::StoreRelay {
                 from: PartyId(2),
                 token: tok(),
-                op: crate::protocol::StoreOp::List,
+                op: StoreOp::List,
             },
-            Message::Stored(crate::protocol::Stored {
+            Message::Stored(Stored {
                 client: None,
                 revision: 0,
                 entries: vec![],
