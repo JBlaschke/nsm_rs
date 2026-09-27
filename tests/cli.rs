@@ -530,21 +530,38 @@ fn full_session(transport: &str) {
     assert!(service_hb.starts_with(prefix), "{service_hb}");
 
     // Nobody holds the service yet: its store reads as empty ("not yet",
-    // exit 3) and refuses writes (exit 1), so a service that starts first
-    // can poll for its input.
+    // exit 3, and an empty list) and refuses writes (exit 1), so a service
+    // that starts first can poll for its input.
     let out = run(argv(&[&["store", "get", &service_hb, "input"], FAST]));
     assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
     assert_eq!(out.stderr, "nsm: input is not set\n");
-    let out = run(argv(&[
-        &["store", "put", &service_hb, "input", "--value", "x"],
-        FAST,
-    ]));
-    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
-    assert!(
-        out.stderr.starts_with("nsm: ") && out.stderr.contains("not claimed"),
-        "{}",
-        out.stderr
+    let out = run(argv(&[&["store", "list", &service_hb], FAST]));
+    assert_eq!((out.code, out.stdout.as_str()), (0, ""), "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    // The README's failover recipe waits for exactly this text to go away.
+    let out = run(argv(&[&["store", "list", &service_hb, "--json"], FAST]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"client\":null,\"revision\":0,\"entries\":[]}\n"
     );
+    for write in [
+        &["put", service_hb.as_str(), "input", "--value", "x"][..],
+        &["delete", service_hb.as_str(), "input"][..],
+    ] {
+        let out = run(argv(&[&["store"], write, FAST]));
+        assert_eq!(
+            (out.code, out.stdout.as_str()),
+            (1, ""),
+            "{write:?}: {}",
+            out.stderr
+        );
+        assert!(
+            out.stderr.starts_with("nsm: ") && out.stderr.contains("not claimed"),
+            "{write:?}: {}",
+            out.stderr
+        );
+    }
 
     let mut client = Proc::spawn(
         "claim",
@@ -738,6 +755,35 @@ fn store_session(client_hb: &str, service_hb: &str) {
         Some(3),
         "{reply}"
     );
+
+    // With --json a put prints the reply in place of the version, and
+    // nothing on stderr.
+    let out = store(&["put", client_hb, "scratch", "--value", "x", "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let written: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    let version = written["revision"].as_u64().expect("revision");
+    assert_eq!(
+        written["entries"],
+        serde_json::json!([{ "key": "scratch", "value": "x", "version": version }]),
+        "{written}"
+    );
+
+    // A delete with --json keeps its note on stderr and prints the reply:
+    // the removed entry, then no entry; exit 0 both times.
+    let out = store(&["delete", service_hb, "scratch", "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: deleted scratch\n");
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let removed: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(removed["entries"], written["entries"], "{removed}");
+    let out = store(&["delete", service_hb, "scratch", "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: scratch was not set\n");
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let again: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(again["entries"], serde_json::json!([]), "{again}");
 
     // A delete prints nothing on stdout and succeeds either way.
     let out = store(&["delete", service_hb, "step"]);

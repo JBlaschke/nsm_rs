@@ -434,31 +434,33 @@ async fn store_through_the_api() {
         assert_eq!(unset["entries"], json!([]), "{unset}");
         assert_eq!(unset["client"], owner, "{unset}");
 
-        // A service nobody holds reads an empty store and may not write.
+        // A service nobody holds reads an empty store and may not write:
+        // get and list answer with no client, put and delete are refused.
         let lonely = cluster.publish(8, 9101).await;
         let lonely_hb = lonely.bound().to_string();
-        let (status, empty) = api
-            .post(
-                "/v1/store",
-                &json!({ "party": lonely_hb, "op": "get", "key": "step" }),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "{empty}");
-        assert_eq!(
-            empty,
-            json!({ "client": null, "revision": 0, "entries": [] })
-        );
-        let (status, body) = api
-            .post(
-                "/v1/store",
-                &json!({ "party": lonely_hb, "op": "put", "key": "step", "value": "5" }),
-            )
-            .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-        assert!(
-            body["error"].as_str().unwrap_or("").contains("not claimed"),
-            "{body}"
-        );
+        for read in [
+            json!({ "party": lonely_hb, "op": "get", "key": "step" }),
+            json!({ "party": lonely_hb, "op": "list" }),
+        ] {
+            let (status, empty) = api.post("/v1/store", &read).await;
+            assert_eq!(status, StatusCode::OK, "{read}: {empty}");
+            assert_eq!(
+                empty,
+                json!({ "client": null, "revision": 0, "entries": [] }),
+                "{read}"
+            );
+        }
+        for write in [
+            json!({ "party": lonely_hb, "op": "put", "key": "step", "value": "5" }),
+            json!({ "party": lonely_hb, "op": "delete", "key": "step" }),
+        ] {
+            let (status, body) = api.post("/v1/store", &write).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{write}: {body}");
+            assert!(
+                body["error"].as_str().unwrap_or("").contains("not claimed"),
+                "{write}: {body}"
+            );
+        }
 
         // Malformed bodies are the caller's fault.
         for bad in [
