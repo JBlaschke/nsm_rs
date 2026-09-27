@@ -226,9 +226,10 @@ Two limits only matter at a broker: `max_registrations` and
 when a full store's reply (the budget plus 1024 bytes) would not fit its own
 `--max-frame-bytes`, so a broker needs a frame limit of at least 1280 bytes
 (17408 with the default budget). Parties use the default 64 KiB frame, which every
-allowed budget fits; parties started by `nsm serve` inherit its
-`--max-frame-bytes`, so lowering it below a store's reply size breaks large
-replies at those parties. There is at most one store per client, and every
+allowed budget fits. `nsm serve` uses its `--max-frame-bytes` for the parties
+it starts and for every reply it reads itself, so lowering it below a store's
+reply size breaks large replies there: at those parties, and as a 400 from
+`POST /v1/store`. There is at most one store per client, and every
 client holds a distinct service, so at most `max_registrations / 2` stores
 exist: about 80 MiB of accounted store bytes with the defaults, and at most
 64 stores for the parties of one host under the default per-host cap.

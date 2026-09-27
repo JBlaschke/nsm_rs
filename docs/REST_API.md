@@ -196,9 +196,12 @@ A service nobody holds reads an empty store (`{"client":null,"revision":0,"entri
 and its put and delete are a 400 `service <id> is not claimed`. Other 400s:
 an invalid or missing `key`, an unknown `op`, a put without `value`, a party
 that has not registered yet, a put that does not fit the store's budget
-(`store full: ...`), and a party whose registration is gone. An unreachable
-party is a 502. The store is readable and writable by anyone who can reach a
-party's heartbeat address; it is not a place for secrets.
+(`store full: ...`), a party whose registration is gone, and a reply larger
+than the server's own `--max-frame-bytes`. An unreachable party is a 502; for
+a put or a delete that means the outcome is unknown, not that nothing
+changed (the broker may have applied the write before the reply was lost),
+so read the key to find out. The store is readable and writable by anyone
+who can reach a party's heartbeat address; it is not a place for secrets.
 
 ## Job view
 

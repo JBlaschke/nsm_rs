@@ -179,8 +179,11 @@ broker and the parties print the address they actually bound on stderr.
 (a message prefixed `nsm: ` goes to stderr); 2 for a command-line error; 3 when
 the party answered but has nothing to report yet (`collect` before the first
 text, `peer` before the pairing, `store get` of a key that is not set), so a
-polling script can tell "not yet" from "failed". Asking a service for its peer
-fails with a message naming the party's role. Stdout carries only a command's
+polling script can tell "not yet" from "failed". Exit 1 from a `send`, a
+`store put` or a `store delete` means the outcome is unknown, not that nothing
+changed: the broker may have applied it before the reply was lost (read the
+key to find out). Asking a service for its peer fails with a message naming
+the party's role. Stdout carries only a command's
 result, so it can be captured by scripts; logs and status lines go to stderr.
 A stdout nobody reads any more (a closed pipe) makes the command exit 1, with
 one exception: `nsm claim` exits 1 when its first line (the service address)
