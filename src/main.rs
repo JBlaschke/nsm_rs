@@ -3,7 +3,8 @@
 //! only place that prints to stdout or decides exit codes: 0 when the
 //! operation succeeded, 1 when it failed (`nsm: <error>` on stderr), 2 for a
 //! usage error (clap's own), and [`NOTHING_YET`] when the party answered but
-//! has nothing to report yet. Every line of stdout goes through
+//! has nothing to report yet (`collect` before the first text, `peer` before
+//! the pairing, `store get` of a key that is not set). Every line of stdout goes through
 //! [`print_line`], so a reader that went away (a closed pipe) makes the
 //! command fail with exit 1 instead of a panic.
 
@@ -13,13 +14,14 @@ use std::process::ExitCode;
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
-use nsm::cli::{Cli, Command, LimitsOpts, TimingOpts, TlsOpts};
+use nsm::cli::{Cli, Command, LimitsOpts, StoreCommand, TimingOpts, TlsOpts};
 use nsm::net::Transport;
-use nsm::ops::{self, NetOpts};
+use nsm::ops::{self, NetOpts, StoreOp};
 use nsm::{Error, Result};
 
 /// Exit status when the party was reached but has nothing to report yet:
-/// `collect` before the first text, `peer` before the pairing. Distinct from
+/// `collect` before the first text, `peer` before the pairing, `store get`
+/// of a key that is not set. Distinct from
 /// a failed operation (1) so a polling script can tell "not yet" from
 /// "failed" without parsing stderr.
 const NOTHING_YET: u8 = 3;
@@ -270,6 +272,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
             .await?;
             eprintln!("nsm: delivered");
         }
+        Command::Store { op } => return store(op).await,
         Command::Serve {
             bind,
             token,
@@ -294,6 +297,44 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `nsm store`: one operation through a party, printed per operation. With
+/// `--json` stdout carries the broker's reply as one line instead (the body
+/// `POST /v1/store` returns); stderr and the exit status stay the same.
+async fn store(command: StoreCommand) -> Result<ExitCode> {
+    let (party, op, tls, timing, json) = command.into_parts();
+    let net = net_opts(&tls, &timing, &LimitsOpts::default());
+    let stored = ops::store(&party, op.clone(), &net).await?;
+    let mut lines = Vec::new();
+    let mut code = ExitCode::SUCCESS;
+    match &op {
+        StoreOp::Get { key } => match stored.get(key) {
+            Some(entry) => lines.push(entry.value.clone()),
+            None => {
+                eprintln!("nsm: {key} is not set");
+                code = ExitCode::from(NOTHING_YET);
+            }
+        },
+        StoreOp::Put { key, .. } => {
+            let entry = stored.get(key).ok_or_else(|| {
+                Error::protocol(format!("the reply to a put carries no entry for {key}"))
+            })?;
+            lines.push(entry.version.to_string());
+        }
+        StoreOp::Delete { key } => match stored.get(key) {
+            Some(_) => eprintln!("nsm: deleted {key}"),
+            None => eprintln!("nsm: {key} was not set"),
+        },
+        StoreOp::List => lines.extend(stored.keys().map(ToString::to_string)),
+    }
+    if json {
+        lines = vec![serde_json::to_string(&stored)?];
+    }
+    for line in lines {
+        print_line(line)?;
+    }
+    Ok(code)
 }
 
 /// Run a party session until Ctrl-C or until the broker is lost.

@@ -4,6 +4,9 @@
 //! request types of the REST control plane, so the CLI and the API share one
 //! definition and one set of validation rules.
 //!
+//! `store` is a group of four subcommands ([`StoreCommand`]), one per
+//! operation on the store a client shares with its service.
+//!
 //! The transport is taken from the peer address: `host:port` is raw TCP,
 //! `http://host:port` and `https://host:port` are HTTP. `listen` and `serve`
 //! have no peer address and take `--transport` instead.
@@ -16,6 +19,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, Selector, Transport};
+use crate::protocol::{StoreKey, StoreOp};
 
 /// NERSC Service Mesh: publish, claim and broker services across HPC systems.
 #[derive(Debug, Parser)]
@@ -388,6 +392,14 @@ pub enum Command {
         timing: TimingOpts,
     },
 
+    /// Read and write the store a client shares with its service, through
+    /// either party.
+    Store {
+        /// The operation.
+        #[command(subcommand)]
+        op: StoreCommand,
+    },
+
     /// Run the REST control plane that exposes the operations above over HTTP.
     Serve {
         /// Address to bind. Loopback by default; binding anything else
@@ -408,6 +420,124 @@ pub enum Command {
         #[command(flatten)]
         limits: LimitsOpts,
     },
+}
+
+/// The operations of `nsm store`. `PARTY` is either party's heartbeat
+/// address: the client's or its service's, which share one store; `KEY` is a
+/// store key, unrelated to the rendezvous `--key`.
+#[derive(Debug, Subcommand)]
+pub enum StoreCommand {
+    /// Print the value stored under a key (exit 3 when the key is not set).
+    Get {
+        /// Either party's heartbeat address.
+        party: Addr,
+        /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
+        /// starting with -.
+        key: StoreKey,
+        /// Print the broker's reply as one line of JSON instead.
+        #[arg(long)]
+        json: bool,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+
+    /// Store a value under a key, replacing what was there, and print the
+    /// write's version.
+    Put {
+        /// Either party's heartbeat address.
+        party: Addr,
+        /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
+        /// starting with -.
+        key: StoreKey,
+        /// The value: any text, including empty text.
+        #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+        value: String,
+        /// Print the broker's reply as one line of JSON instead.
+        #[arg(long)]
+        json: bool,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+
+    /// Remove a key; succeeds whether or not it was set.
+    Delete {
+        /// Either party's heartbeat address.
+        party: Addr,
+        /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
+        /// starting with -.
+        key: StoreKey,
+        /// Print the broker's reply as one line of JSON.
+        #[arg(long)]
+        json: bool,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+
+    /// Print every key in the store, one per line.
+    List {
+        /// Either party's heartbeat address.
+        party: Addr,
+        /// Print the broker's reply, with every value, as one line of JSON
+        /// instead.
+        #[arg(long)]
+        json: bool,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+}
+
+impl StoreCommand {
+    /// The request as the operations layer takes it: the party to ask, the
+    /// operation, the TLS and timing options, and whether to print the reply
+    /// as JSON.
+    pub fn into_parts(self) -> (Addr, StoreOp, TlsOpts, TimingOpts, bool) {
+        match self {
+            StoreCommand::Get {
+                party,
+                key,
+                json,
+                tls,
+                timing,
+            } => (party, StoreOp::Get { key }, tls, timing, json),
+            StoreCommand::Put {
+                party,
+                key,
+                value,
+                json,
+                tls,
+                timing,
+            } => (party, StoreOp::Put { key, value }, tls, timing, json),
+            StoreCommand::Delete {
+                party,
+                key,
+                json,
+                tls,
+                timing,
+            } => (party, StoreOp::Delete { key }, tls, timing, json),
+            StoreCommand::List {
+                party,
+                json,
+                tls,
+                timing,
+            } => (party, StoreOp::List, tls, timing, json),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -478,6 +608,111 @@ mod tests {
         }
         let err = Cli::try_parse_from(["nsm", "peer"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    fn store(args: &[&str]) -> (Addr, StoreOp, TlsOpts, TimingOpts, bool) {
+        match parse(&[&["store"], args].concat()).command {
+            Command::Store { op } => op.into_parts(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn store_key(text: &str) -> StoreKey {
+        text.parse().unwrap_or_else(|e| panic!("{text:?}: {e}"))
+    }
+
+    #[test]
+    fn store_subcommands_become_store_ops() {
+        let (party, op, tls, timing, json) = store(&["get", "10.0.0.9:41232", "input/path"]);
+        assert_eq!(party.to_string(), "10.0.0.9:41232");
+        assert_eq!(
+            op,
+            StoreOp::Get {
+                key: store_key("input/path")
+            }
+        );
+        assert!(!tls.tls && !json);
+        assert_eq!(timing.timing(), Timing::default());
+
+        let (party, op, _, timing, json) = store(&[
+            "put",
+            "http://10.0.0.7:41231",
+            "step",
+            "--value",
+            "5",
+            "--json",
+            "--request-timeout",
+            "2",
+        ]);
+        assert_eq!(party.to_string(), "http://10.0.0.7:41231");
+        assert_eq!(
+            op,
+            StoreOp::Put {
+                key: store_key("step"),
+                value: "5".into()
+            }
+        );
+        assert!(json);
+        assert_eq!(timing.timing().request_timeout, Duration::from_secs(2));
+
+        let (_, op, _, _, json) = store(&["delete", "c:1", "step", "--json"]);
+        assert_eq!(
+            op,
+            StoreOp::Delete {
+                key: store_key("step")
+            }
+        );
+        assert!(json);
+
+        let (_, op, tls, _, json) = store(&["list", "c:1", "--root-ca", "/ca.pem"]);
+        assert_eq!(op, StoreOp::List);
+        assert!(!json);
+        assert_eq!(
+            tls.root_ca.as_deref(),
+            Some(std::path::Path::new("/ca.pem"))
+        );
+    }
+
+    #[test]
+    fn store_put_takes_any_value_including_hyphens_and_empty_text() {
+        for value in ["-5", "--json", "", "two words", "line\nbreak"] {
+            let (_, op, _, _, json) = store(&["put", "c:1", "step", "--value", value]);
+            assert_eq!(
+                op,
+                StoreOp::Put {
+                    key: store_key("step"),
+                    value: value.into()
+                },
+                "{value:?}"
+            );
+            assert!(!json, "{value:?} is the value, not a flag");
+        }
+        let err = Cli::try_parse_from(["nsm", "store", "put", "c:1", "step"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert!(err.to_string().contains("--value"), "{err}");
+    }
+
+    #[test]
+    fn an_invalid_store_key_is_a_usage_error() {
+        for bad in ["", "two words", "-x", "a*b", "ü"] {
+            let err = Cli::try_parse_from(["nsm", "store", "get", "c:1", bad]).unwrap_err();
+            assert!(
+                matches!(
+                    err.kind(),
+                    clap::error::ErrorKind::ValueValidation
+                        | clap::error::ErrorKind::UnknownArgument
+                ),
+                "{bad:?}: {err}"
+            );
+            assert_eq!(err.exit_code(), 2, "{bad:?}");
+        }
+        let err = Cli::try_parse_from(["nsm", "store", "get", "c:1", "a*b"]).unwrap_err();
+        assert!(err.to_string().contains("a store key is"), "{err}");
+        for missing in [&["store", "get", "c:1"][..], &["store", "list"], &["store"]] {
+            let err = Cli::try_parse_from(std::iter::once("nsm").chain(missing.iter().copied()))
+                .unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{missing:?}");
+        }
     }
 
     #[test]
