@@ -135,8 +135,8 @@ impl Store {
     /// get, the entry or nothing; for a put, the entry as written; for a
     /// delete, the removed entry or nothing; for a list, every entry in
     /// ascending key order; for a put or a delete whose `if_version` does
-    /// not hold (see [`Store::holds`]), the key's current entry or nothing,
-    /// with `applied` false and nothing changed.
+    /// not hold (see [conditions](self#conditions)), the key's current entry
+    /// or nothing, with `applied` false and nothing changed.
     ///
     /// `max_bytes` is the budget a put must fit; `next_version` hands out
     /// the number of the next write and is called at most once, only for a
@@ -180,7 +180,7 @@ impl Store {
     /// True when a write to `key` with this `if_version` may go ahead:
     /// always for `None`, when the key is not set for `Some(0)`, and when
     /// the key's current version is `n` for `Some(n)`.
-    pub fn holds(&self, key: &StoreKey, if_version: Option<u64>) -> bool {
+    fn holds(&self, key: &StoreKey, if_version: Option<u64>) -> bool {
         match if_version {
             None => true,
             Some(expected) => {
