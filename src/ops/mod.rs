@@ -18,6 +18,8 @@ use crate::protocol::{Key, Message, Role, ServiceHandle};
 use crate::transport::Client;
 use crate::{Error, Result};
 
+pub use crate::protocol::{StoreEntry, StoreKey, StoreOp, Stored};
+
 /// Names of the interfaces carrying an address of the given family (any
 /// family when `None`).
 pub fn list_interfaces(version: Option<IpVersion>) -> Result<Vec<String>> {
@@ -249,6 +251,26 @@ pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
     }
 }
 
+/// Apply `op` to the store a party shares with its peer, through the party
+/// at `party` (its heartbeat address, of either role), which relays it to the
+/// broker with its token.
+///
+/// The answer names the claim's client and carries what the operation
+/// returns; a key that is not set is an answer with no entry, not an error.
+/// A refusal (the party is not registered yet, a service nobody holds tried
+/// to write, the store is full, the party's registration is gone) is an
+/// [`Error::Rejected`] with the reason.
+pub async fn store(party: &Addr, op: StoreOp, net: &NetOpts) -> Result<Stored> {
+    match net.client().call(party, Message::Store { op }).await? {
+        Message::Stored(stored) => Ok(stored),
+        Message::Nack { reason } => Err(Error::Rejected(reason)),
+        other => Err(Error::protocol(format!(
+            "store answered with {}",
+            other.kind()
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +345,36 @@ mod tests {
             Err(Error::WrongRole { role, .. }) => assert_eq!(role, Role::Service),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn store_maps_a_nack_to_rejected_and_other_replies_to_protocol_errors() {
+        use crate::transport::testing::{Echo, PeerReporter, start};
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let net = NetOpts {
+                timing: Timing::fast(),
+                ..NetOpts::default()
+            };
+            // A listener that answers every request with a nack.
+            let (server, _, _) = start(Transport::Tcp, PeerReporter).await;
+            let err = store(&server.bound(), StoreOp::List, &net)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, Error::Rejected(_)), "{err}");
+            server.shutdown().await;
+            // A listener that echoes the request: `store` is not an answer.
+            let (server, _, _) = start(Transport::Tcp, Echo).await;
+            let err = store(&server.bound(), StoreOp::List, &net)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Protocol(text) if text == "store answered with store"),
+                "{err}"
+            );
+            server.shutdown().await;
+        })
+        .await
+        .expect("the test finished in time");
     }
 
     #[test]
