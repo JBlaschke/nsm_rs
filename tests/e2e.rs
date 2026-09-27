@@ -856,6 +856,148 @@ async fn concurrent_writes_from_both_sides_are_serialised() {
     .await;
 }
 
+/// A put that applies only if `key` is at `if_version` (0: not set).
+fn put_if(key: &str, value: &str, if_version: u64) -> StoreOp {
+    StoreOp::Put {
+        key: store_key(key),
+        value: value.into(),
+        if_version: Some(if_version),
+    }
+}
+
+/// Add one to the counter under `key` through the party at `addr`, the way a
+/// job script would: read the value and its version, write the value plus
+/// one if the version is still the same, and start over when it is not.
+/// Returns how many attempts missed.
+async fn increment(addr: &nsm::net::Addr, key: &str, net: &ops::NetOpts, who: &str) -> usize {
+    for missed in 0..1000 {
+        let read = ops::store(addr, get(key), net)
+            .await
+            .unwrap_or_else(|e| panic!("{who}: get: {e}"));
+        let (count, version) = match value_of(&read, key) {
+            Some((value, version)) => {
+                let count: u64 = value
+                    .parse()
+                    .unwrap_or_else(|e| panic!("{who}: {value:?}: {e}"));
+                (count, version)
+            }
+            None => (0, 0),
+        };
+        let next = (count + 1).to_string();
+        let written = ops::store(addr, put_if(key, &next, version), net)
+            .await
+            .unwrap_or_else(|e| panic!("{who}: put: {e}"));
+        if written.applied {
+            assert_eq!(
+                value_of(&written, key).map(|(value, _)| value),
+                Some(next),
+                "{who}"
+            );
+            return missed;
+        }
+        // Missed: nothing changed, and the reply says where the key is now,
+        // which is never where this attempt expected it.
+        assert_ne!(
+            value_of(&written, key).map_or(0, |(_, v)| v),
+            version,
+            "{who}: a missed condition names another version"
+        );
+    }
+    panic!("{who}: 1000 attempts in a row missed")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compare_and_set_increments_from_both_sides_lose_no_update() {
+    const PER_SIDE: usize = 20;
+    for t in [Transport::Tcp, Transport::Http] {
+        with_deadline(async {
+            let c = Cluster::start(t).await;
+            let service = c.publish(4, 9000).await;
+            let client = c.claim(4).await;
+            let mut sides = Vec::new();
+            for (side, party) in [("client", &client), ("service", &service)] {
+                let addr = party.bound();
+                let net = c.net().clone();
+                sides.push(tokio::spawn(async move {
+                    let mut missed = 0;
+                    for i in 0..PER_SIDE {
+                        let who = format!("{t:?} {side} increment {i}");
+                        missed += increment(&addr, "counter", &net, &who).await;
+                    }
+                    missed
+                }));
+            }
+            let mut missed = 0;
+            for side in sides {
+                missed += side.await.unwrap();
+            }
+            let read = store(&c, &client, get("counter")).await;
+            let (value, _) = value_of(&read, "counter").expect("the counter is set");
+            assert_eq!(
+                value,
+                (2 * PER_SIDE).to_string(),
+                "{t:?}: every increment counted ({missed} attempts missed and were retried)"
+            );
+            c.stop().await;
+        })
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_create_only_puts_have_exactly_one_winner() {
+    const ROUNDS: usize = 10;
+    const PER_SIDE: usize = 3;
+    with_deadline(async {
+        let c = Cluster::start(Transport::Tcp).await;
+        let service = c.publish(4, 9000).await;
+        let client = c.claim(4).await;
+        for round in 0..ROUNDS {
+            let key = format!("task-{round}");
+            let mut claims = Vec::new();
+            for i in 0..PER_SIDE {
+                for (side, party) in [("client", &client), ("service", &service)] {
+                    let addr = party.bound();
+                    let net = c.net().clone();
+                    let (key, value) = (key.clone(), format!("{side}-{i}"));
+                    claims.push(tokio::spawn(async move {
+                        let reply = ops::store(&addr, put_if(&key, &value, 0), &net).await;
+                        (value, reply)
+                    }));
+                }
+            }
+            let mut winners = Vec::new();
+            let mut losers = Vec::new();
+            for claim in claims {
+                let (value, reply) = claim.await.unwrap();
+                let reply = reply.unwrap_or_else(|e| panic!("round {round}: {value}: {e}"));
+                if reply.applied {
+                    winners.push((value, reply));
+                } else {
+                    losers.push((value, reply));
+                }
+            }
+            assert_eq!(winners.len(), 1, "round {round}: exactly one create wins");
+            let (won, winning) = &winners[0];
+            let entry = value_of(winning, &key).expect("the entry as written");
+            assert_eq!(&entry.0, won, "round {round}");
+            // Every loser was told who won, and nothing it sent was written.
+            assert_eq!(losers.len(), 2 * PER_SIDE - 1, "round {round}");
+            for (value, reply) in &losers {
+                assert_eq!(
+                    value_of(reply, &key).as_ref(),
+                    Some(&entry),
+                    "round {round}: {value} sees the winner's entry"
+                );
+            }
+            let read = store(&c, &service, get(&key)).await;
+            assert_eq!(value_of(&read, &key), Some(entry), "round {round}");
+        }
+        c.stop().await;
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_full_store_refuses_a_write_and_keeps_its_contents() {
     for &t in TRANSPORTS {
