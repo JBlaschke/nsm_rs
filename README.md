@@ -238,11 +238,19 @@ input=$(nsm store get "$SERVICE_HB" input/path)
 ```
 
 ```bash
-# A checkpoint that survives a service failover. The service records its
-# progress after every step:
-nsm store put "$SERVICE_HB" checkpoint --value "$step" > /dev/null
-# The spare service the broker re-pairs the client with resumes from it,
-# because the store belongs to the claim, not to the service:
+# A checkpoint that survives a service failover: the store belongs to the
+# claim, not to the service, so the spare the broker re-pairs the client
+# with reads what the dead service wrote. A service is not claimed until the
+# broker pairs a client with it, and until then its store reads as empty
+# ("client" is null), so the service first waits to be claimed:
+while :; do
+  reply=$(nsm store list "$SERVICE_HB" --json) || exit 1
+  case $reply in
+    *'"client":null'*) sleep 2 ;;
+    *) break ;;
+  esac
+done
+# Then it resumes from the checkpoint, or starts at step 0 if there is none:
 if step=$(nsm store get "$SERVICE_HB" checkpoint); then
   echo "resuming after step $step"
 elif [ $? -eq 3 ]; then
@@ -250,12 +258,13 @@ elif [ $? -eq 3 ]; then
 else
   exit 1
 fi
+# And it records its progress after every step:
+nsm store put "$SERVICE_HB" checkpoint --value "$step" > /dev/null
 ```
 
-A spare service is not claimed until the broker re-pairs the client with it,
-and until then its store reads as empty; `nsm store list "$SERVICE_HB" --json`
-shows `"client":null` while nobody holds it, so a spare should wait for that
-to change (or for a text from the client) before it trusts an empty store.
+The wait is what makes the recipe work: without it, a spare reads its store
+before the broker has re-paired the client with it, gets exit 3 and starts
+again from step 0.
 
 ### Address selection
 
