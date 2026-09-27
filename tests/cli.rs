@@ -247,6 +247,7 @@ fn version_and_help_for_every_command() {
         "collect",
         "peer",
         "send",
+        "store",
         "serve",
     ] {
         assert!(out.stdout.contains(cmd), "top-level help lacks {cmd}");
@@ -258,6 +259,30 @@ fn version_and_help_for_every_command() {
             sub.stdout
         );
     }
+    let store = run(["store", "--help"]).stdout;
+    for op in ["get", "put", "delete", "list"] {
+        assert!(store.contains(op), "store --help lacks {op}");
+        let sub = run(["store", op, "--help"]);
+        assert_eq!(sub.code, 0, "store {op} --help");
+        for text in [
+            "Usage:",
+            "<PARTY>",
+            "--json",
+            "--root-ca",
+            "--request-timeout",
+        ] {
+            assert!(
+                sub.stdout.contains(text),
+                "store {op} --help lacks {text}: {}",
+                sub.stdout
+            );
+        }
+        assert!(
+            !sub.stdout.contains("--ip-start"),
+            "store {op} takes no interface options"
+        );
+    }
+    assert!(run(["store", "put", "--help"]).stdout.contains("--value"));
 
     let listen = run(["listen", "--help"]).stdout;
     for flag in [
@@ -326,6 +351,18 @@ fn usage_errors_exit_2_and_explain() {
             "not in",
         ),
         (&["list-ips", "--ip-version", "5"], "5"),
+        (
+            &["store", "get", "127.0.0.1:1", "two words"],
+            "a store key is",
+        ),
+        (
+            &["store", "put", "127.0.0.1:1", "a*b", "--value", "1"],
+            "a store key is",
+        ),
+        (&["store", "delete", "127.0.0.1:1", "-x"], "-x"),
+        (&["store", "put", "127.0.0.1:1", "step"], "--value"),
+        (&["store", "list"], "<PARTY>"),
+        (&["store", "frobnicate"], "unrecognized subcommand"),
         (&["serve", "--bind", "not-an-address"], "not-an-address"),
     ];
     for (args, needle) in cases {
@@ -404,6 +441,8 @@ fn runtime_failures_exit_1_with_a_prefixed_message() {
         argv(&[&["collect", &dead], FAST]),
         argv(&[&["peer", &dead], FAST]),
         argv(&[&["send", &dead, "--msg", "x"], FAST]),
+        argv(&[&["store", "get", &dead, "step"], FAST]),
+        argv(&[&["store", "put", &dead, "step", "--value", "5"], FAST]),
         argv(&[&["collect", &format!("http://{dead}")], FAST]),
     ] {
         let out = run(&args);
@@ -451,7 +490,7 @@ fn runtime_failures_exit_1_with_a_prefixed_message() {
 }
 
 /// Broker, service and client as separate processes: pairing, send/collect,
-/// refusals, and what happens when the broker goes away.
+/// the shared store, refusals, and what happens when the broker goes away.
 fn full_session(transport: &str) {
     let mut broker = Proc::spawn(
         "listen",
@@ -489,6 +528,23 @@ fn full_session(transport: &str) {
     );
     let service_hb = heartbeat_addr(&service.stderr_line_containing("service registered as "));
     assert!(service_hb.starts_with(prefix), "{service_hb}");
+
+    // Nobody holds the service yet: its store reads as empty ("not yet",
+    // exit 3) and refuses writes (exit 1), so a service that starts first
+    // can poll for its input.
+    let out = run(argv(&[&["store", "get", &service_hb, "input"], FAST]));
+    assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: input is not set\n");
+    let out = run(argv(&[
+        &["store", "put", &service_hb, "input", "--value", "x"],
+        FAST,
+    ]));
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(
+        out.stderr.starts_with("nsm: ") && out.stderr.contains("not claimed"),
+        "{}",
+        out.stderr
+    );
 
     let mut client = Proc::spawn(
         "claim",
@@ -571,6 +627,8 @@ fn full_session(transport: &str) {
         thread::sleep(Duration::from_millis(50));
     }
 
+    store_session(&client_hb, &service_hb);
+
     // Refusals: an unknown key, and a key whose only service is taken.
     for key in ["999", "1234"] {
         let out = run(argv(&[
@@ -605,6 +663,91 @@ fn full_session(transport: &str) {
             party.seen_stderr
         );
     }
+}
+
+/// `nsm store` between a client and the service it holds: what each
+/// subcommand prints on stdout and stderr, and its exit status.
+fn store_session(client_hb: &str, service_hb: &str) {
+    let store = |args: &[&str]| run(argv(&[&["store"], args, FAST]));
+
+    // A put prints the write's version and nothing else.
+    let out = store(&["put", client_hb, "step", "--value", "5"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    let first: u64 = out
+        .stdout
+        .strip_suffix('\n')
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("put printed {:?}", out.stdout));
+    assert!(first > 0);
+
+    // The service reads it at once: the store is the broker's, not a copy.
+    let out = store(&["get", service_hb, "step"]);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "5\n"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+
+    // Values are verbatim: spaces and a leading hyphen round-trip.
+    for (key, value) in [("input/path", "/scratch/run 17/in.h5"), ("offset", "-5")] {
+        let out = store(&["put", service_hb, key, "--value", value]);
+        assert_eq!(out.code, 0, "{key}: {}", out.stderr);
+        let version: u64 = out.stdout.trim().parse().expect("a version");
+        assert!(version > first, "{key}: versions only grow");
+        let out = store(&["get", client_hb, key]);
+        assert_eq!(out.code, 0, "{key}: {}", out.stderr);
+        assert_eq!(out.stdout, format!("{value}\n"), "{key}");
+    }
+
+    // Either party lists the same keys, sorted, one per line.
+    for party in [client_hb, service_hb] {
+        let out = store(&["list", party]);
+        assert_eq!(out.code, 0, "{}", out.stderr);
+        assert_eq!(out.stdout, "input/path\noffset\nstep\n", "{party}");
+        assert!(out.stderr.is_empty(), "{}", out.stderr);
+    }
+
+    // An unset key is "not yet": exit 3, nothing on stdout.
+    let out = store(&["get", service_hb, "missing"]);
+    assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: missing is not set\n");
+
+    // --json is one line, the reply as the control plane returns it; the
+    // exit status stays what it is without it.
+    let out = store(&["get", client_hb, "step", "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert!(reply["client"].is_u64(), "{reply}");
+    assert!(reply["revision"].as_u64() > Some(first), "{reply}");
+    assert_eq!(reply["entries"][0]["key"], "step", "{reply}");
+    assert_eq!(reply["entries"][0]["value"], "5", "{reply}");
+    assert_eq!(reply["entries"][0]["version"], first, "{reply}");
+    let out = store(&["get", client_hb, "missing", "--json"]);
+    assert_eq!(out.code, 3, "{}", out.stderr);
+    let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(reply["entries"], serde_json::json!([]), "{reply}");
+    let out = store(&["list", service_hb, "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(
+        reply["entries"].as_array().map(Vec::len),
+        Some(3),
+        "{reply}"
+    );
+
+    // A delete prints nothing on stdout and succeeds either way.
+    let out = store(&["delete", service_hb, "step"]);
+    assert_eq!((out.code, out.stdout.as_str()), (0, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: deleted step\n");
+    let out = store(&["delete", client_hb, "step"]);
+    assert_eq!((out.code, out.stdout.as_str()), (0, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: step was not set\n");
+    let out = store(&["get", client_hb, "step"]);
+    assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
 }
 
 #[test]
