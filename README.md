@@ -61,6 +61,7 @@ cargo build --release --target x86_64-unknown-linux-musl --no-default-features -
         client ◄─────────────── "here is service K: host:9000" (claim reply)
         client ◄── send TEXT ── operator     text is relayed via the broker and
         service ◄── TEXT on the next heartbeat;   `collect` reads it back
+        (and the other way round: send to the service, collect at the client)
 ```
 
 - The **broker** (`nsm listen`) is the only party with a fixed, well-known
@@ -80,10 +81,11 @@ cargo build --release --target x86_64-unknown-linux-musl --no-default-features -
 - If a service disappears, its client is re-paired with another service that
   published under the same key, and learns the new address on its next
   heartbeat; if there is none, the client is removed and its process exits.
-- `nsm send` hands a short text to a client; the client relays it through the
-  broker and the paired service receives it on its next heartbeat. `nsm
-  collect` reads the last text a service received; `nsm peer` reads the
-  service a client is paired with.
+- `nsm send` hands a short text to either party; the party relays it through
+  the broker and its peer (a client's service, or the client holding a
+  service) receives it on its next heartbeat. `nsm collect` reads the last
+  text a party received; `nsm peer` reads the service a client is paired
+  with.
 - Every registration reply carries a **registration token** (128 random bits)
   known only to the broker and that party. Pings, relayed messages and the
   broker's heartbeats must present it, so a peer that knows an id or the
@@ -116,6 +118,8 @@ nsm claim 127.0.0.1:12000 --bind-port 12020 --key 1234 -i 127. --ip-version 4
 nsm send 127.0.0.1:12020 --msg "job 17"
 nsm collect 127.0.0.1:12010        # prints: job 17     (after the next heartbeat)
 nsm peer 127.0.0.1:12020           # prints: 127.0.0.1:9000
+nsm send 127.0.0.1:12010 --msg "ready"
+nsm collect 127.0.0.1:12020        # prints: ready      (after the next heartbeat)
 ```
 
 `publish` and `claim` keep running: they are the party. Stop them with Ctrl-C
@@ -137,9 +141,9 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm listen --bind-port PORT [--transport tcp\|tls\|http\|https] [options]` | run the broker | nothing |
 | `nsm publish BROKER --bind-port PORT --service-port PORT --key KEY [--ping] [options]` | register a service and keep it registered | nothing |
 | `nsm claim BROKER --bind-port PORT --key KEY [--ping] [options]` | pair with a service and stay paired | the service's `host:port`, one line per pairing |
-| `nsm collect PARTY [options]` | the last text a service received | the text |
+| `nsm collect PARTY [options]` | the last text a party received from its peer | the text |
 | `nsm peer PARTY [options]` | the service a client is paired with | the service's `host:port` |
-| `nsm send PARTY --msg TEXT [options]` | hand text to a client for delivery to its service | nothing |
+| `nsm send PARTY --msg TEXT [options]` | hand text to a party for delivery to its peer | nothing |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
 
 `nsm <command> --help` lists every option with its default. The snake_case
@@ -159,9 +163,9 @@ broker and the parties print the address they actually bound on stderr.
 (a message prefixed `nsm: ` goes to stderr); 2 for a command-line error; 3 when
 the party answered but has nothing to report yet (`collect` before the first
 text, `peer` before the pairing), so a polling script can tell "not yet" from
-"failed". Asking a service for its peer, or a client for text, fails with a
-message naming the party's role. Stdout carries only a command's result, so it
-can be captured by scripts; logs and status lines go to stderr.
+"failed". Asking a service for its peer fails with a message naming the
+party's role. Stdout carries only a command's result, so it can be captured by
+scripts; logs and status lines go to stderr.
 
 ### Address selection
 

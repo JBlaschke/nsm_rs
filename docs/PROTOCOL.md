@@ -1,10 +1,11 @@
 # Wire protocol
 
-Protocol version **2** (`nsm::protocol::PROTOCOL_VERSION`). Everything below is
+Protocol version **3** (`nsm::protocol::PROTOCOL_VERSION`). Everything below is
 implemented in `src/protocol/` and `src/transport/`; the rustdoc of
 `nsm::protocol::Message` is the authoritative field-by-field reference.
-Version 2 added the answering party's `role` to `collected`; version 1 was the
-first versioned format.
+Version 3 let text flow both ways (`deliver` names no target); version 2 added
+the answering party's `role` to `collected`; version 1 was the first versioned
+format.
 
 ## 1. Transports and framing
 
@@ -60,8 +61,8 @@ as `null` when absent and may be omitted when decoding.
 | `publish` | service → broker | `registered` or `nack` |
 | `claim` | client → broker | `paired` or `nack` |
 | `ping` | ping-mode party → broker | `heartbeat` or `nack` |
-| `send` | operator → client | `delivered` or `nack` |
-| `deliver` | client → broker (relay of a `send`) | `delivered` or `nack` |
+| `send` | operator → party | `delivered` or `nack` |
+| `deliver` | party → broker (relay of a `send`) | `delivered` or `nack` |
 | `heartbeat` | broker → party (two-sided liveness) | `heartbeat_ack` or `nack` |
 | `collect` | operator → party | `collected` |
 
@@ -116,7 +117,7 @@ party. A party that receives a `nack` treats its registration as lost.
 ### `heartbeat` → `heartbeat_ack`
 
 Two-sided liveness. The broker dials the party's `bind_addr` every heartbeat
-interval. `inbox` is text pending for a service; `service` is a client's new
+interval. `inbox` is text pending for the party; `service` is a client's new
 pairing after a re-pairing. Each pending item is delivered once; if the
 heartbeat fails, the item is restored and carried by the next one.
 
@@ -133,37 +134,41 @@ treats any acknowledgement as proof of life and only logs an id mismatch.
 
 ### `send` → `delivered`, `deliver` → `delivered`
 
-`send` is what the `nsm send` operation sends to a **client's** bind address;
-the client relays it to the broker as `deliver`, naming itself, its token and
-its paired service, and passes the broker's answer back.
+`send` is what the `nsm send` operation sends to a party's bind address, of
+either kind; the party relays it to the broker as `deliver`, naming itself and
+its token, and passes the broker's answer back.
 
 ```json
 {"type":"send","text":"job 17"}
-{"type":"deliver","from":2,"token":"9e8d7c6b5a4f30211f2e3d4c5b6a7980","to":1,"text":"job 17"}
+{"type":"deliver","from":2,"token":"9e8d7c6b5a4f30211f2e3d4c5b6a7980","text":"job 17"}
 {"type":"delivered"}
 ```
 
-The broker accepts a `deliver` only from a registered client presenting its
-token and only for the service that client is currently paired with
-(`client is not paired with that service` otherwise). It parks the text as the
-service's pending inbox; a later `deliver` before the hand-over replaces it.
-A `send` to a service, or to a client that is not paired or not yet
-registered, is refused.
+`deliver` names no target: the broker delivers to the sender's peer as it
+knows it, a client's current service or the client holding a service, so a
+text that races a re-pairing reaches the new service instead of being
+refused. The broker accepts a `deliver` only from a registered party
+presenting its token, and only while that party has a peer: `service <id> is
+not claimed` for a service nobody holds, `client <id> has no service` for a
+client whose service died and that has not been re-paired yet. It parks the
+text as the peer's pending inbox; a later `deliver` before the hand-over
+replaces it. A `send` to a party that has not registered yet is refused by
+the party itself.
 
 ### `collect` → `collected`
 
 ```json
 {"type":"collect"}
 {"type":"collected","role":"service","text":"job 17","service":null}
-{"type":"collected","role":"client","text":null,"service":{"id":1,"host":"10.0.0.5","service_port":9000}}
+{"type":"collected","role":"client","text":"ready","service":{"id":1,"host":"10.0.0.5","service_port":9000}}
 ```
 
-The reply names the party's `role`, and the role says which field applies. A
-service answers with the last text it received (`text`, `null` if none yet)
-and leaves `service` empty; a client answers with the handle of the service
-it is paired with (`service`, `null` only in the moment between binding its
-listener and registering) and leaves `text` empty. The asker never has to
-guess from which field is set.
+The reply names the party's `role`, and the role says which fields apply.
+Both kinds answer with the last text they received (`text`, `null` if none
+yet); a client also answers with the handle of the service it is paired with
+(`service`, `null` only in the moment between binding its listener and
+registering), which a service leaves empty. The asker never has to guess from
+which field is set.
 
 ### `nack`
 
@@ -196,13 +201,18 @@ service                    broker                    client
 ```text
 operator            client (2)              broker              service (1)
    │── send("x") ─────►│                       │                    │
-   │                   │── deliver(2,T2,1,"x")►│ inbox[1] = "x"     │
+   │                   │── deliver(2,T2,"x") ─►│ inbox[1] = "x"     │
    │                   │◄── delivered ─────────│                    │
    │◄── delivered ─────│                       │── heartbeat(T1, ──►│ inbox = "x"
    │                   │                       │      inbox "x")    │
    │────────────────────── collect ─────────────────────────────────►│
    │◄───────────────────── collected(text "x") ─────────────────────│
 ```
+
+The other direction is the same picture mirrored: `send` to the service's
+bind address, `deliver(1,T1,"y")` from the service, `inbox[2] = "y"` at the
+broker, the text carried by the client's next heartbeat, and `collect` at the
+client.
 
 ### Ping mode
 

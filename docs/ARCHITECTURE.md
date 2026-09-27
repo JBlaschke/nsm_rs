@@ -22,7 +22,7 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
    │ Session + PartyHandler         │ ◄── data traffic ── │ Session + PartyHandler         │
    │ listener on the bind port      │   (not NSM's job)   │ listener on the bind port      │
    └─────────────────────▲──────────┘                     └─────────────▲──────────────────┘
-                         │ collect                                      │ send / peer   
+                         │ send / collect                               │ send / collect / peer
                     operator, script, or `nsm serve` (REST control plane) driving `ops`
 ```
 
@@ -30,8 +30,9 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
   clients with services, monitors liveness and relays short texts. It never
   sees the service's own traffic.
 - A **party** is a service or a client. Both run the same small server on
-  their bind address and differ only in role: a service stores the text it is
-  sent, a client stores the service it is paired with and relays `send`.
+  their bind address, keep the last text they were sent and relay `send` to
+  their peer through the broker; a client also keeps the service it is
+  paired with.
 - **Operations** (`ops`) are the verbs, written once, without printing. The
   CLI (`main`) and the REST control plane (`rest`) are two front-ends for
   them.
@@ -210,8 +211,8 @@ parties should run with the same timing values.
 | a heartbeat's payload cannot be delivered | the pending inbox text or pairing is restored and carried by the next heartbeat |
 | the broker shuts down | every connection and task is cancelled; parties notice through their watchdog |
 
-Text delivery is "last message wins": a second `send` before the service's
-next heartbeat replaces the first.
+Text delivery is "last message wins" per party: a second `send` before the
+receiving party's next heartbeat replaces the first.
 
 ## 8. Errors
 

@@ -7,7 +7,7 @@ All notable changes to NSM are recorded here. The format follows
 
 The 2026-09 cleanup rewrote the backend once for every transport. Everything
 below compares against the last pre-cleanup state of `main`. Wire protocol
-version: 2.
+version: 3.
 
 ### Breaking changes
 
@@ -47,12 +47,16 @@ version: 2.
   `role` (`service` or `client`), so the asker knows which field applies
   instead of guessing from what is set; this is wire protocol version 2.
   `POST /v1/collect` answers `{"role":"service","text":...}` or
-  `{"role":"client","service":...}` instead of an object with both fields.
+  `{"role":"client","service":...,"text":...}` instead of an untagged object.
+- **`deliver` names no target** (wire protocol version 3). The broker
+  delivers to the sender's peer as it knows it, so a text that races a
+  re-pairing reaches the new service instead of being refused, and a service
+  can relay text too.
 - `collect` and `send` ignore `--key` (still accepted, hidden).
-- **`collect` answers one question.** It prints the last text a service
-  received and nothing else; asked of a client it fails with a message naming
-  the role. The service a client is paired with is now `nsm peer`. Scripts
-  that collected an address from a client switch to `peer`.
+- **`collect` answers one question.** It prints the last text a party
+  received and nothing else. The service a client is paired with is now
+  `nsm peer`. Scripts that collected an address from a client switch to
+  `peer`.
 - **Logging** uses `tracing`; `NSM_LOG_LEVEL` and `NSM_LOG_STYLE` keep their
   meaning, `--log-level` overrides them, logs go to stderr and stdout carries
   only a command's result.
@@ -70,7 +74,13 @@ version: 2.
 - `nsm peer PARTY`: the service a client is paired with, as `host:port`, and
   nothing else; asked of a service it fails with a message naming the role.
   In the library, `Collected::text` and `Collected::service` are the two
-  accessors behind `collect` and `peer`, and `Error::WrongRole` their refusal.
+  accessors behind `collect` and `peer`, and `Error::WrongRole` is how `peer`
+  refuses a service.
+- Text flows both ways: `nsm send` to a service's heartbeat address hands a
+  text to the client holding it, delivered on the client's next heartbeat
+  and read with `nsm collect` at the client (`POST /v1/send` and
+  `POST /v1/collect` likewise). A client's `collect` answer carries both its
+  pairing and its last text.
 - Exit code 3: the party answered but has nothing to report yet (`collect`
   before the first text, `peer` before the pairing), distinct from a failed
   operation (1) and a usage error (2).

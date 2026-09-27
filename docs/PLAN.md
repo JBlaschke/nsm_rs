@@ -12,7 +12,7 @@
 | `peer/01-typed-collect` | done | `Role` in `protocol`; `collected` carries `role`; protocol version 2; `ops::Collected` is an enum; no command's output changes |
 | `peer/02-pairing-updates` | done | the pairing is a `watch` channel; `Session::pairings`; `nsm claim` prints every pairing; three-process CLI test |
 | `peer/03-peer-command` | done | `nsm peer`; `collect` prints text only; `Collected::text` / `Collected::service` with `Error::WrongRole`; exit status 3 for "nothing yet" |
-| `peer/04-two-way-text` | in progress | added 2026-09-27 after the first three were reviewed: text flows from a service to its client too |
+| `peer/04-two-way-text` | done | added 2026-09-27 after the first three were reviewed: `deliver` names no target, a client has an inbox, `send` and `collect` work at either party; protocol version 3 |
 
 Each branch builds on the previous one and passes the checks in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.
