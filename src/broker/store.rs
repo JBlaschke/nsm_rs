@@ -2,8 +2,8 @@
 //!
 //! One [`Store`] lives in each [`ClientEntry`](super::registry::ClientEntry):
 //! the registry creates it empty when a claim is granted, keeps it across
-//! re-pairings and drops it with the client (plan decision S2). Like the
-//! registry it is pure: no I/O, no clock, and every method returns
+//! re-pairings and drops it with the client (store plan, decision S2). Like
+//! the registry it is pure: no I/O, no clock, and every method returns
 //! immediately, so it runs inside the registry's critical section.
 //!
 //! # Versions
@@ -11,12 +11,12 @@
 //! A store does not number its own writes. Every applied write (a put, or a
 //! delete that removed an entry) takes the next number from a source the
 //! caller passes in, which the registry backs with one counter for the whole
-//! broker (decision S5): a version then names one state of one entry for the
-//! broker's whole life, and no two claims ever share a number. An entry's
-//! `version` is the number of its last write, and the store's `revision` is
-//! the last number it was issued, 0 before its first write. Reads, refused
-//! operations and deletes of an absent key take no number. When the source
-//! is exhausted the write is refused and nothing changes.
+//! broker (store plan, decision S5): a version then names one state of one
+//! entry for the broker's whole life, and no two claims ever share a number.
+//! An entry's `version` is the number of its last write, and the store's
+//! `revision` is the last number it was issued, 0 before its first write.
+//! Reads, refused operations and deletes of an absent key take no number.
+//! When the source is exhausted the write is refused and nothing changes.
 //!
 //! # Budget
 //!
