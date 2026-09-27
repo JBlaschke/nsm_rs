@@ -92,6 +92,14 @@ version: 3.
   `A-Z a-z 0-9 . _ - : /`, not starting with `-`; versions come from one
   counter for the broker's whole life. In the library: `protocol::StoreKey`,
   `StoreOp`, `StoreEntry`, `Stored`, `broker::Store` and `Registry::store`.
+- Both parties relay `store` to the broker as `store_relay`, adding their
+  own id and token, and pass the `stored` reply back unchanged, so an
+  operator reaches the claim's store through either party's bind address,
+  in ping mode too, without ever holding a token. A party that has not
+  registered yet refuses it itself, as it does `send`. In the library:
+  `ops::store`, which returns the `Stored` reply (a refusal is
+  `Error::Rejected`), with `StoreEntry`, `StoreKey`, `StoreOp` and `Stored`
+  re-exported from `ops`.
 - `--max-store-bytes` on `listen` (default 16384, allowed 256 to 32768): the
   budget of each store, counting every entry as its JSON-encoded key and
   value plus 64 bytes. `listen` refuses to start when a full store's reply

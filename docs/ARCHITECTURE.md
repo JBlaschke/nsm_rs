@@ -11,28 +11,34 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
 
 ```text
              ┌───────────────────────── broker (nsm listen) ─────────────────────────┐
-             │  transport listener → BrokerHandler → Registry (pure state)           │
+             │  transport listener → BrokerHandler → Registry (pure state,           │
+             │                        one store per claim)                           │
              │                        Broker monitor: heartbeat task per party,      │
              │                        sweeper for ping-mode parties                  │
              └───────────▲──────────────────────────────────────────────▲────────────┘
      publish / ping /    │                                              │  claim / ping /
-     heartbeats          │                                              │  deliver / heartbeats
+     deliver /           │                                              │  deliver /
+     store_relay /       │                                              │  store_relay /
+     heartbeats          │                                              │  heartbeats
    ┌─────────────────────┴──────────┐                     ┌─────────────┴──────────────────┐
    │ service party (nsm publish)    │                     │ client party (nsm claim)       │
    │ Session + PartyHandler         │ ◄── data traffic ── │ Session + PartyHandler         │
    │ listener on the bind port      │   (not NSM's job)   │ listener on the bind port      │
    └─────────────────────▲──────────┘                     └─────────────▲──────────────────┘
-                         │ send / collect                               │ send / collect / peer
+                         │ send / collect /                             │ send / collect /
+                         │ store                                        │ peer / store
                     operator, script, or `nsm serve` (REST control plane) driving `ops`
 ```
 
 - The **broker** is the only fixed address. It admits registrations, pairs
-  clients with services, monitors liveness and relays short texts. It never
-  sees the service's own traffic.
+  clients with services, monitors liveness, relays short texts and keeps the
+  one copy of the store each claim shares. It never sees the service's own
+  traffic.
 - A **party** is a service or a client. Both run the same small server on
-  their bind address, keep the last text they were sent and relay `send` to
-  their peer through the broker; a client also keeps the service it is
-  paired with.
+  their bind address, keep the last text they were sent, relay `send` to
+  their peer through the broker and relay `store` to the broker; a client
+  also keeps the service it is paired with. A party keeps nothing of the
+  store.
 - **Operations** (`ops`) are the verbs, written once, without printing. The
   CLI (`main`) and the REST control plane (`rest`) are two front-ends for
   them.
@@ -167,9 +173,14 @@ broker's heartbeats stop for `broker_watchdog`; in ping mode a loop that
 pings every `heartbeat_interval`, applies what the broker returns, and gives
 up after `fail_threshold` failures or when the broker no longer knows the
 party. `PartyHandler` answers the broker's `Heartbeat` (only with the party's
-own token), `Collect`, and `Send` (relayed to the broker as `Deliver`).
-`PartyState` is the shared state: id, token, inbox, paired service, last
-contact. The pairing sits in a `tokio::sync::watch` channel:
+own token), `Collect`, `Send` (relayed to the broker as `Deliver`) and
+`Store` (relayed to the broker as `StoreRelay`, whose `Stored` reply goes
+back to the caller unchanged). Both relays go through one helper that
+refuses before registration and adds the party's id and token, so the two
+cannot drift apart; either role relays either request, and the broker
+decides who the peer is and whose store it is. `PartyState` is the shared
+state: id, token, inbox, paired service, last contact; nothing of the store
+lives at a party. The pairing sits in a `tokio::sync::watch` channel:
 `Session::pairings` hands out receivers, which is how `nsm claim` prints
 every re-pairing as one more stdout line instead of keeping the new address
 to itself.
@@ -182,7 +193,10 @@ result to stdout and maps `Err` to exit code 1 with an `nsm: ` message on
 stderr (clap's own usage errors exit 2; a party that answered but has nothing
 to report yet, for `collect` and `peer`, is exit 3). `peer` and `collect` are
 the two accessors of `ops::Collected`, one per role; the binary adds no
-logic of its own. `rest` serves the same operations
+logic of its own. `ops::store` takes a `StoreOp` to either party and returns
+the broker's `Stored` as it is (a key that is not set is an answer with no
+entry, a refusal is `Error::Rejected`), so the command line and the control
+plane need no store logic of their own either. `rest` serves the same operations
 over HTTP: `publish` and `claim` become background jobs with a view the API
 reports, cancels and reaps; a bearer token guards every route when one is
 configured, and it is mandatory off loopback.
@@ -226,6 +240,18 @@ exist: about 80 MiB of accounted store bytes with the defaults, and at most
   plaintext fallback, and TLS configuration checked before dialling. Mutual
   TLS and authorisation of `publish`/`claim` by identity are the listed
   follow-ups.
+- **The shared store follows the claim.** Only a relay carrying a
+  registered party's own token reaches a store, and only the store of that
+  party's claim: the client's, or the one of the client holding the service
+  at that instant. A removed party fails the token check, an unclaimed
+  service can write nothing, and the next claimer of a service never sees
+  the previous claim's data. The operator presents no token: **a party's
+  listener is the capability**. Anyone who can reach a party's bind address
+  can read and write its store through it, as with `send` and `collect`, and
+  TLS on that listener encrypts but does not authenticate callers (mutual
+  TLS is a listed follow-up). The store is not a place for secrets. Store
+  keys and values are never logged, and a `Store`'s `Debug` shows counts
+  only.
 - **The control plane** binds loopback by default, requires a bearer token
   elsewhere, takes no file paths from requests and limits body sizes.
 - **Resource bounds** everywhere: frame sizes, connection counts, request
@@ -269,12 +295,14 @@ misconfiguration; registration retries only on the former.
   against a model) and scripted peers for the monitor's decisions.
 - **`tests/e2e.rs`**: a broker with services and clients in one process on
   ephemeral loopback ports, over all four transports, with `Timing::fast()`
-  and generated certificates.
+  and generated certificates, including the shared store across
+  re-pairings, the end of a claim, ping mode and concurrent writers.
 - **`tests/rest.rs`**: every control-plane route, the job lifecycle, status
   mapping and the token.
 - **`tests/cli.rs`**: the built binary: parsing, exit codes, stdout/stderr
   discipline, complete sessions, SIGTERM.
-- **`tests/stress.rs`** (`--ignored`): 50 services and 50 clients, churn.
+- **`tests/stress.rs`** (`--ignored`): 50 services and 50 clients, text and
+  store traffic, churn.
 - CI enforces formatting, clippy for both providers, rustdoc, cargo-deny,
   cargo-machete, a Docker build and a line-coverage floor.
 

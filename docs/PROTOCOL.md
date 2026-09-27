@@ -180,10 +180,13 @@ which field is set.
 ### `store` → `stored`, `store_relay` → `stored`
 
 Each claim has one small key-value store, kept by the broker and shared by
-the client and the service that holds the claim. `store` is the operator's
-request to either party's bind address; the party keeps no copy and relays it
-to the broker as `store_relay`, naming itself and its token, the way `send`
-becomes `deliver`. The operation's fields sit next to `type`:
+the client and the service that holds the claim. A store operation travels
+from the operator to a party and from the party to the broker: `store` is
+the operator's request to either party's bind address; the party keeps no
+copy and relays it to the broker as `store_relay`, naming itself and its
+token, the way `send` becomes `deliver`, and passes the broker's answer back
+to the operator unchanged. The operator never sees a token. The operation's
+fields sit next to `type`:
 
 ```json
 {"type":"store","op":"put","key":"step","value":"5"}
@@ -232,11 +235,20 @@ The broker refuses a `store_relay` with a `nack`, changing nothing:
 | `store full: the entry needs N bytes and F of M are free` | the put does not fit the store's budget (see the sizes rule) |
 | `store versions exhausted` | the version counter ran out, after about 1.8 × 10^19 writes |
 
-A `store` sent to the broker is `unexpected store at the broker`. Parties do
-not relay `store` yet: in this version of the code a party answers it with
-`unexpected store at a service` (or `client`). A malformed operation (an
-invalid store key, an unknown `op`, a put without a value) is a decode error
-like any other malformed message.
+The party adds refusals of its own:
+
+| Reason | When |
+|---|---|
+| `service is not registered yet`, `client is not registered yet` | the party has bound its listener but not registered; it answers without asking the broker, as it does a `send` |
+| `broker answered a store relay with <kind>` | the broker's reply was neither `stored` nor `nack` |
+
+When the broker cannot be reached, the party fails the request as it fails a
+`send`: over TCP and TLS it closes the connection, over HTTP and HTTPS it
+answers status 500 with a `nack`. A `store` sent to the broker is
+`unexpected store at the broker`, since it carries no credentials, and a
+`store_relay` sent to a party is `unexpected store_relay at a service` (or
+`client`). A malformed operation (an invalid store key, an unknown `op`, a
+put without a value) is a decode error like any other malformed message.
 
 ### `nack`
 
@@ -304,6 +316,57 @@ service A (1)      broker                         client (2)           service B
                      │◄─ heartbeat_ack(2) ────────────│                     │
                      │   (no service B: remove 2; its watchdog fires, exit 1)
 ```
+
+### The shared store
+
+```text
+operator            client (2)                broker                      service (1)
+   │── store ──────────►│                        │                            │
+   │   put step=5       │── store_relay(2,T2, ──►│ claim 2's store:           │
+   │                    │     put step=5)        │   step=5, version 7        │
+   │                    │◄─ stored(client 2, ────│                            │
+   │◄─ stored ──────────│     rev 7, step=5 v7)  │                            │
+   │─────────────────────────── store get step ──────────────────────────────►│
+   │                    │                        │◄─ store_relay(1,T1, ───────│
+   │                    │                        │      get step)             │
+   │                    │                        │── stored(client 2, ───────►│
+   │                    │                        │      rev 7, step=5 v7)     │
+   │◄────────────────────────── stored ───────────────────────────────────────│
+```
+
+Neither party keeps anything: each request is answered from the one copy at
+the broker, in the reply itself, so nothing rides on heartbeats and the
+second read needs no hand-over. The version is 7 rather than 1 because every
+store takes its numbers from one broker-wide counter. A write acknowledged
+before a `send` is visible to the peer by the time the peer has the text: the
+write was applied before the `deliver` reached the broker.
+
+### A store across a re-pairing
+
+```text
+service A (1)        broker                              client (2)          service B (3)
+   │── store_relay ───►│ put a=x (version 4)                  │                    │
+   │   (1,T1, put a=x) │                                      │                    │
+   ✕                   │◄─── store_relay(2,T2, put c=y) ──────│                    │
+                       │     version 5                        │                    │
+                       │   fail_threshold reached:            │                    │
+                       │   remove 1; reclaim(2) → 3           │                    │
+                       │── heartbeat(T2, service {3}) ───────►│                    │
+                       │◄─────────────── store_relay(3,T3, list) ──────────────────│
+                       │──────────────── stored(client 2, rev 5, a=x v4, c=y v5) ─►│
+                       │◄─────────────── store_relay(3,T3, put b=z) ───────────────│
+                       │──────────────── stored(client 2, rev 6, b=z v6) ─────────►│
+```
+
+The store belongs to the claim, not to the pairing: the client may use it
+while it has no service, the replacement reads everything written before
+(the dead service's writes included) under the same `client`, and its own
+writes continue the numbering. Before `reclaim` gives it the claim, B is an
+unclaimed service like any other: it reads an empty store with
+`client: null` and may not write. A's token stops verifying the moment A is
+removed, so a stale A can no longer write. When the client itself is
+removed, its store goes with it, and the next claim of the freed service
+starts with an empty store under a new `client`.
 
 ## 5. Timing
 

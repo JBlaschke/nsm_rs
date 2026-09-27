@@ -12,8 +12,8 @@ work](history/2026-peer-text/PLAN.md).
 
 | Branch | State | Notes |
 |---|---|---|
-| `store/01-broker-store` | done | store types and messages; one store per claim in the registry; the broker answers `store_relay`; `--max-store-bytes`; a party still answers `store` with "unexpected" until `store/02` |
-| `store/02-party-relay` | planned | both parties relay `store` to the broker; `ops::store`; end-to-end tests over every transport |
+| `store/01-broker-store` | done | store types and messages; one store per claim in the registry; the broker answers `store_relay`; `--max-store-bytes`; a party answered `store` with "unexpected" until `store/02` |
+| `store/02-party-relay` | done | both parties relay `store` to the broker through one helper shared with `send`; `ops::store`; end-to-end tests over every transport and in ping mode; store traffic in the stress test |
 | `store/03-cli-and-rest` | planned | `nsm store get\|put\|delete\|list`; `POST /v1/store` |
 | `store/04-conditional-writes` | planned | `if_version` on put and delete; exit status 4 and HTTP 409 for a version mismatch; can be dropped without touching 01 to 03 |
 
