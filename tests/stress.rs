@@ -61,6 +61,28 @@ async fn fifty_services_and_fifty_clients_pair_exchange_and_survive_churn() {
             assert_eq!(svc.state().inbox(), Some(format!("job {i}")));
         }
 
+        // Every client writes to its store; its service reads it back.
+        let step: ops::StoreKey = "step".parse().expect("a valid store key");
+        for (i, cl) in clients.iter().enumerate() {
+            let op = ops::StoreOp::Put {
+                key: step.clone(),
+                value: format!("step {i}"),
+                if_version: None,
+            };
+            ops::store(&cl.bound(), op, c.net()).await.unwrap();
+        }
+        for (i, cl) in clients.iter().enumerate() {
+            let svc = by_id[&cl.service().unwrap().id];
+            let op = ops::StoreOp::Get { key: step.clone() };
+            let read = ops::store(&svc.bound(), op, c.net()).await.unwrap();
+            assert_eq!(read.client, Some(cl.id()), "client {i}");
+            assert_eq!(
+                read.get(&step).map(|e| e.value.as_str()),
+                Some(format!("step {i}").as_str()),
+                "client {i}"
+            );
+        }
+
         // Everybody survives a few heartbeat rounds.
         tokio::time::sleep(c.timing().heartbeat_interval * 10).await;
         let snap = c.broker().snapshot();
@@ -106,6 +128,12 @@ async fn fifty_services_and_fifty_clients_pair_exchange_and_survive_churn() {
         for _ in 0..10 {
             let cl = c.claim(1).await;
             assert!(freed.contains(&cl.service().unwrap().id));
+            // A new claim starts with an empty store, whatever the freed
+            // service's previous client wrote.
+            let op = ops::StoreOp::Get { key: step.clone() };
+            let read = ops::store(&cl.bound(), op, c.net()).await.unwrap();
+            assert_eq!(read.client, Some(cl.id()));
+            assert!(read.entries.is_empty(), "{read:?}");
             clients.push(cl);
         }
         c.wait_until(|snap| snap.len() == 2 * PARTIES - 20).await;

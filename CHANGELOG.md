@@ -81,9 +81,66 @@ version: 3.
   and read with `nsm collect` at the client (`POST /v1/send` and
   `POST /v1/collect` likewise). A client's `collect` answer carries both its
   pairing and its last text.
+- A shared store at the broker, one per claim, which the command line and
+  the control plane reach through `nsm store` and `POST /v1/store` (below).
+  Three new messages carry it:
+  `store` (operator to party), `store_relay` (party to broker, with its id
+  and token) and `stored`, the reply naming the claim's client, the store's
+  revision and the entries; they are new variants, so the wire protocol
+  stays version 3. The store is created empty when a claim is granted, kept
+  across re-pairings and dropped with the client; a service reaches it only
+  while it holds the claim. Store keys are 1 to 128 characters from
+  `A-Z a-z 0-9 . _ - : /`, not starting with `-`; versions come from one
+  counter for the broker's whole life. In the library: `protocol::StoreKey`,
+  `StoreOp`, `StoreEntry`, `Stored`, `broker::Store` and `Registry::store`.
+- Both parties relay `store` to the broker as `store_relay`, adding their
+  own id and token, and pass the `stored` reply back unchanged, so an
+  operator reaches the claim's store through either party's bind address,
+  in ping mode too, without ever holding a token. A party that has not
+  registered yet refuses it itself, as it does `send`. In the library:
+  `ops::store`, which returns the `Stored` reply (a refusal is
+  `Error::Rejected`), with `StoreEntry`, `StoreKey`, `StoreOp` and `Stored`
+  re-exported from `ops`.
+- `nsm store get|put|delete|list PARTY [KEY]`: the shared store from job
+  scripts, through either party's bind address. `get` prints the value and
+  exits 3 when the key is not set; `put --value TEXT` prints the write's
+  version; `delete` prints nothing on stdout, says on stderr whether it
+  removed anything and succeeds either way; `list` prints the keys, one per
+  line. `--json` prints the broker's reply as one line instead, with the exit
+  status unchanged. An invalid store key is a usage error (exit 2). In the
+  library: `cli::StoreCommand`.
+- `POST /v1/store` on the control plane: `{"party":...,"op":"get"|"put"|
+  "delete"|"list","key":...,"value":...}`, answered with the broker's reply
+  (`{"client":...,"revision":...,"entries":[...]}`); an unset key is 200 with
+  no entries, a refusal 400, an unreachable party 502. In the library:
+  `rest::StoreBody`.
+- Conditional store writes: a put or a delete may carry `if_version`
+  (`--if-version N` on `nsm store put` and `nsm store delete`), applied only
+  if the key is at version N, or only if it is not set when N is 0. The
+  broker compares in the same step as the write, so two writers that read
+  the same version cannot both get through, and a counter both parties
+  increment loses no update. A write whose condition does not hold changes
+  nothing and is answered with `stored` carrying `applied: false` and the
+  key's current entry; `nsm store` then exits 4 with `nsm: KEY is at version
+  V` or `nsm: KEY is not set` on stderr, and `POST /v1/store` answers 409
+  with the reply and an `error` field. `applied` is on every `stored` reply
+  (and on `--json` output) and decodes as true when absent; `if_version`
+  decodes as none when absent; the wire protocol stays version 3. In the
+  library: `StoreOp::if_version`, `Stored::applied`,
+  `Stored::not_applied_reason` and `broker::store::Outcome`.
+- `--max-store-bytes` on `listen` (default 16384, allowed 256 to 32768): the
+  budget of each store, counting every entry as its JSON-encoded key and
+  value plus 64 bytes. `listen` refuses to start when a full store's reply
+  (the budget plus 1024 bytes) would not fit `--max-frame-bytes`, so a
+  broker's frame limit below 17408 bytes now needs a smaller store budget
+  too, and one below 1280 bytes (the smallest budget plus 1024) can no
+  longer start a broker at all.
 - Exit code 3: the party answered but has nothing to report yet (`collect`
-  before the first text, `peer` before the pairing), distinct from a failed
-  operation (1) and a usage error (2).
+  before the first text, `peer` before the pairing, `store get` of a key
+  that is not set), distinct from a failed operation (1) and a usage error
+  (2).
+- Exit status 4: a `store put` or `store delete` with `--if-version` was
+  answered but not applied, because the key was not at the version it named.
 - Four transports from one implementation: TCP, TCP+TLS (`tls://`, new),
   HTTP, HTTPS.
 - Registration tokens: 128-bit secrets issued at registration and required on
@@ -93,7 +150,8 @@ version: 3.
 - Flags for every timing and limit: `--heartbeat-interval`,
   `--heartbeat-timeout`, `--fail-threshold`, `--ping-staleness`,
   `--broker-watchdog`, `--request-timeout`, `--connect-timeout`,
-  `--max-frame-bytes`, `--max-connections`, `--max-registrations`.
+  `--max-frame-bytes`, `--max-connections`, `--max-registrations`,
+  `--max-store-bytes`.
 - `--bind-port 0` picks a free port; the bound address is printed on stderr.
 - Graceful shutdown on Ctrl-C and SIGTERM.
 - Tests: 160+ unit tests, end-to-end tests over all four transports, control
@@ -160,6 +218,12 @@ version: 3.
   refused" instead of the missing configuration.
 - The control plane reported a 500 for an unreachable broker or party; it now
   reports 502 as documented.
+- A closed stdout (a reader that went away, as in `nsm list-interfaces |
+  head -0`) made `nsm` panic with exit 101; it now exits 1 with an `nsm: `
+  message. `nsm claim` exits 1 the same way when its first line cannot be
+  written. Its re-pairing lines, which printed a panic message when the
+  reader had gone (the party kept running), now stop with a warning in the
+  log while the party keeps running.
 
 ### Security
 

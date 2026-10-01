@@ -3,6 +3,11 @@
 //! One `match` over [`Message`], written once for every transport. Anything
 //! the broker does not expect is a [`Message::Nack`]; nothing here panics on
 //! peer input, and the registry lock is never held across an `.await`.
+//!
+//! Relayed requests ([`Message::Deliver`], [`Message::StoreRelay`]) check the
+//! sender's token and act on the registry inside one critical section, so
+//! nothing can remove the sender or re-pair it in between. Store keys and
+//! values are never logged, only the operation's name.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -153,6 +158,23 @@ impl BrokerHandler {
                 });
                 match outcome {
                     Ok(Ok(())) => Ok(Message::Delivered),
+                    Ok(Err(reason)) => Ok(Message::nack(reason)),
+                    Err(Error::Rejected(reason)) => Ok(Message::nack(reason)),
+                    Err(e) => Err(e),
+                }
+            }
+
+            Message::StoreRelay { from, token, op } => {
+                debug!(%from, op = op.kind(), "store request");
+                // The registry finds the sender's store; the sender names none.
+                let outcome = self.broker.with_registry(|r| {
+                    if !r.verify(from, &token) {
+                        return Ok(Err("unknown party or wrong token"));
+                    }
+                    r.store(from, op).map(Ok)
+                });
+                match outcome {
+                    Ok(Ok(stored)) => Ok(Message::Stored(stored)),
                     Ok(Err(reason)) => Ok(Message::nack(reason)),
                     Err(Error::Rejected(reason)) => Ok(Message::nack(reason)),
                     Err(e) => Err(e),
@@ -374,6 +396,172 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn store_relay_needs_a_token_and_follows_the_claim() {
+        use crate::protocol::message::store_key;
+        use crate::protocol::{StoreEntry, StoreOp, Stored};
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            crate::tls::install_default_provider();
+            let h = handler(BrokerPolicy::default());
+            // A ping-mode service and a two-sided client: the relay does not
+            // depend on the liveness mode. (Nothing here yields to the runtime,
+            // so the client's heartbeat task never runs and cannot remove it.)
+            let (service, service_token) =
+                registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
+            let relay = |from, token, op| Message::StoreRelay { from, token, op };
+            let put = |value: &str| StoreOp::Put {
+                key: store_key("step"),
+                value: value.into(),
+                if_version: None,
+            };
+            let nack = |reason: &str| Message::nack(reason);
+
+            // Wrong token and unknown id: one text for both, before anything
+            // else is looked at.
+            let wrong_token = h
+                .handle(relay(service, wrong(), StoreOp::List), peer())
+                .await
+                .unwrap();
+            let unknown = h
+                .handle(relay(PartyId(99), wrong(), put("5")), peer())
+                .await
+                .unwrap();
+            assert_eq!(wrong_token, nack("unknown party or wrong token"));
+            assert_eq!(unknown, wrong_token);
+
+            // Right token, but nobody holds the service: it reads an empty
+            // store and may not write.
+            assert_eq!(
+                h.handle(relay(service, service_token, StoreOp::List), peer())
+                    .await
+                    .unwrap(),
+                Message::Stored(Stored {
+                    client: None,
+                    revision: 0,
+                    applied: true,
+                    entries: vec![],
+                })
+            );
+            assert_eq!(
+                h.handle(relay(service, service_token, put("5")), peer())
+                    .await
+                    .unwrap(),
+                nack(&format!("service {service} is not claimed"))
+            );
+
+            let claim = Message::Claim {
+                key: 1,
+                bind_addr: Addr::tcp("127.0.0.1", 2),
+                ping: false,
+            };
+            let (client, client_token, paired_with) =
+                paired(h.handle(claim, peer()).await.unwrap());
+            assert_eq!(paired_with, service);
+            let written = StoreEntry {
+                key: store_key("step"),
+                value: "5".into(),
+                version: 1,
+            };
+            assert_eq!(
+                h.handle(relay(client, client_token, put("5")), peer())
+                    .await
+                    .unwrap(),
+                Message::Stored(Stored {
+                    client: Some(client),
+                    revision: 1,
+                    applied: true,
+                    entries: vec![written.clone()],
+                })
+            );
+            assert_eq!(
+                h.handle(
+                    relay(
+                        service,
+                        service_token,
+                        StoreOp::Get {
+                            key: store_key("step")
+                        }
+                    ),
+                    peer()
+                )
+                .await
+                .unwrap(),
+                Message::Stored(Stored {
+                    client: Some(client),
+                    revision: 1,
+                    applied: true,
+                    entries: vec![written],
+                }),
+                "the service reads the client's write"
+            );
+            // A party's token is its own: the client's does not work for the
+            // service.
+            assert_eq!(
+                h.handle(relay(service, client_token, StoreOp::List), peer())
+                    .await
+                    .unwrap(),
+                nack("unknown party or wrong token")
+            );
+            // A write that does not fit is refused with the budget's numbers.
+            match h
+                .handle(
+                    relay(client, client_token, put(&"x".repeat(20_000))),
+                    peer(),
+                )
+                .await
+                .unwrap()
+            {
+                Message::Nack { reason } => assert!(reason.starts_with("store full"), "{reason}"),
+                other => panic!("{other:?}"),
+            }
+        })
+        .await
+        .expect("the store relay test finished in time");
+    }
+
+    #[tokio::test]
+    async fn a_store_relay_is_not_a_sign_of_life() {
+        use crate::protocol::StoreOp;
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            crate::tls::install_default_provider();
+            let h = handler(BrokerPolicy::default());
+            let _service = registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
+            let claim = Message::Claim {
+                key: 1,
+                bind_addr: Addr::tcp("127.0.0.1", 2),
+                ping: true,
+            };
+            let (client, token, _) = paired(h.handle(claim, peer()).await.unwrap());
+            let liveness = || {
+                h.broker
+                    .with_registry(|r| r.get(client).map(|p| (p.failures(), p.last_seen())))
+            };
+            let _ = h.broker.with_registry(|r| r.record_failure(client));
+            let before = liveness();
+            assert_eq!(before.map(|(failures, _)| failures), Some(1));
+
+            // Only heartbeats and pings count; a relay, like a deliver,
+            // leaves the failure count and the last contact alone.
+            let reply = h
+                .handle(
+                    Message::StoreRelay {
+                        from: client,
+                        token,
+                        op: StoreOp::List,
+                    },
+                    peer(),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(reply, Message::Stored(_)), "{reply:?}");
+            assert_eq!(liveness(), before);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn zero_port_is_refused() {
         let h = handler(BrokerPolicy::default());
         let reply = h.handle(publish("127.0.0.1", 0), peer()).await.unwrap();
@@ -459,6 +647,17 @@ mod tests {
             },
             Message::Send { text: "x".into() },
             Message::Delivered,
+            // `store` carries no credentials: only a party's relay is
+            // answered.
+            Message::Store {
+                op: crate::protocol::StoreOp::List,
+            },
+            Message::Stored(crate::protocol::Stored {
+                client: None,
+                revision: 0,
+                applied: true,
+                entries: vec![],
+            }),
         ] {
             let kind = msg.kind();
             match h.handle(msg, peer()).await.unwrap() {

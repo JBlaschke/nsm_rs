@@ -2,24 +2,40 @@
 //! the command line, runs one operation and prints its result. This is the
 //! only place that prints to stdout or decides exit codes: 0 when the
 //! operation succeeded, 1 when it failed (`nsm: <error>` on stderr), 2 for a
-//! usage error (clap's own), and [`NOTHING_YET`] when the party answered but
-//! has nothing to report yet.
+//! usage error (clap's own), [`NOTHING_YET`] (3) when the party answered but
+//! has nothing to report yet (`collect` before the first text, `peer` before
+//! the pairing, `store get` of a key that is not set), and
+//! [`CONDITION_NOT_MET`] (4) when a `store put` or `store delete` with
+//! `--if-version` found the key at another version, so nothing changed.
+//! Neither 3 nor 4 is a failure: the party answered. Every line of stdout
+//! goes through [`print_line`], so a reader that went away (a closed pipe)
+//! makes the command fail with exit 1 instead of a panic. The one exception
+//! is `claim` after its first line: once the service address is out, a
+//! re-pairing line that cannot be written stops the printing, not the party.
 
+use std::io::Write;
 use std::process::ExitCode;
 
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
-use nsm::cli::{Cli, Command, LimitsOpts, TimingOpts, TlsOpts};
+use nsm::cli::{Cli, Command, LimitsOpts, StoreCommand, TimingOpts, TlsOpts};
 use nsm::net::Transport;
-use nsm::ops::{self, NetOpts};
+use nsm::ops::{self, NetOpts, StoreOp};
 use nsm::{Error, Result};
 
 /// Exit status when the party was reached but has nothing to report yet:
-/// `collect` before the first text, `peer` before the pairing. Distinct from
+/// `collect` before the first text, `peer` before the pairing, `store get`
+/// of a key that is not set. Distinct from
 /// a failed operation (1) so a polling script can tell "not yet" from
 /// "failed" without parsing stderr.
 const NOTHING_YET: u8 = 3;
+
+/// Exit status when a conditional write was answered but not applied: the
+/// key was not at the version `--if-version` named (or was set when it named
+/// 0). stderr says where the key is, and nothing changed, so a script can
+/// read the key again and retry.
+const CONDITION_NOT_MET: u8 = 4;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -68,6 +84,16 @@ fn spawn_signal_handler(shutdown: CancellationToken) {
     });
 }
 
+/// Write `line` and a newline to stdout and flush it. A failed write (most
+/// often a closed pipe: the reader went away) is an error like any other, so
+/// the command exits 1 with a message instead of the panic `println!` gives.
+fn print_line(line: impl std::fmt::Display) -> Result<()> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(format!("{line}\n").as_bytes())?;
+    out.flush()?;
+    Ok(())
+}
+
 fn net_opts(tls: &TlsOpts, timing: &TimingOpts, limits: &LimitsOpts) -> NetOpts {
     NetOpts {
         tls: tls.paths(),
@@ -96,22 +122,22 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
         } => {
             let names = ops::list_interfaces(ip_version)?;
             if verbose {
-                println!("Interfaces:");
+                print_line("Interfaces:")?;
             }
             for n in names {
-                println!("{}{n}", if verbose { " - " } else { "" });
+                print_line(format_args!("{}{n}", if verbose { " - " } else { "" }))?;
             }
         }
         Command::ListIps { iface, verbose } => {
             let addrs = ops::list_ips(&iface.selector())?;
             if verbose {
-                println!("Addresses:");
+                print_line("Addresses:")?;
             }
             for a in addrs {
                 if verbose {
-                    println!(" - {} ({})", a.ip, a.interface);
+                    print_line(format_args!(" - {} ({})", a.ip, a.interface))?;
                 } else {
-                    println!("{}", a.ip);
+                    print_line(a.ip)?;
                 }
             }
         }
@@ -190,8 +216,9 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
             let mut pairings = session.pairings();
             let first = pairings.borrow_and_update().clone();
             match first {
-                // The service address is the one line of stdout a script needs.
-                Some(service) => println!("{service}"),
+                // The service address is the one line of stdout a script
+                // needs; if nobody can read it, the claim fails (exit 1).
+                Some(service) => print_line(service)?,
                 None => eprintln!("nsm: paired, but the broker sent no service handle"),
             }
             eprintln!(
@@ -200,12 +227,17 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
                 session.bound()
             );
             // Every re-pairing is one more line, so a script that keeps
-            // reading always holds the current service.
+            // reading always holds the current service. When the reader
+            // goes away after the first line, printing stops with a warning
+            // in the log; the party itself keeps running.
             tokio::spawn(async move {
                 while pairings.changed().await.is_ok() {
                     let current = pairings.borrow_and_update().clone();
-                    if let Some(service) = current {
-                        println!("{service}");
+                    if let Some(service) = current
+                        && let Err(e) = print_line(service)
+                    {
+                        tracing::warn!(error = %e, "cannot print the new pairing; no longer printing pairings");
+                        break;
                     }
                 }
             });
@@ -220,7 +252,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
         } => {
             let net = net_opts(&tls, &timing, &LimitsOpts::default());
             match ops::collect(&party, &net).await?.text() {
-                Some(text) => println!("{text}"),
+                Some(text) => print_line(text)?,
                 None => {
                     eprintln!("nsm: nothing to collect yet");
                     return Ok(ExitCode::from(NOTHING_YET));
@@ -230,7 +262,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
         Command::Peer { party, tls, timing } => {
             let net = net_opts(&tls, &timing, &LimitsOpts::default());
             match ops::collect(&party, &net).await?.service()? {
-                Some(service) => println!("{service}"),
+                Some(service) => print_line(service)?,
                 None => {
                     eprintln!("nsm: not paired yet");
                     return Ok(ExitCode::from(NOTHING_YET));
@@ -253,6 +285,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
             .await?;
             eprintln!("nsm: delivered");
         }
+        Command::Store { op } => return store(op).await,
         Command::Serve {
             bind,
             token,
@@ -277,6 +310,51 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `nsm store`: one operation through a party, printed per operation. With
+/// `--json` stdout carries the broker's reply as one line instead (the body
+/// `POST /v1/store` returns); stderr and the exit status stay the same.
+async fn store(command: StoreCommand) -> Result<ExitCode> {
+    let (party, op, tls, timing, json) = command.into_parts();
+    let net = net_opts(&tls, &timing, &LimitsOpts::default());
+    let stored = ops::store(&party, op.clone(), &net).await?;
+    let mut lines = Vec::new();
+    let mut code = ExitCode::SUCCESS;
+    match &op {
+        // Only a put or a delete with --if-version can miss (`ops::store`
+        // refuses anything else); the reply then carries the key's current
+        // entry, or none.
+        _ if !stored.applied => {
+            eprintln!("nsm: {}", stored.not_applied_reason(&op));
+            code = ExitCode::from(CONDITION_NOT_MET);
+        }
+        StoreOp::Get { key } => match stored.get(key) {
+            Some(entry) => lines.push(entry.value.clone()),
+            None => {
+                eprintln!("nsm: {key} is not set");
+                code = ExitCode::from(NOTHING_YET);
+            }
+        },
+        StoreOp::Put { key, .. } => {
+            let entry = stored.get(key).ok_or_else(|| {
+                Error::protocol(format!("the reply to a put carries no entry for {key}"))
+            })?;
+            lines.push(entry.version.to_string());
+        }
+        StoreOp::Delete { key, .. } => match stored.get(key) {
+            Some(_) => eprintln!("nsm: deleted {key}"),
+            None => eprintln!("nsm: {key} was not set"),
+        },
+        StoreOp::List => lines.extend(stored.keys().map(ToString::to_string)),
+    }
+    if json {
+        lines = vec![serde_json::to_string(&stored)?];
+    }
+    for line in lines {
+        print_line(line)?;
+    }
+    Ok(code)
 }
 
 /// Run a party session until Ctrl-C or until the broker is lost.

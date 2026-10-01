@@ -1,4 +1,9 @@
 //! Starting a broker: registry, monitor and listener wired together.
+//!
+//! [`listen`] checks the limits before it binds anything: a full store's
+//! `stored` reply, at most [`Limits::max_store_bytes`] plus
+//! [`REPLY_OVERHEAD`], must fit the broker's own frame limit, or a party's
+//! `list` of a full store could never be answered.
 
 use std::sync::Arc;
 
@@ -7,10 +12,11 @@ use tracing::info;
 
 use super::handler::BrokerHandler;
 use super::monitor::Broker;
-use crate::Result;
+use super::store::REPLY_OVERHEAD;
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::Addr;
 use crate::transport::{self, Client, Server};
+use crate::{Error, Result};
 
 /// Everything needed to run a broker.
 #[derive(Debug, Clone)]
@@ -66,7 +72,14 @@ impl BrokerHandle {
 }
 
 /// Bind the listener and start the monitor tasks.
+///
+/// # Errors
+///
+/// [`Error::Config`] when a full store's reply would not fit
+/// [`Limits::max_frame_bytes`] (checked before anything is bound), and
+/// whatever binding the listener fails with.
 pub async fn listen(opts: ListenOpts, shutdown: CancellationToken) -> Result<BrokerHandle> {
+    check_limits(&opts.limits)?;
     let client = Arc::new(Client::new(
         opts.tls.clone(),
         opts.timing.clone(),
@@ -95,4 +108,92 @@ pub async fn listen(opts: ListenOpts, shutdown: CancellationToken) -> Result<Bro
         broker,
         shutdown,
     })
+}
+
+/// Refuse a store budget whose full reply would not fit the frame limit.
+fn check_limits(limits: &Limits) -> Result<()> {
+    if limits.max_store_bytes.saturating_add(REPLY_OVERHEAD) > limits.max_frame_bytes {
+        return Err(Error::config(format!(
+            "--max-store-bytes {} leaves no room for a full store's reply within --max-frame-bytes {}",
+            limits.max_store_bytes, limits.max_frame_bytes
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::net::Transport;
+
+    fn limits(max_frame_bytes: usize, max_store_bytes: usize) -> Limits {
+        Limits {
+            max_frame_bytes,
+            max_store_bytes,
+            ..Limits::default()
+        }
+    }
+
+    #[test]
+    fn a_full_stores_reply_must_fit_the_frame_limit() {
+        assert!(check_limits(&Limits::default()).is_ok());
+        assert!(check_limits(&limits(4096, 4096 - REPLY_OVERHEAD)).is_ok());
+        assert!(check_limits(&limits(64 * 1024, 32 * 1024)).is_ok());
+        // The default budget needs 17408 bytes of frame.
+        assert!(check_limits(&limits(17 * 1024, 16 * 1024)).is_ok());
+        // The smallest budget the command line allows (256) needs 1280, so a
+        // frame limit of 1024 to 1279 can never start a broker from there.
+        assert!(check_limits(&limits(1280, 256)).is_ok());
+        for (frame, store) in [
+            (4096, 4096 - REPLY_OVERHEAD + 1),
+            (4096, 16 * 1024),
+            (17 * 1024 - 1, 16 * 1024),
+            (1279, 256),
+            (1024, 256),
+        ] {
+            match check_limits(&limits(frame, store)) {
+                Err(Error::Config(msg)) => assert_eq!(
+                    msg,
+                    format!(
+                        "--max-store-bytes {store} leaves no room for a full store's reply within --max-frame-bytes {frame}"
+                    )
+                ),
+                other => panic!("frame {frame}, store {store}: {other:?}"),
+            }
+        }
+        assert!(
+            check_limits(&limits(usize::MAX - 1, usize::MAX)).is_err(),
+            "no overflow"
+        );
+    }
+
+    #[tokio::test]
+    async fn listen_refuses_a_budget_that_does_not_fit_before_binding() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // Hold the port: had `listen` tried to bind before checking, it
+            // would fail with "address in use" instead of the configuration
+            // error.
+            let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = held.local_addr().unwrap().port();
+            let opts = ListenOpts {
+                bind: Addr::new(Transport::Tcp, "127.0.0.1", port),
+                tls: TlsPaths::default(),
+                timing: Timing::fast(),
+                limits: limits(4096, 16 * 1024),
+                policy: BrokerPolicy::default(),
+            };
+            let err = listen(opts, CancellationToken::new()).await.unwrap_err();
+            assert!(matches!(err, Error::Config(_)), "{err:?}");
+            let text = err.to_string();
+            assert!(
+                text.contains("--max-store-bytes 16384") && text.contains("--max-frame-bytes 4096"),
+                "{text}"
+            );
+            drop(held);
+        })
+        .await
+        .unwrap();
+    }
 }

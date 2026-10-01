@@ -1,10 +1,10 @@
 //! Parties: the service side (`publish`) and the client side (`claim`).
 //!
 //! A party runs a small server on its bind address (the broker dials it for
-//! two-sided heartbeats; `send` and `collect` talk to it too), registers with
-//! the broker, and then keeps itself alive: either by answering the broker's
-//! heartbeats and watching for their absence, or, with `--ping`, by pinging
-//! the broker itself. All of that is [`session::Session`]; the request logic
+//! two-sided heartbeats; `send`, `collect` and `store` talk to it too),
+//! registers with the broker, and then keeps itself alive: either by
+//! answering the broker's heartbeats and watching for their absence, or, with
+//! `--ping`, by pinging the broker itself. All of that is [`session::Session`]; the request logic
 //! mounted on the server is [`handler::PartyHandler`]; the state they share
 //! is [`PartyState`].
 

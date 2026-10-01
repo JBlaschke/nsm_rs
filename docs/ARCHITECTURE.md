@@ -11,28 +11,34 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
 
 ```text
              ┌───────────────────────── broker (nsm listen) ─────────────────────────┐
-             │  transport listener → BrokerHandler → Registry (pure state)           │
+             │  transport listener → BrokerHandler → Registry (pure state,           │
+             │                        one store per claim)                           │
              │                        Broker monitor: heartbeat task per party,      │
              │                        sweeper for ping-mode parties                  │
              └───────────▲──────────────────────────────────────────────▲────────────┘
      publish / ping /    │                                              │  claim / ping /
-     heartbeats          │                                              │  deliver / heartbeats
+     deliver /           │                                              │  deliver /
+     store_relay /       │                                              │  store_relay /
+     heartbeats          │                                              │  heartbeats
    ┌─────────────────────┴──────────┐                     ┌─────────────┴──────────────────┐
    │ service party (nsm publish)    │                     │ client party (nsm claim)       │
    │ Session + PartyHandler         │ ◄── data traffic ── │ Session + PartyHandler         │
    │ listener on the bind port      │   (not NSM's job)   │ listener on the bind port      │
    └─────────────────────▲──────────┘                     └─────────────▲──────────────────┘
-                         │ send / collect                               │ send / collect / peer
+                         │ send / collect /                             │ send / collect /
+                         │ store                                        │ peer / store
                     operator, script, or `nsm serve` (REST control plane) driving `ops`
 ```
 
 - The **broker** is the only fixed address. It admits registrations, pairs
-  clients with services, monitors liveness and relays short texts. It never
-  sees the service's own traffic.
+  clients with services, monitors liveness, relays short texts and keeps the
+  one copy of the store each claim shares. It never sees the service's own
+  traffic.
 - A **party** is a service or a client. Both run the same small server on
-  their bind address, keep the last text they were sent and relay `send` to
-  their peer through the broker; a client also keeps the service it is
-  paired with.
+  their bind address, keep the last text they were sent, relay `send` to
+  their peer through the broker and relay `store` to the broker; a client
+  also keeps the service it is paired with. A party keeps nothing of the
+  store.
 - **Operations** (`ops`) are the verbs, written once, without printing. The
   CLI (`main`) and the REST control plane (`rest`) are two front-ends for
   them.
@@ -51,7 +57,7 @@ One library crate, `nsm`, and one binary of the same name built from
 | `protocol` | the tagged `Message` enum, the records it carries, JSON encoding and the length-prefixed `MessageCodec` for streams |
 | `tls` | rustls server and client configuration from PEM files; the trust model in one place; crypto provider selection |
 | `transport` | one request, one reply over TCP, TLS, HTTP or HTTPS behind the `Handler` trait, `serve()` and `Client::call()` |
-| `broker` | `Registry` (pure, synchronous state), `Broker` (monitor tasks and removal), `BrokerHandler` (admission and dispatch), `listen()` |
+| `broker` | `Registry` (pure, synchronous state), `Store` (the key-value store each claim shares with its service), `Broker` (monitor tasks and removal), `BrokerHandler` (admission and dispatch), `listen()` |
 | `party` | `Session` (bind, register, stay alive), `PartyHandler`, `PartyState` |
 | `ops` | typed requests and results for every operation |
 | `rest` | the axum control plane behind `nsm serve`: routes, jobs, bearer token |
@@ -121,14 +127,31 @@ reply. `codec::MessageCodec` is the tokio-util `Encoder`/`Decoder` for the
 4-byte length prefix used on streams; `encode`/`decode` are the JSON functions
 both transports use. `types` holds `PartyId`, `Key`, `RegToken` (a 128-bit
 secret with constant-time comparison and a redacted `Debug`), `ServiceHandle`
-(what a client is told about its service) and the broker's records.
+(what a client is told about its service), the broker's records, and the
+shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
+`StoreEntry` and `Stored` (the reply to every store operation).
 
 ### Broker (`broker`)
 
 - `registry.rs` is the model: services, clients, who holds whom, what is
-  pending for whom. It is synchronous, does no I/O, never reads the clock
-  (callers pass `now`), and is exhaustively unit-tested. Ids come from one
-  counter that never repeats.
+  pending for whom, and one store per claim. It is synchronous, does no I/O,
+  never reads the clock (callers pass `now`), and is exhaustively
+  unit-tested. Ids come from one counter that never repeats, and store
+  versions from another. A claim's store lives in the client's entry:
+  `claim` creates it empty, `reclaim` leaves it in place so the replacement
+  service reads every earlier write, and removing the client drops it, so
+  `remove`, `reclaim` and `drop_party` need no store code at all.
+  `Registry::store` finds the store the way `deliver` finds the peer: a
+  client uses its own, also while orphaned; a service uses the store of the
+  client holding it, and a service nobody holds reads an empty store and may
+  not write.
+- `store.rs` is `Store`: a key-value map with a byte budget, pure like the
+  registry. Each entry counts as its JSON-encoded key and value plus 64
+  bytes, which bounds the largest `stored` reply as well as memory; write
+  numbers come from the registry's counter, passed in; a put or a delete
+  may carry an `if_version`, compared first, and one that does not match is
+  an answer with `applied` false that changes nothing; `Debug` shows counts
+  only.
 - `monitor.rs` is `Broker`: the registry behind its mutex, one heartbeat task
   per two-sided party (`watch`), a sweeper task for ping-mode parties, and
   the single removal path `drop_party`, which also re-pairs or removes the
@@ -136,8 +159,11 @@ secret with constant-time comparison and a redacted `Debug`), `ServiceHandle`
   for status output and tests.
 - `handler.rs` is `BrokerHandler`: admission (a real port, the optional
   matching-host check, the per-host cap) and one `match` over the request
-  variants, written once for every transport.
-- `listen.rs` wires the three together with a transport listener.
+  variants, written once for every transport. A relayed request (`deliver`,
+  `store_relay`) checks the sender's token and acts on the registry in one
+  critical section.
+- `listen.rs` wires the three together with a transport listener, after
+  checking that a full store's reply fits the frame limit.
 
 ### Party (`party`)
 
@@ -149,9 +175,14 @@ broker's heartbeats stop for `broker_watchdog`; in ping mode a loop that
 pings every `heartbeat_interval`, applies what the broker returns, and gives
 up after `fail_threshold` failures or when the broker no longer knows the
 party. `PartyHandler` answers the broker's `Heartbeat` (only with the party's
-own token), `Collect`, and `Send` (relayed to the broker as `Deliver`).
-`PartyState` is the shared state: id, token, inbox, paired service, last
-contact. The pairing sits in a `tokio::sync::watch` channel:
+own token), `Collect`, `Send` (relayed to the broker as `Deliver`) and
+`Store` (relayed to the broker as `StoreRelay`, whose `Stored` reply goes
+back to the caller unchanged). Both relays go through one helper that
+refuses before registration and adds the party's id and token, so the two
+cannot drift apart; either role relays either request, and the broker
+decides who the peer is and whose store it is. `PartyState` is the shared
+state: id, token, inbox, paired service, last contact; nothing of the store
+lives at a party. The pairing sits in a `tokio::sync::watch` channel:
 `Session::pairings` hands out receivers, which is how `nsm claim` prints
 every re-pairing as one more stdout line instead of keeping the new address
 to itself.
@@ -162,23 +193,52 @@ to itself.
 the crypto provider and the signal handler, runs one operation, prints its
 result to stdout and maps `Err` to exit code 1 with an `nsm: ` message on
 stderr (clap's own usage errors exit 2; a party that answered but has nothing
-to report yet, for `collect` and `peer`, is exit 3). `peer` and `collect` are
-the two accessors of `ops::Collected`, one per role; the binary adds no
-logic of its own. `rest` serves the same operations
-over HTTP: `publish` and `claim` become background jobs with a view the API
-reports, cancels and reaps; a bearer token guards every route when one is
-configured, and it is mandatory off loopback.
+to report yet, for `collect`, `peer` and `store get` of a key that is not
+set, is exit 3, and a `store put` or `store delete` is exit 4 when a
+condition was not met: its `--if-version` did not match, which is an answer,
+not an `Error`). Every stdout line goes through one writer that reports a
+closed pipe as an error, so a reader that went away is exit 1, not a panic;
+`claim` exits 1 only when its first line cannot be written, and after that a
+failed re-pairing line stops the printing but not the party.
+`peer` and `collect` are the two accessors of `ops::Collected`, one per role;
+the binary adds no logic of its own. `ops::store` takes a `StoreOp` to either
+party and returns the broker's `Stored` as it is (a key that is not set is an
+answer with no entry, a write whose condition was not met an answer with
+`applied` false, a refusal is `Error::Rejected`), so the command line
+and the control plane need no store logic of their own either: `nsm store`
+gets the party and the `StoreOp` from `StoreCommand::into_parts` and only
+prints (the value, the new version, the keys, or with `--json` the reply as
+one line), and `POST /v1/store` returns the reply as its body, with status
+409 and an `error` field when `applied` is false. `rest` serves
+the same operations over HTTP: `publish` and `claim` become background jobs
+with a view the API reports, cancels and reaps; a bearer token guards every
+route when one is configured, and it is mandatory off loopback.
 
 ## 5. Configuration
 
 All tunables live in `config`: `Timing` (heartbeat interval and timeout,
 failure threshold, ping staleness, broker watchdog, request and connect
 timeouts, registration retries, claim wait), `Limits` (frame size,
-concurrent connections, registrations), `BrokerPolicy` (matching-host check,
-per-host cap) and `TlsPaths`. Defaults are documented on the types and
-overridable from the CLI (`TimingOpts`, `LimitsOpts`, `BrokerOpts`,
-`TlsOpts`); `Timing::fast()` scales everything down for tests. Broker and
-parties should run with the same timing values.
+concurrent connections, registrations, store budget), `BrokerPolicy`
+(matching-host check, per-host cap) and `TlsPaths`. Defaults are documented
+on the types and overridable from the CLI (`TimingOpts`, `LimitsOpts`,
+`BrokerOpts`, `TlsOpts`); `Timing::fast()` scales everything down for tests.
+Broker and parties should run with the same timing values.
+
+Two limits only matter at a broker: `max_registrations` and
+`max_store_bytes` (`--max-store-bytes`, default 16384, allowed 256 to
+32768). `serve` accepts both with the other limits and ignores them.
+`listen` refuses to start, with a configuration error naming both flags,
+when a full store's reply (the budget plus 1024 bytes) would not fit its own
+`--max-frame-bytes`, so a broker needs a frame limit of at least 1280 bytes
+(17408 with the default budget). Parties use the default 64 KiB frame, which every
+allowed budget fits. `nsm serve` uses its `--max-frame-bytes` for the parties
+it starts and for every reply it reads itself, so lowering it below a store's
+reply size breaks large replies there: at those parties, and as a 400 from
+`POST /v1/store`. There is at most one store per client, and every
+client holds a distinct service, so at most `max_registrations / 2` stores
+exist: about 80 MiB of accounted store bytes with the defaults, and at most
+64 stores for the parties of one host under the default per-host cap.
 
 ## 6. Security model
 
@@ -194,6 +254,18 @@ parties should run with the same timing values.
   plaintext fallback, and TLS configuration checked before dialling. Mutual
   TLS and authorisation of `publish`/`claim` by identity are the listed
   follow-ups.
+- **The shared store follows the claim.** Only a relay carrying a
+  registered party's own token reaches a store, and only the store of that
+  party's claim: the client's, or the one of the client holding the service
+  at that instant. A removed party fails the token check, an unclaimed
+  service can write nothing, and the next claimer of a service never sees
+  the previous claim's data. The operator presents no token: **a party's
+  listener is the capability**. Anyone who can reach a party's bind address
+  can read and write its store through it, as with `send` and `collect`, and
+  TLS on that listener encrypts but does not authenticate callers (mutual
+  TLS is a listed follow-up). The store is not a place for secrets. Store
+  keys and values are never logged, and a `Store`'s `Debug` shows counts
+  only.
 - **The control plane** binds loopback by default, requires a bearer token
   elsewhere, takes no file paths from requests and limits body sizes.
 - **Resource bounds** everywhere: frame sizes, connection counts, request
@@ -206,13 +278,20 @@ parties should run with the same timing values.
 | a two-sided party stops answering | removed after `fail_threshold` failed heartbeats (each bounded by `heartbeat_timeout`); an acknowledgement resets the count |
 | a ping-mode party falls silent | removed once its last contact is older than `ping_staleness` |
 | a service is removed | each of its clients is re-paired with an unclaimed service of the same key and told in its next heartbeat; a client with no replacement is removed |
-| a client is removed | its service becomes unclaimed |
+| a service is removed, the client re-paired | the claim's store stays where it is: the client keeps using it while orphaned, and the replacement reads every earlier write, the dead service's included, with versions continuing |
+| a client is removed | its service becomes unclaimed; the claim's store is dropped, and the next claim of that service starts with an empty one |
+| a store relay arrives from a removed party | refused with `unknown party or wrong token`, as its token no longer verifies |
+| a put does not fit the store's budget | refused with `store full: ...`; the store is unchanged |
 | a party stops hearing its broker | `Session::run` returns `Err(BrokerLost)`; the process exits 1 |
 | a heartbeat's payload cannot be delivered | the pending inbox text or pairing is restored and carried by the next heartbeat |
 | the broker shuts down | every connection and task is cancelled; parties notice through their watchdog |
 
 Text delivery is "last message wins" per party: a second `send` before the
-receiving party's next heartbeat replaces the first.
+receiving party's next heartbeat replaces the first. The store is "last
+writer wins" per key unless a write states an `if_version`, which the broker
+compares in the same critical section that applies the write, and it lives
+in broker memory only: a broker restart loses every store with every
+registration.
 
 ## 8. Errors
 
@@ -227,16 +306,19 @@ misconfiguration; registration retries only on the former.
 ## 9. Tests
 
 - **Unit tests** next to the code, including randomized ones driven by the
-  seeded generator in `testing.rs` (address grammar, framing) and scripted
-  peers for the monitor's decisions.
+  seeded generator in `testing.rs` (address grammar, framing, store keys, the
+  store's byte accounting, a churn of claims and store operations checked
+  against a model) and scripted peers for the monitor's decisions.
 - **`tests/e2e.rs`**: a broker with services and clients in one process on
   ephemeral loopback ports, over all four transports, with `Timing::fast()`
-  and generated certificates.
+  and generated certificates, including the shared store across
+  re-pairings, the end of a claim, ping mode and concurrent writers.
 - **`tests/rest.rs`**: every control-plane route, the job lifecycle, status
   mapping and the token.
 - **`tests/cli.rs`**: the built binary: parsing, exit codes, stdout/stderr
-  discipline, complete sessions, SIGTERM.
-- **`tests/stress.rs`** (`--ignored`): 50 services and 50 clients, churn.
+  discipline, a closed stdout, complete sessions with the store, SIGTERM.
+- **`tests/stress.rs`** (`--ignored`): 50 services and 50 clients, text and
+  store traffic, churn.
 - CI enforces formatting, clippy for both providers, rustdoc, cargo-deny,
   cargo-machete, a Docker build and a line-coverage floor.
 
@@ -255,7 +337,9 @@ cite them by number (`decision D7` in the registry, `D9` in the control
 plane, `D10` in the TLS module). Each is a fact about the current code. D13
 to D16 come from the peer-address and two-way text plan of September 2026
 ([`history/2026-peer-text/`](history/2026-peer-text/PLAN.md)), where they
-are decisions P1 to P10.
+are decisions P1 to P10; D17 to D20 from the shared-store plan of the same
+month ([`history/2026-shared-store/`](history/2026-shared-store/PLAN.md)),
+where they are decisions S1 to S12.
 
 | # | Decision |
 |---|---|
@@ -273,8 +357,12 @@ are decisions P1 to P10.
 | D12 | Edition 2024 and `rust-version = "1.88"`, the minimum the current dependencies need; CI builds and tests on that toolchain as well as on stable. |
 | D13 | A party's `Role` is a protocol type (`service` / `client`), and the reply to `collect` names it, so a reply says which of its fields apply instead of leaving the asker to guess; `ops::Collected` is an enum keyed by the role. Protocol version 2. |
 | D14 | A client's pairing is a `tokio::sync::watch` channel (`Session::pairings`), not a slot: `nsm claim` prints one stdout line per pairing, the first at registration and one more each time the broker re-pairs it, so the last line is always the current service. |
-| D15 | One verb per question: `nsm peer` prints a client's paired service and nothing else, `nsm collect` a party's last text and nothing else; asking a service for its peer is `Error::WrongRole`. A party that answered but has nothing to report yet is exit status 3 (1 is a failed operation, 2 a usage error). The control plane needs no `peer` route, since `POST /v1/collect` is typed. |
+| D15 | One verb per question: `nsm peer` prints a client's paired service and nothing else, `nsm collect` a party's last text and nothing else; asking a service for its peer is `Error::WrongRole`. A party that answered but has nothing to report yet is exit status 3, and a `store put` or `store delete` whose `--if-version` did not match (answered, nothing changed) is exit status 4 (1 is a failed operation, 2 a usage error). The control plane needs no `peer` route, since `POST /v1/collect` is typed. |
 | D16 | Text flows both ways through one inbox per party: `send` at either party is relayed as a `deliver` that names no target, and the broker delivers to the sender's peer as it knows it (a client's current service, the client holding a service), so a text that races a re-pairing reaches the new service. Last text wins; a client's pending text survives a re-pairing. Protocol version 3. |
+| D17 | A client and the service holding it share one key-value store, kept by the broker in the client's registry entry: created empty by `claim`, kept across re-pairings (so a replacement service reads what the dead one wrote), dropped when the client is removed. Parties keep no copy: each relays its request to the broker with its token (`store` becomes `store_relay`, as `send` becomes `deliver`), and the broker resolves whose store it is. The client always has access; a service only while it holds the claim, so an unclaimed service reads an empty store (`client: null`) and its writes are refused. |
+| D18 | Four operations: get, put, delete (idempotent) and list (one atomic snapshot of every entry). Versions come from one broker-wide counter, like party ids, so a version names one write for the broker's whole life and never repeats across claims; the `stored` reply names the store (`client`, `revision`). |
+| D19 | Store keys are one shell word (1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`), checked by `StoreKey` on parse and on decode; values are any text. One limit, `--max-store-bytes` per store (default 16384, 256 to 32768), counted in JSON-encoded bytes so that a full store's reply is bounded too; `listen` refuses a budget whose reply would not fit its frame limit. The store messages were new variants, so the protocol stays at version 3. |
+| D20 | One command group, `nsm store get\|put\|delete\|list` (with `--json`), and one route, `POST /v1/store`. A put or delete may carry `if_version` (0: the key must be absent); a mismatch is an answer, not a failure: `applied: false` with the current entry, exit status 4, HTTP 409. Nothing is pushed or persisted: heartbeats carry no store data, and the store lives in broker memory for the claim's lifetime. |
 
 ## 12. History
 
@@ -289,3 +377,9 @@ The September 2026 work on the client side, recorded under
 [`history/2026-peer-text/`](history/2026-peer-text/PLAN.md), gave scripts a
 reliable way to the paired service's address (`nsm peer`, one `claim` line
 per pairing) and let text flow both ways; its decisions are D13 to D16.
+
+The shared store of the same month, recorded under
+[`history/2026-shared-store/`](history/2026-shared-store/PLAN.md), gave a
+client and the service holding it a key-value store at the broker (`nsm
+store`, `POST /v1/store`), with conditional writes; its decisions are D17 to
+D20.

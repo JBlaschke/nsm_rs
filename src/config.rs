@@ -90,6 +90,12 @@ pub struct Limits {
     pub max_connections: usize,
     /// Registrations (services plus clients) a broker holds at once.
     pub max_registrations: usize,
+    /// Budget of the store each claim shares with its service, in accounted
+    /// bytes: every entry counts as its JSON-encoded key and value plus
+    /// [`ENTRY_OVERHEAD`](crate::broker::store::ENTRY_OVERHEAD). Like
+    /// `max_registrations` it only matters at a broker, which refuses to
+    /// start unless a full store's reply fits `max_frame_bytes`.
+    pub max_store_bytes: usize,
 }
 
 impl Default for Limits {
@@ -98,6 +104,7 @@ impl Default for Limits {
             max_frame_bytes: 64 * 1024,
             max_connections: 1024,
             max_registrations: 10_000,
+            max_store_bytes: 16 * 1024,
         }
     }
 }
@@ -194,5 +201,9 @@ mod tests {
         let l = Limits::default();
         assert!(l.max_frame_bytes >= 16 * 1024);
         assert!(l.max_connections > 0 && l.max_registrations > 0);
+        assert!(
+            l.max_store_bytes + crate::broker::store::REPLY_OVERHEAD <= l.max_frame_bytes,
+            "a full store's reply fits the default frame"
+        );
     }
 }

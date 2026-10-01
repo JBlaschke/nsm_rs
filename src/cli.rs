@@ -4,6 +4,9 @@
 //! request types of the REST control plane, so the CLI and the API share one
 //! definition and one set of validation rules.
 //!
+//! `store` is a group of four subcommands ([`StoreCommand`]), one per
+//! operation on the store a client shares with its service.
+//!
 //! The transport is taken from the peer address: `host:port` is raw TCP,
 //! `http://host:port` and `https://host:port` are HTTP. `listen` and `serve`
 //! have no peer address and take `--transport` instead.
@@ -16,6 +19,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, Selector, Transport};
+use crate::protocol::{StoreKey, StoreOp};
 
 /// NERSC Service Mesh: publish, claim and broker services across HPC systems.
 #[derive(Debug, Parser)]
@@ -170,15 +174,23 @@ impl TimingOpts {
 /// default from [`Limits`].
 #[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
 pub struct LimitsOpts {
-    /// Largest message accepted on any transport, in bytes (at least 1024).
+    /// Largest message accepted on any transport, in bytes (at least 1024;
+    /// `listen` needs at least `--max-store-bytes` plus 1024, which is 17408
+    /// with the default store budget and never less than 1280).
     #[arg(long, value_name = "BYTES", value_parser = clap::value_parser!(u64).range(1024..))]
     pub max_frame_bytes: Option<u64>,
     /// Connections a listener serves concurrently.
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_connections: Option<u64>,
-    /// Registrations (services plus clients) a broker holds at once.
+    /// Registrations (services plus clients) a broker holds at once
+    /// (broker only; no effect on `serve`).
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_registrations: Option<u64>,
+    /// Budget of each claim's shared store, counting every entry as its
+    /// JSON-encoded key and value plus 64 bytes (256 to 32768, default
+    /// 16384; broker only, no effect on `serve`).
+    #[arg(long, value_name = "BYTES", value_parser = clap::value_parser!(u64).range(256..=32768))]
+    pub max_store_bytes: Option<u64>,
 }
 
 impl LimitsOpts {
@@ -193,6 +205,9 @@ impl LimitsOpts {
         }
         if let Some(v) = self.max_registrations {
             l.max_registrations = usize::try_from(v).unwrap_or(usize::MAX);
+        }
+        if let Some(v) = self.max_store_bytes {
+            l.max_store_bytes = usize::try_from(v).unwrap_or(usize::MAX);
         }
         l
     }
@@ -377,6 +392,14 @@ pub enum Command {
         timing: TimingOpts,
     },
 
+    /// Read and write the store a client shares with its service, through
+    /// either party.
+    Store {
+        /// The operation.
+        #[command(subcommand)]
+        op: StoreCommand,
+    },
+
     /// Run the REST control plane that exposes the operations above over HTTP.
     Serve {
         /// Address to bind. Loopback by default; binding anything else
@@ -397,6 +420,151 @@ pub enum Command {
         #[command(flatten)]
         limits: LimitsOpts,
     },
+}
+
+/// The operations of `nsm store`. `PARTY` is either party's heartbeat
+/// address: the client's or its service's, which share one store; `KEY` is a
+/// store key, unrelated to the rendezvous `--key`.
+#[derive(Debug, Subcommand)]
+pub enum StoreCommand {
+    /// Print the value stored under a key (exit 3 when the key is not set).
+    Get {
+        /// Either party's heartbeat address.
+        party: Addr,
+        /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
+        /// starting with -.
+        key: StoreKey,
+        /// Print the broker's reply as one line of JSON instead.
+        #[arg(long)]
+        json: bool,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+
+    /// Store a value under a key, replacing what was there, and print the
+    /// write's version (exit 4 when --if-version does not match).
+    Put {
+        /// Either party's heartbeat address.
+        party: Addr,
+        /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
+        /// starting with -.
+        key: StoreKey,
+        /// The value: any text, including empty text.
+        #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+        value: String,
+        /// Write only if the key is at version N (0: only if it is not set);
+        /// otherwise change nothing and exit 4.
+        #[arg(long, value_name = "N")]
+        if_version: Option<u64>,
+        /// Print the broker's reply as one line of JSON instead.
+        #[arg(long)]
+        json: bool,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+
+    /// Remove a key; succeeds whether or not it was set (exit 4 when
+    /// --if-version does not match).
+    Delete {
+        /// Either party's heartbeat address.
+        party: Addr,
+        /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
+        /// starting with -.
+        key: StoreKey,
+        /// Remove only if the key is at version N (0: only if it is not
+        /// set); otherwise change nothing and exit 4.
+        #[arg(long, value_name = "N")]
+        if_version: Option<u64>,
+        /// Print the broker's reply as one line of JSON.
+        #[arg(long)]
+        json: bool,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+
+    /// Print every key in the store, one per line.
+    List {
+        /// Either party's heartbeat address.
+        party: Addr,
+        /// Print the broker's reply, with every value, as one line of JSON
+        /// instead.
+        #[arg(long)]
+        json: bool,
+        /// TLS options.
+        #[command(flatten)]
+        tls: TlsOpts,
+        /// Timing overrides.
+        #[command(flatten)]
+        timing: TimingOpts,
+    },
+}
+
+impl StoreCommand {
+    /// The request as the operations layer takes it: the party to ask, the
+    /// operation, the TLS and timing options, and whether to print the reply
+    /// as JSON.
+    pub fn into_parts(self) -> (Addr, StoreOp, TlsOpts, TimingOpts, bool) {
+        match self {
+            StoreCommand::Get {
+                party,
+                key,
+                json,
+                tls,
+                timing,
+            } => (party, StoreOp::Get { key }, tls, timing, json),
+            StoreCommand::Put {
+                party,
+                key,
+                value,
+                if_version,
+                json,
+                tls,
+                timing,
+            } => (
+                party,
+                StoreOp::Put {
+                    key,
+                    value,
+                    if_version,
+                },
+                tls,
+                timing,
+                json,
+            ),
+            StoreCommand::Delete {
+                party,
+                key,
+                if_version,
+                json,
+                tls,
+                timing,
+            } => (
+                party,
+                StoreOp::Delete { key, if_version },
+                tls,
+                timing,
+                json,
+            ),
+            StoreCommand::List {
+                party,
+                json,
+                tls,
+                timing,
+            } => (party, StoreOp::List, tls, timing, json),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -469,6 +637,178 @@ mod tests {
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
+    fn store(args: &[&str]) -> (Addr, StoreOp, TlsOpts, TimingOpts, bool) {
+        match parse(&[&["store"], args].concat()).command {
+            Command::Store { op } => op.into_parts(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn store_key(text: &str) -> StoreKey {
+        text.parse().unwrap_or_else(|e| panic!("{text:?}: {e}"))
+    }
+
+    #[test]
+    fn store_subcommands_become_store_ops() {
+        let (party, op, tls, timing, json) = store(&["get", "10.0.0.9:41232", "input/path"]);
+        assert_eq!(party.to_string(), "10.0.0.9:41232");
+        assert_eq!(
+            op,
+            StoreOp::Get {
+                key: store_key("input/path")
+            }
+        );
+        assert!(!tls.tls && !json);
+        assert_eq!(timing.timing(), Timing::default());
+
+        let (party, op, _, timing, json) = store(&[
+            "put",
+            "http://10.0.0.7:41231",
+            "step",
+            "--value",
+            "5",
+            "--json",
+            "--request-timeout",
+            "2",
+        ]);
+        assert_eq!(party.to_string(), "http://10.0.0.7:41231");
+        assert_eq!(
+            op,
+            StoreOp::Put {
+                key: store_key("step"),
+                value: "5".into(),
+                if_version: None,
+            }
+        );
+        assert!(json);
+        assert_eq!(timing.timing().request_timeout, Duration::from_secs(2));
+
+        let (_, op, _, _, json) = store(&["delete", "c:1", "step", "--json"]);
+        assert_eq!(
+            op,
+            StoreOp::Delete {
+                key: store_key("step"),
+                if_version: None,
+            }
+        );
+        assert!(json);
+
+        let (_, op, tls, _, json) = store(&["list", "c:1", "--root-ca", "/ca.pem"]);
+        assert_eq!(op, StoreOp::List);
+        assert!(!json);
+        assert_eq!(
+            tls.root_ca.as_deref(),
+            Some(std::path::Path::new("/ca.pem"))
+        );
+    }
+
+    #[test]
+    fn if_version_makes_put_and_delete_conditional() {
+        let (_, op, _, _, _) = store(&["put", "c:1", "step", "--value", "6", "--if-version", "5"]);
+        assert_eq!(
+            op,
+            StoreOp::Put {
+                key: store_key("step"),
+                value: "6".into(),
+                if_version: Some(5),
+            }
+        );
+        let (_, op, _, _, json) = store(&["delete", "c:1", "step", "--if-version", "0", "--json"]);
+        assert_eq!(
+            op,
+            StoreOp::Delete {
+                key: store_key("step"),
+                if_version: Some(0),
+            }
+        );
+        assert!(json);
+        let max = u64::MAX.to_string();
+        let (_, op, _, _, _) = store(&["put", "c:1", "k", "--if-version", &max, "--value", ""]);
+        assert_eq!(op.if_version(), Some(u64::MAX));
+
+        for bad in [
+            &[
+                "store",
+                "put",
+                "c:1",
+                "k",
+                "--value",
+                "v",
+                "--if-version",
+                "-1",
+            ][..],
+            &[
+                "store",
+                "put",
+                "c:1",
+                "k",
+                "--value",
+                "v",
+                "--if-version",
+                "x",
+            ],
+            &["store", "delete", "c:1", "k", "--if-version"],
+            &[
+                "store",
+                "delete",
+                "c:1",
+                "k",
+                "--if-version",
+                "18446744073709551616",
+            ],
+            // Reads take no condition.
+            &["store", "get", "c:1", "k", "--if-version", "1"],
+            &["store", "list", "c:1", "--if-version", "1"],
+        ] {
+            let err =
+                Cli::try_parse_from(std::iter::once("nsm").chain(bad.iter().copied())).unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn store_put_takes_any_value_including_hyphens_and_empty_text() {
+        for value in ["-5", "--json", "", "two words", "line\nbreak"] {
+            let (_, op, _, _, json) = store(&["put", "c:1", "step", "--value", value]);
+            assert_eq!(
+                op,
+                StoreOp::Put {
+                    key: store_key("step"),
+                    value: value.into(),
+                    if_version: None,
+                },
+                "{value:?}"
+            );
+            assert!(!json, "{value:?} is the value, not a flag");
+        }
+        let err = Cli::try_parse_from(["nsm", "store", "put", "c:1", "step"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert!(err.to_string().contains("--value"), "{err}");
+    }
+
+    #[test]
+    fn an_invalid_store_key_is_a_usage_error() {
+        for bad in ["", "two words", "-x", "a*b", "ü"] {
+            let err = Cli::try_parse_from(["nsm", "store", "get", "c:1", bad]).unwrap_err();
+            assert!(
+                matches!(
+                    err.kind(),
+                    clap::error::ErrorKind::ValueValidation
+                        | clap::error::ErrorKind::UnknownArgument
+                ),
+                "{bad:?}: {err}"
+            );
+            assert_eq!(err.exit_code(), 2, "{bad:?}");
+        }
+        let err = Cli::try_parse_from(["nsm", "store", "get", "c:1", "a*b"]).unwrap_err();
+        assert!(err.to_string().contains("a store key is"), "{err}");
+        for missing in [&["store", "get", "c:1"][..], &["store", "list"], &["store"]] {
+            let err = Cli::try_parse_from(std::iter::once("nsm").chain(missing.iter().copied()))
+                .unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{missing:?}");
+        }
+    }
+
     #[test]
     fn old_snake_case_names_still_work() {
         assert!(matches!(
@@ -529,6 +869,8 @@ mod tests {
             "3",
             "--max-frame-bytes",
             "4096",
+            "--max-store-bytes",
+            "2048",
             "--require-matching-host",
             "--max-registrations-per-host",
             "5",
@@ -546,6 +888,11 @@ mod tests {
                 assert_eq!(t.fail_threshold, 3);
                 assert_eq!(t.request_timeout, Timing::default().request_timeout);
                 assert_eq!(limits.limits().max_frame_bytes, 4096);
+                assert_eq!(limits.limits().max_store_bytes, 2048);
+                assert_eq!(
+                    limits.limits().max_registrations,
+                    Limits::default().max_registrations
+                );
                 let p = policy.policy();
                 assert!(p.require_matching_host);
                 assert_eq!(p.max_registrations_per_host, 5);
@@ -557,6 +904,8 @@ mod tests {
             &["listen", "--bind-port", "1", "--heartbeat-interval", "soon"],
             &["listen", "--bind-port", "1", "--max-frame-bytes", "10"],
             &["listen", "--bind-port", "1", "--fail-threshold", "0"],
+            &["listen", "--bind-port", "1", "--max-store-bytes", "255"],
+            &["listen", "--bind-port", "1", "--max-store-bytes", "32769"],
         ] {
             let err =
                 Cli::try_parse_from(std::iter::once("nsm").chain(bad.iter().copied())).unwrap_err();
@@ -565,6 +914,35 @@ mod tests {
                 clap::error::ErrorKind::ValueValidation,
                 "{bad:?}"
             );
+        }
+    }
+
+    #[test]
+    fn max_store_bytes_accepts_its_whole_range() {
+        for (given, expected) in [
+            (None, 16 * 1024),
+            (Some("256"), 256),
+            (Some("32768"), 32768),
+        ] {
+            let mut args = vec!["listen", "--bind-port", "1"];
+            args.extend(
+                given
+                    .map(|v| ["--max-store-bytes", v])
+                    .into_iter()
+                    .flatten(),
+            );
+            match parse(&args).command {
+                Command::Listen { limits, .. } => {
+                    assert_eq!(limits.limits().max_store_bytes, expected, "{given:?}")
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        // `serve` accepts it with the other limits and ignores it; only a
+        // broker has stores.
+        match parse(&["serve", "--max-store-bytes", "1024"]).command {
+            Command::Serve { limits, .. } => assert_eq!(limits.limits().max_store_bytes, 1024),
+            other => panic!("{other:?}"),
         }
     }
 

@@ -18,6 +18,8 @@ use crate::protocol::{Key, Message, Role, ServiceHandle};
 use crate::transport::Client;
 use crate::{Error, Result};
 
+pub use crate::protocol::{StoreEntry, StoreKey, StoreOp, Stored};
+
 /// Names of the interfaces carrying an address of the given family (any
 /// family when `None`).
 pub fn list_interfaces(version: Option<IpVersion>) -> Result<Vec<String>> {
@@ -249,6 +251,38 @@ pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
     }
 }
 
+/// Apply `op` to the store a party shares with its peer, through the party
+/// at `party` (its heartbeat address, of either role), which relays it to the
+/// broker with its token.
+///
+/// The answer names the claim's client and carries what the operation
+/// returns; a key that is not set is an answer with no entry, not an error.
+/// So is a put or a delete whose `if_version` did not match: the answer has
+/// `applied: false` and the key's current entry, or none when it is not set.
+/// A refusal (the party is not registered yet, a service nobody holds tried
+/// to write, the store is full, the party's registration is gone) is an
+/// [`Error::Rejected`] with the reason.
+///
+/// Only a write that stated a condition can miss, so an answer with
+/// `applied: false` to any other operation is an [`Error::Protocol`]: the
+/// front-ends can then read `applied: false` as "the condition did not
+/// hold" without checking what was asked.
+pub async fn store(party: &Addr, op: StoreOp, net: &NetOpts) -> Result<Stored> {
+    let kind = op.kind();
+    let conditional = op.if_version().is_some();
+    match net.client().call(party, Message::Store { op }).await? {
+        Message::Stored(stored) if !stored.applied && !conditional => Err(Error::protocol(
+            format!("the {kind} was answered as not applied although it stated no condition"),
+        )),
+        Message::Stored(stored) => Ok(stored),
+        Message::Nack { reason } => Err(Error::Rejected(reason)),
+        other => Err(Error::protocol(format!(
+            "store answered with {}",
+            other.kind()
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +357,104 @@ mod tests {
             Err(Error::WrongRole { role, .. }) => assert_eq!(role, Role::Service),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn store_maps_a_nack_to_rejected_and_other_replies_to_protocol_errors() {
+        use crate::transport::testing::{Echo, PeerReporter, start};
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let net = NetOpts {
+                timing: Timing::fast(),
+                ..NetOpts::default()
+            };
+            // A listener that answers every request with a nack.
+            let (server, _, _) = start(Transport::Tcp, PeerReporter).await;
+            let err = store(&server.bound(), StoreOp::List, &net)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, Error::Rejected(_)), "{err}");
+            server.shutdown().await;
+            // A listener that echoes the request: `store` is not an answer.
+            let (server, _, _) = start(Transport::Tcp, Echo).await;
+            let err = store(&server.bound(), StoreOp::List, &net)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Protocol(text) if text == "store answered with store"),
+                "{err}"
+            );
+            server.shutdown().await;
+        })
+        .await
+        .expect("the test finished in time");
+    }
+
+    /// A party stand-in that answers every store request with `applied:
+    /// false`, whatever it asked.
+    struct NeverApplies;
+
+    impl crate::transport::Handler for NeverApplies {
+        async fn handle(&self, msg: Message, _peer: crate::transport::PeerInfo) -> Result<Message> {
+            Ok(match msg {
+                Message::Store { .. } => Message::Stored(Stored {
+                    client: Some(PartyId(2)),
+                    revision: 9,
+                    applied: false,
+                    entries: vec![],
+                }),
+                other => Message::nack(format!("unexpected {} at the script", other.kind())),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_conditional_write_may_be_answered_as_not_applied() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let (server, _client, _certs) =
+                crate::transport::testing::start(Transport::Tcp, NeverApplies).await;
+            let net = NetOpts {
+                timing: Timing::fast(),
+                ..NetOpts::default()
+            };
+            let key = crate::protocol::message::store_key;
+            let put = |if_version| StoreOp::Put {
+                key: key("step"),
+                value: "5".into(),
+                if_version,
+            };
+            let delete = |if_version| StoreOp::Delete {
+                key: key("step"),
+                if_version,
+            };
+
+            // A miss is how a conditional write is answered.
+            for op in [put(Some(0)), put(Some(7)), delete(Some(0)), delete(Some(7))] {
+                let what = format!("{op:?}");
+                let stored = store(&server.bound(), op, &net).await.expect(&what);
+                assert!(!stored.applied, "{what}");
+            }
+            // Any other operation cannot miss, so the answer is a violation.
+            for op in [
+                StoreOp::Get { key: key("step") },
+                StoreOp::List,
+                put(None),
+                delete(None),
+            ] {
+                let kind = op.kind();
+                match store(&server.bound(), op, &net).await {
+                    Err(Error::Protocol(reason)) => assert_eq!(
+                        reason,
+                        format!(
+                            "the {kind} was answered as not applied although it stated no condition"
+                        )
+                    ),
+                    other => panic!("{kind}: {other:?}"),
+                }
+            }
+            server.shutdown().await;
+        })
+        .await
+        .expect("the test finished in time");
     }
 
     #[test]
