@@ -123,6 +123,11 @@ Dependencies are vendored (decision D1 in [`docs/ARCHITECTURE.md`](docs/ARCHITEC
 - The markdown guides in `docs/` and the README are rendered to HTML by
   `scripts/render-docs.sh` (pandoc) and published together with the rustdoc
   by the Pages workflow. Run the script locally to check a change renders.
+  Links to `.md` files become links to the rendered pages; links to other
+  repository files point at the repository, resolved against the source
+  file's directory.
+- Shell scripts under `scripts/` are POSIX `sh`; run `shellcheck -s sh` on
+  them after a change.
 
 ## License
 

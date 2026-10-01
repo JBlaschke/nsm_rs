@@ -19,7 +19,9 @@
 #
 #   docker compose --profile broker up --build
 #
-# Parties on this host then reach it at http://127.0.0.1:12000.
+# Parties on this host then reach it at http://127.0.0.1:12000. With a token
+# of your own, set both NSM_ADMIN_TOKEN_FILE (what Prometheus presents) and
+# NSM_ADMIN_TOKEN (what the profile's broker expects) to the same value.
 services:
   prometheus:
     image: docker.io/prom/prometheus:v3.15.0
@@ -39,7 +41,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: docker.io/grafana/grafana-oss:13.2.3
+    image: docker.io/grafana/grafana:13.2.3
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}

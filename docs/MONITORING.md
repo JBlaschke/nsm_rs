@@ -245,9 +245,10 @@ scrape_configs:
       - targets: ["broker.example:9108"]
 ```
 
-A scrape takes the registry lock once for the gauges and renders about 60
-lines plus 11 per histogram bucket; it is cheap at any interval Prometheus
-would use. Metric values are exact at the instant of the scrape.
+A scrape takes the registry lock once for the gauges and renders about 115
+lines (20 families, their samples, and the histogram's 11 buckets with its
+sum and count); it is cheap at any interval Prometheus would use. Metric
+values are exact at the instant of the scrape.
 
 ## Running Prometheus and Grafana locally
 
@@ -292,8 +293,10 @@ NSM_ADMIN_TOKEN_FILE=./admin-token docker compose up
 ```
 
 For a self-contained demo with nothing on the host, the `broker` profile
-builds the image and runs a broker inside the stack with the same token,
-reachable from the host at `http://127.0.0.1:12000`:
+builds the image and runs a broker inside the stack with the same token
+(`NSM_ADMIN_TOKEN`, default `change-me`; with a token of your own, set it
+and `NSM_ADMIN_TOKEN_FILE` to the same value), reachable from the host at
+`http://127.0.0.1:12000`:
 
 ```bash
 docker compose --profile broker up --build
