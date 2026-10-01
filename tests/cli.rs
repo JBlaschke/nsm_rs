@@ -5,8 +5,24 @@
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// Every spawn in this file happens under this lock. Tests run on threads
+/// of one process, and a child forked by one thread holds copies of every
+/// open file descriptor until it execs; `a_closed_stdout_exits_1_with_a_message`
+/// needs the read end of its pipe to be closed everywhere when its child
+/// writes, which a sibling's fork at the wrong moment would defeat.
+/// `Command::spawn` returns once the child has exec'd, so holding the lock
+/// across each spawn is enough; waiting for the child happens outside it.
+static SPAWN: Mutex<()> = Mutex::new(());
+
+fn spawn_lock() -> MutexGuard<'static, ()> {
+    SPAWN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 const BIN: &str = env!("CARGO_BIN_EXE_nsm");
 /// Loopback selection that works on Linux (`lo`) and macOS (`lo0`) alike.
@@ -51,7 +67,25 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let out = nsm().args(args).output().expect("nsm runs");
+    run_with_env(args, &[])
+}
+
+fn run_with_env<I, S>(args: I, env: &[(&str, &str)]) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let child = {
+        let _guard = spawn_lock();
+        nsm()
+            .args(args)
+            .envs(env.iter().copied())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("nsm runs")
+    };
+    let out = child.wait_with_output().expect("nsm exits");
     Output {
         code: out.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -99,13 +133,16 @@ impl Proc {
     }
 
     fn spawn_with_env(name: &'static str, args: &[&str], env: &[(&str, &str)]) -> Proc {
-        let mut child = nsm()
-            .args(args)
-            .envs(env.iter().copied())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn nsm");
+        let mut child = {
+            let _guard = spawn_lock();
+            nsm()
+                .args(args)
+                .envs(env.iter().copied())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn nsm")
+        };
         let stdout = pump(child.stdout.take().expect("stdout"));
         let stderr = pump(child.stderr.take().expect("stderr"));
         Proc {
@@ -195,10 +232,14 @@ impl Proc {
 
     #[cfg(unix)]
     fn terminate(&mut self) -> ExitStatus {
-        let status = Command::new("kill")
-            .args(["-TERM", &self.child.id().to_string()])
-            .status()
-            .expect("kill runs");
+        let kill = {
+            let _guard = spawn_lock();
+            Command::new("kill")
+                .args(["-TERM", &self.child.id().to_string()])
+                .spawn()
+                .expect("kill runs")
+        };
+        let status = kill.wait_with_output().expect("kill exits").status;
         assert!(status.success(), "kill -TERM failed");
         self.wait_exit()
     }
@@ -453,14 +494,20 @@ fn listing_commands_print_results_on_stdout_only() {
 /// message, not the panic (exit 101) `println!` gives on a closed pipe.
 #[test]
 fn a_closed_stdout_exits_1_with_a_message() {
-    let (reader, writer) = std::io::pipe().expect("pipe");
-    drop(reader);
-    let out = nsm()
-        .arg("list-interfaces")
-        .stdout(writer)
-        .stderr(Stdio::piped())
-        .output()
-        .expect("nsm runs");
+    let child = {
+        // Under the spawn lock, no sibling test can fork between the pipe
+        // and the drop and hand its child a copy of the read end.
+        let _guard = spawn_lock();
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        drop(reader);
+        nsm()
+            .arg("list-interfaces")
+            .stdout(writer)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("nsm runs")
+    };
+    let out = child.wait_with_output().expect("nsm exits");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(stderr.starts_with("nsm: "), "{stderr}");
@@ -1203,18 +1250,9 @@ fn status_prints_usage_statistics() {
     assert!(out.stderr.contains("--admin-token"), "{}", out.stderr);
 
     // With the token from the environment.
-    let out = nsm()
-        .args(["status", &admin])
-        .env("NSM_ADMIN_TOKEN", "adm1n")
-        .output()
-        .expect("nsm runs");
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let text = String::from_utf8_lossy(&out.stdout);
+    let out = run_with_env(["status", &admin], &[("NSM_ADMIN_TOKEN", "adm1n")]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let text = out.stdout;
     assert!(
         text.starts_with(&format!("broker {broker_addr}   nsm ")),
         "{text}"

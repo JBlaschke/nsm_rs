@@ -5,7 +5,8 @@
 //! definition and one set of validation rules.
 //!
 //! `store` is a group of four subcommands ([`StoreCommand`]), one per
-//! operation on the store a client shares with its service.
+//! operation on the store a client shares with its service. `status` is the
+//! one command that talks to a broker's admin listener instead of a party.
 //!
 //! The transport is taken from the peer address: `host:port` is raw TCP,
 //! `http://host:port` and `https://host:port` are HTTP. `listen` and `serve`

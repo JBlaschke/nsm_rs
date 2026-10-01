@@ -12,7 +12,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::broker::admin::AdminOpts;
 use crate::broker::listen::{BrokerHandle, ListenOpts, listen as start_broker};
-use crate::broker::metrics::Status;
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, LocalAddr, Selector, Transport, interfaces};
 use crate::party::{ClaimOpts, PartyOpts, PublishOpts, Session};
@@ -20,7 +19,7 @@ use crate::protocol::{Key, Message, Role, ServiceHandle};
 use crate::transport::Client;
 use crate::{Error, Result};
 
-pub use crate::broker::metrics::Status as BrokerStatus;
+pub use crate::broker::metrics::Status;
 pub use crate::protocol::{StoreEntry, StoreKey, StoreOp, Stored};
 
 /// Names of the interfaces carrying an address of the given family (any
