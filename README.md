@@ -556,8 +556,9 @@ Unit tests live next to the code; the randomized address and framing tests
 draw from a seeded generator in `src/testing.rs`, so a failure names the
 iteration that produced it. Under `tests/`, `e2e.rs` runs a broker with
 services and clients over all four transports, `rest.rs` exercises every
-control-plane route, `cli.rs` drives the built binary through complete
-sessions, and `stress.rs` is the load test. CI runs all of this on Linux and
+control-plane route, `admin.rs` checks the metrics and the status document
+against what a cluster did, `cli.rs` drives the built binary through
+complete sessions, and `stress.rs` is the load test. CI runs all of this on Linux and
 macOS with both crypto providers, plus rustfmt, clippy, rustdoc, cargo-deny,
 cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) has the details.

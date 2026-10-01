@@ -183,15 +183,17 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   router with `GET /metrics` (the exposition, as
   `text/plain; version=0.0.4`), `GET /v1/status` (`Status` as JSON) and
   `GET /healthz`, on its own `TcpListener` under the broker's shutdown
-  token. It follows D9: loopback needs no token, any other bind address
-  needs `--admin-token`, checked on every route in constant time (the
-  control plane shares the comparison). It reads the broker and changes
-  nothing.
+  token, in two steps: `bind` (the loopback-or-token check, then the
+  socket) and `AdminListener::serve`. It follows D9: loopback needs no
+  token, any other bind address needs `--admin-token`, checked on every
+  route in constant time (the control plane shares the comparison). It
+  reads the broker and changes nothing.
 - `listen.rs` wires the three together with a transport listener, after
   checking that a full store's reply fits the frame limit and, when an admin
-  listener is wanted, that its bind address is loopback or has a token;
-  then it starts the admin listener with the protocol listener's address,
-  which `/v1/status` reports.
+  listener is wanted, binding its address first, so that a refused or taken
+  admin address fails the start before any task runs; the admin listener
+  is served once the protocol listener's address, which `/v1/status`
+  reports, is known.
 
 ### Party (`party`)
 
@@ -355,7 +357,8 @@ misconfiguration; registration retries only on the former.
   mapping and the token.
 - **`tests/admin.rs`**: the admin listener over a running cluster: every
   gauge and counter against what the test did, including a service dying
-  and a re-pairing; the status document; the token.
+  and a re-pairing; the status document; the token. The harness starts an
+  admin listener on every cluster (`Cluster::admin_url`).
 - **`tests/cli.rs`**: the built binary: parsing, exit codes, stdout/stderr
   discipline, a closed stdout, complete sessions with the store, SIGTERM.
 - **`tests/stress.rs`** (`--ignored`): 50 services and 50 clients, text and

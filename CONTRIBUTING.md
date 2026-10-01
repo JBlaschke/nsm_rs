@@ -61,9 +61,11 @@ rules they follow. The short version:
   with `Timing::fast()`, and `publish`/`claim`/`kill`/`wait_until` build the
   scenario. Add a scenario there when behaviour spans the broker and the
   parties.
-- **Control plane** tests go in `tests/rest.rs`, **binary** tests in
-  `tests/cli.rs` (they run the built `nsm` through `CARGO_BIN_EXE_nsm`), and
-  load scenarios in `tests/stress.rs` behind `#[ignore]`.
+- **Control plane** tests go in `tests/rest.rs`, **admin listener** tests
+  (metrics and the status document against a running cluster) in
+  `tests/admin.rs`, **binary** tests in `tests/cli.rs` (they run the built
+  `nsm` through `CARGO_BIN_EXE_nsm`), and load scenarios in
+  `tests/stress.rs` behind `#[ignore]`.
 - Tests must not depend on the host: select the loopback address with
   `-i 127.` rather than an interface name, bind port 0, generate
   certificates with `rcgen`, and give every async test a deadline.

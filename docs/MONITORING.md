@@ -33,8 +33,9 @@ loopback needs no token; any other bind address refuses to start without
 `--admin-token`, which every request, `/healthz` included, must then carry
 as `Authorization: Bearer <token>` (compared in constant time; a missing or
 wrong token is 401 `{"error":"missing or invalid bearer token"}`). The check
-happens before anything is bound, like the frame-limit check. There is no
-TLS on the admin listener: on a shared network bind loopback and reach it
+happens before anything is bound, like the frame-limit check, and the admin
+address is bound before the protocol listener, so a taken port fails the
+start with nothing left running. There is no TLS on the admin listener: on a shared network bind loopback and reach it
 through an SSH tunnel, or terminate TLS in front of it.
 
 The status view lists every party with its bind address and rendezvous key.
