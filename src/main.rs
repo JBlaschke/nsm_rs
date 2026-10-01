@@ -149,6 +149,7 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
             timing,
             limits,
             policy,
+            admin,
         } => {
             let broker = ops::listen(
                 ops::ListenRequest {
@@ -157,11 +158,15 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
                     selector: iface.selector(),
                     net: net_opts(&tls, &timing, &limits),
                     policy: policy.policy(),
+                    admin: admin.admin(),
                 },
                 shutdown,
             )
             .await?;
             eprintln!("nsm: broker listening on {}", broker.bound());
+            if let Some(admin) = broker.admin_addr() {
+                eprintln!("nsm: admin listener on http://{admin}");
+            }
             broker.run().await?;
         }
         Command::Publish {

@@ -213,6 +213,36 @@ impl LimitsOpts {
     }
 }
 
+/// The broker's admin listener (monitoring plan, decision M6).
+#[derive(Debug, Clone, Default, Args)]
+pub struct AdminOpts {
+    /// Serve `GET /metrics` (Prometheus), `GET /v1/status` (JSON) and
+    /// `GET /healthz` on this address, over plain HTTP. Off when omitted.
+    /// Binding anything but a loopback address requires --admin-token.
+    #[arg(long, value_name = "ADDR")]
+    pub admin_bind: Option<SocketAddr>,
+    /// Bearer token the admin listener requires on every request
+    /// (`Authorization: Bearer <TOKEN>`).
+    #[arg(
+        long,
+        env = "NSM_ADMIN_TOKEN",
+        value_name = "TOKEN",
+        hide_env_values = true
+    )]
+    pub admin_token: Option<String>,
+}
+
+impl AdminOpts {
+    /// The admin listener's settings, or `None` when `--admin-bind` was not
+    /// given (a token alone starts nothing).
+    pub fn admin(&self) -> Option<crate::broker::admin::AdminOpts> {
+        self.admin_bind.map(|bind| crate::broker::admin::AdminOpts {
+            bind,
+            token: self.admin_token.clone(),
+        })
+    }
+}
+
 /// Broker admission policy.
 #[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
 pub struct BrokerOpts {
@@ -287,6 +317,9 @@ pub enum Command {
         /// Admission policy.
         #[command(flatten)]
         policy: BrokerOpts,
+        /// Admin listener.
+        #[command(flatten)]
+        admin: AdminOpts,
     },
 
     /// Announce a service to the broker and keep it registered.

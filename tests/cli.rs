@@ -1095,6 +1095,84 @@ fn full_session_over_http() {
 }
 
 #[tokio::test]
+async fn listen_serves_an_admin_listener_when_asked() {
+    nsm::tls::install_default_provider();
+    let http = reqwest::Client::new();
+    let mut broker = Proc::spawn_with_env(
+        "broker",
+        &argv(&[
+            &["listen", "--bind-port", "0", "--admin-bind", "127.0.0.1:0"],
+            IFACE,
+            FAST,
+        ]),
+        &[("NSM_ADMIN_TOKEN", "adm1n")],
+    );
+    broker.stderr_line_containing("broker listening on ");
+    let line = broker.stderr_line_containing("admin listener on ");
+    let url = line.rsplit(' ').next().unwrap().to_owned();
+    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+    let anon = http.get(format!("{url}/healthz")).send().await.unwrap();
+    assert_eq!(anon.status(), 401);
+    let ok = http
+        .get(format!("{url}/healthz"))
+        .bearer_auth("adm1n")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200);
+    let metrics = http
+        .get(format!("{url}/metrics"))
+        .bearer_auth("adm1n")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(metrics.status(), 200);
+    assert_eq!(
+        metrics
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("text/plain; version=0.0.4; charset=utf-8")
+    );
+    let text = metrics.text().await.unwrap();
+    assert!(
+        text.contains("nsm_parties{role=\"service\",mode=\"heartbeat\"} 0\n"),
+        "{text}"
+    );
+    let status = http
+        .get(format!("{url}/v1/status"))
+        .bearer_auth("adm1n")
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(status["counts"]["services"], 0);
+    assert!(
+        status["bound"].as_str().unwrap().starts_with("127.0.0.1:"),
+        "{status}"
+    );
+    let exit = broker.terminate();
+    assert_eq!(exit.code(), Some(0), "broker exit after SIGTERM: {exit}");
+
+    // A non-loopback admin bind without a token is a configuration error,
+    // reported before anything is bound.
+    let out = run(argv(&[
+        &["listen", "--bind-port", "0", "--admin-bind", "0.0.0.0:0"],
+        IFACE,
+    ]));
+    assert_eq!(out.code, 1, "{}", out.stderr);
+    assert!(out.stdout.is_empty());
+    assert!(
+        out.stderr.starts_with("nsm: ") && out.stderr.contains("--admin-token"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[tokio::test]
 async fn serve_runs_the_control_plane_with_a_token() {
     nsm::tls::install_default_provider();
     let http = reqwest::Client::new();

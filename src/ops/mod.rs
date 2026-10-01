@@ -10,6 +10,7 @@ use std::net::IpAddr;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::broker::admin::AdminOpts;
 use crate::broker::listen::{BrokerHandle, ListenOpts, listen as start_broker};
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, LocalAddr, Selector, Transport, interfaces};
@@ -70,6 +71,8 @@ pub struct ListenRequest {
     pub net: NetOpts,
     /// Admission policy.
     pub policy: BrokerPolicy,
+    /// The admin listener (`/metrics`, `/v1/status`), when wanted.
+    pub admin: Option<AdminOpts>,
 }
 
 /// Bind the broker's listener and start its monitor; the returned handle
@@ -83,6 +86,7 @@ pub async fn listen(req: ListenRequest, shutdown: CancellationToken) -> Result<B
             timing: req.net.timing,
             limits: req.net.limits,
             policy: req.policy,
+            admin: req.admin,
         },
         shutdown,
     )
