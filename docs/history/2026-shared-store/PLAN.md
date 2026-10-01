@@ -1,12 +1,18 @@
-# Shared store: plan
+# Shared store: plan and record
 
-Written on 2026-09-27 against `main` at `84578926`, to be executed on the
-stacked branches `store/01` to `store/04`. Four independent designs were
-compared before this plan was written, and three reviewers scored them. All
-four put the store at the broker and gave it to the client's claim; the
-decisions below record where they differed and what was taken. The plan
-before this one is the [peer-address and two-way text
-work](history/2026-peer-text/PLAN.md).
+> This is the plan that drove the September 2026 shared-store work, kept as
+> a record. It was written on 2026-09-27 against `main` at `84578926`,
+> executed on the stacked branches `store/01` to `store/04`, and merged
+> through [#12](https://github.com/JBlaschke/nsm_rs/pull/12). The status
+> table in section 0 is final. The decisions in section 2 live on in
+> [`ARCHITECTURE.md`](../../ARCHITECTURE.md) under "Design decisions" as D17
+> to D20; the follow-ups in section 4 are still open. The plan before this
+> one is the [peer-address and two-way text work](../2026-peer-text/PLAN.md).
+>
+> Four independent designs were compared before the plan was written, and
+> three reviewers scored them. All four put the store at the broker and gave
+> it to the client's claim; the decisions record where they differed and
+> what was taken.
 
 ## 0. Status
 
@@ -18,7 +24,7 @@ work](history/2026-peer-text/PLAN.md).
 | `store/04-conditional-writes` | done | `if_version` on put and delete (0: the key must not be set), compared before the budget; `applied` on `stored`, false for a mismatch, which changes nothing and takes no version; `--if-version` with exit status 4 and HTTP 409 for a mismatch; can be dropped without touching 01 to 03 |
 
 Each branch builds on the previous one and passes the checks in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.
+[`CONTRIBUTING.md`](../../../CONTRIBUTING.md) at its tip.
 
 ## 1. The request
 

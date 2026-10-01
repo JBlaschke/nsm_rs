@@ -337,7 +337,9 @@ cite them by number (`decision D7` in the registry, `D9` in the control
 plane, `D10` in the TLS module). Each is a fact about the current code. D13
 to D16 come from the peer-address and two-way text plan of September 2026
 ([`history/2026-peer-text/`](history/2026-peer-text/PLAN.md)), where they
-are decisions P1 to P10.
+are decisions P1 to P10; D17 to D20 from the shared-store plan of the same
+month ([`history/2026-shared-store/`](history/2026-shared-store/PLAN.md)),
+where they are decisions S1 to S12.
 
 | # | Decision |
 |---|---|
@@ -357,6 +359,10 @@ are decisions P1 to P10.
 | D14 | A client's pairing is a `tokio::sync::watch` channel (`Session::pairings`), not a slot: `nsm claim` prints one stdout line per pairing, the first at registration and one more each time the broker re-pairs it, so the last line is always the current service. |
 | D15 | One verb per question: `nsm peer` prints a client's paired service and nothing else, `nsm collect` a party's last text and nothing else; asking a service for its peer is `Error::WrongRole`. A party that answered but has nothing to report yet is exit status 3, and a `store put` or `store delete` whose `--if-version` did not match (answered, nothing changed) is exit status 4 (1 is a failed operation, 2 a usage error). The control plane needs no `peer` route, since `POST /v1/collect` is typed. |
 | D16 | Text flows both ways through one inbox per party: `send` at either party is relayed as a `deliver` that names no target, and the broker delivers to the sender's peer as it knows it (a client's current service, the client holding a service), so a text that races a re-pairing reaches the new service. Last text wins; a client's pending text survives a re-pairing. Protocol version 3. |
+| D17 | A client and the service holding it share one key-value store, kept by the broker in the client's registry entry: created empty by `claim`, kept across re-pairings (so a replacement service reads what the dead one wrote), dropped when the client is removed. Parties keep no copy: each relays its request to the broker with its token (`store` becomes `store_relay`, as `send` becomes `deliver`), and the broker resolves whose store it is. The client always has access; a service only while it holds the claim, so an unclaimed service reads an empty store (`client: null`) and its writes are refused. |
+| D18 | Four operations: get, put, delete (idempotent) and list (one atomic snapshot of every entry). Versions come from one broker-wide counter, like party ids, so a version names one write for the broker's whole life and never repeats across claims; the `stored` reply names the store (`client`, `revision`). |
+| D19 | Store keys are one shell word (1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`), checked by `StoreKey` on parse and on decode; values are any text. One limit, `--max-store-bytes` per store (default 16384, 256 to 32768), counted in JSON-encoded bytes so that a full store's reply is bounded too; `listen` refuses a budget whose reply would not fit its frame limit. The store messages were new variants, so the protocol stays at version 3. |
+| D20 | One command group, `nsm store get\|put\|delete\|list` (with `--json`), and one route, `POST /v1/store`. A put or delete may carry `if_version` (0: the key must be absent); a mismatch is an answer, not a failure: `applied: false` with the current entry, exit status 4, HTTP 409. Nothing is pushed or persisted: heartbeats carry no store data, and the store lives in broker memory for the claim's lifetime. |
 
 ## 12. History
 
@@ -371,3 +377,9 @@ The September 2026 work on the client side, recorded under
 [`history/2026-peer-text/`](history/2026-peer-text/PLAN.md), gave scripts a
 reliable way to the paired service's address (`nsm peer`, one `claim` line
 per pairing) and let text flow both ways; its decisions are D13 to D16.
+
+The shared store of the same month, recorded under
+[`history/2026-shared-store/`](history/2026-shared-store/PLAN.md), gave a
+client and the service holding it a key-value store at the broker (`nsm
+store`, `POST /v1/store`), with conditional writes; its decisions are D17 to
+D20.

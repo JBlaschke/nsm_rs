@@ -31,14 +31,13 @@
 //! - Each claim owns one [`Store`], kept in the client's entry: created
 //!   empty by `claim`, kept by `reclaim` across re-pairings (so the
 //!   replacement service reads every earlier write) and dropped when the
-//!   client is removed (store plan, decision S2).
+//!   client is removed (decision D17).
 //!   [`store`](Registry::store) finds the store the way `deliver` finds the
 //!   peer: a client uses its own, including between losing its service and
 //!   being re-paired; a service uses the store of the client holding it, and
-//!   a service nobody holds reads an empty store and may not write (store
-//!   plan, decision S3). Every write takes the next number from one version
-//!   counter for the broker's whole life, starting at 1 (store plan,
-//!   decision S5).
+//!   a service nobody holds reads an empty store and may not write (D17).
+//!   Every write takes the next number from one version counter for the
+//!   broker's whole life, starting at 1 (decision D18).
 //! - [`deliver`](Registry::deliver) parks text as the sender's peer's
 //!   pending *inbox* (a later delivery replaces an earlier one): a client's
 //!   text goes to its service, a service's text to the client holding it.

@@ -538,6 +538,7 @@ cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 | [`CHANGELOG.md`](./CHANGELOG.md) | what changed, including every breaking change |
 | [`docs/history/2026-refactor/`](docs/history/2026-refactor/PLAN.md) | the 2026 refactor: its plan, its audit of the previous code, and the decisions D1 to D12 the code cites |
 | [`docs/history/2026-peer-text/`](docs/history/2026-peer-text/PLAN.md) | the 2026 peer-address and two-way text work: its plan and the decisions P1 to P10 (D13 to D16 in the architecture guide) |
+| [`docs/history/2026-shared-store/`](docs/history/2026-shared-store/PLAN.md) | the 2026 shared-store work: its plan and the decisions S1 to S12 (D17 to D20 in the architecture guide) |
 
 API documentation (`cargo doc`) and these pages are published by CI to
 <https://jblaschke.github.io/nsm_rs/> (the repository's Pages source must be
