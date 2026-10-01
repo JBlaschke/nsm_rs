@@ -164,6 +164,18 @@ version: 3.
   Pages workflow publishing all of it.
 - Crypto provider features that work: `aws-lc-rs` (default) and `ring` (pure
   Rust, for static musl builds and the Docker image). Decision D11.
+- The broker counts what it does (monitoring plan, decisions M1 to M5):
+  requests by kind and outcome, registrations granted and refused by
+  reason, removals by role and reason, re-pairings, heartbeats by outcome
+  with a round-trip histogram, and store operations by operation and
+  outcome; and it reads the current state (parties by role and mode,
+  unclaimed services, failing parties, stores and their bytes, per key and
+  per host) from the registry on demand. In the library:
+  `broker::metrics` with `Metrics`, `Gauges`, the Prometheus text
+  exposition `Metrics::render`, and `Status`, the JSON view;
+  `Broker::metrics`, `gauges`, `render_metrics` and `status`;
+  `Broker::drop_party` takes a `RemovalReason` instead of free text.
+  Nothing serves these yet; the admin listener and `nsm status` follow.
 
 ### Changed
 

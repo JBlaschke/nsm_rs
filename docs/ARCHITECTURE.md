@@ -57,7 +57,7 @@ One library crate, `nsm`, and one binary of the same name built from
 | `protocol` | the tagged `Message` enum, the records it carries, JSON encoding and the length-prefixed `MessageCodec` for streams |
 | `tls` | rustls server and client configuration from PEM files; the trust model in one place; crypto provider selection |
 | `transport` | one request, one reply over TCP, TLS, HTTP or HTTPS behind the `Handler` trait, `serve()` and `Client::call()` |
-| `broker` | `Registry` (pure, synchronous state), `Store` (the key-value store each claim shares with its service), `Broker` (monitor tasks and removal), `BrokerHandler` (admission and dispatch), `listen()` |
+| `broker` | `Registry` (pure, synchronous state), `Store` (the key-value store each claim shares with its service), `Broker` (monitor tasks and removal), `BrokerHandler` (admission and dispatch), `Metrics` and `Status` (what the broker counts), `listen()` |
 | `party` | `Session` (bind, register, stay alive), `PartyHandler`, `PartyState` |
 | `ops` | typed requests and results for every operation |
 | `rest` | the axum control plane behind `nsm serve`: routes, jobs, bearer token |
@@ -155,13 +155,27 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
 - `monitor.rs` is `Broker`: the registry behind its mutex, one heartbeat task
   per two-sided party (`watch`), a sweeper task for ping-mode parties, and
   the single removal path `drop_party`, which also re-pairs or removes the
-  clients a vanished service leaves behind. `snapshot()` exposes the state
-  for status output and tests.
+  clients a vanished service leaves behind and counts what it did. It owns
+  the `Metrics` too: the monitor counts heartbeats with their round trip,
+  removals and re-pairings. `snapshot()` exposes the state for tests;
+  `gauges()`, `render_metrics()` and `status()` expose it for monitoring.
+- `metrics.rs` is what the broker counts and how it reports it (monitoring
+  plan, decisions M1 to M5). `Metrics` holds atomic counters, bumped where
+  the event happens, and one histogram of heartbeat round trips; `Gauges::of`
+  reads the current counts (parties by role and mode, unclaimed services,
+  failing parties, stores and their bytes, with a per-key and a per-host
+  breakdown) from the registry under its lock, so a gauge can never drift.
+  `Metrics::render` writes the Prometheus text exposition by hand (format
+  0.0.4, every metric `nsm_*`, labels from closed sets, no key, host or id
+  as a label); `Status` is the JSON view the admin route and `nsm status`
+  share. `RemovalReason` is the typed reason `drop_party` takes.
 - `handler.rs` is `BrokerHandler`: admission (a real port, the optional
   matching-host check, the per-host cap) and one `match` over the request
   variants, written once for every transport. A relayed request (`deliver`,
   `store_relay`) checks the sender's token and acts on the registry in one
-  critical section.
+  critical section. Every request is counted once by kind and outcome, and
+  registrations, refusals (by reason) and store operations (by operation
+  and outcome) where the decision is made.
 - `listen.rs` wires the three together with a transport listener, after
   checking that a full store's reply fits the frame limit.
 

@@ -68,6 +68,7 @@ broker started. Buckets of the histogram: 5 ms, 10, 25, 50, 100, 250, 500 ms,
 | `nsm_services_unclaimed` | gauge | | services no client holds |
 | `nsm_keys` | gauge | | distinct rendezvous keys with at least one party |
 | `nsm_parties_failing` | gauge | | parties with at least one consecutive failed heartbeat |
+| `nsm_heartbeat_tasks` | gauge | | two-sided parties the broker is dialling |
 | `nsm_registrations_limit` | gauge | | `--max-registrations` |
 | `nsm_stores` | gauge | | stores (one per client) |
 | `nsm_store_entries` | gauge | | entries over every store |

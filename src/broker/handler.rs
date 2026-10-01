@@ -8,6 +8,10 @@
 //! sender's token and act on the registry inside one critical section, so
 //! nothing can remove the sender or re-pair it in between. Store keys and
 //! values are never logged, only the operation's name.
+//!
+//! The handler is where requests, registrations, refusals and store
+//! operations are counted ([`Broker::metrics`]): every request once by kind
+//! and outcome in [`Handler::handle`], the rest where the decision is made.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -15,9 +19,10 @@ use std::sync::Arc;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, trace};
 
+use super::metrics::{Outcome, RefusalReason, RequestKind, StoreOpKind, StoreOutcome};
 use super::monitor::Broker;
 use crate::net::Addr;
-use crate::protocol::{Message, RegToken};
+use crate::protocol::{Message, RegToken, Role};
 use crate::transport::{Handler, PeerInfo};
 use crate::{Error, Result};
 
@@ -35,19 +40,38 @@ impl BrokerHandler {
 
     /// Checks every registration must pass before it touches the registry:
     /// a real port, an advertised host that matches the connection source
-    /// when the policy demands it, and the per-host registration cap.
+    /// when the policy demands it, and the per-host registration cap. A
+    /// refusal is counted here with its reason.
     fn admission(&self, bind_addr: &Addr, peer: &PeerInfo) -> Option<Message> {
+        let refusal = self.admission_check(bind_addr, peer);
+        if let Some((_, reason)) = &refusal {
+            self.broker.metrics().refused(*reason);
+        }
+        refusal.map(|(nack, _)| nack)
+    }
+
+    fn admission_check(
+        &self,
+        bind_addr: &Addr,
+        peer: &PeerInfo,
+    ) -> Option<(Message, RefusalReason)> {
         if bind_addr.port == 0 {
-            return Some(Message::nack("bind_addr must carry the actual port"));
+            return Some((
+                Message::nack("bind_addr must carry the actual port"),
+                RefusalReason::BadPort,
+            ));
         }
         let policy = self.broker.policy();
         let source = peer.remote.ip().to_string();
         if bind_addr.host != source {
             if policy.require_matching_host {
-                return Some(Message::nack(format!(
-                    "advertised host {} does not match the connection source {source}",
-                    bind_addr.host
-                )));
+                return Some((
+                    Message::nack(format!(
+                        "advertised host {} does not match the connection source {source}",
+                        bind_addr.host
+                    )),
+                    RefusalReason::HostMismatch,
+                ));
             }
             debug!(remote = %peer.remote, advertised = %bind_addr.host, "party advertises an address other than the one it connected from");
         }
@@ -55,12 +79,22 @@ impl BrokerHandler {
             .broker
             .with_registry(|r| r.count_for_host(&bind_addr.host));
         if count >= policy.max_registrations_per_host {
-            return Some(Message::nack(format!(
-                "too many registrations from {} ({count})",
-                bind_addr.host
-            )));
+            return Some((
+                Message::nack(format!(
+                    "too many registrations from {} ({count})",
+                    bind_addr.host
+                )),
+                RefusalReason::PerHost,
+            ));
         }
         None
+    }
+
+    /// Count a refusal of a registration by the registry: the only reason
+    /// it gives is a full registry.
+    fn refused_by_registry(&self, reason: String) -> Message {
+        self.broker.metrics().refused(RefusalReason::Full);
+        Message::nack(reason)
     }
 
     async fn dispatch(&self, msg: Message, peer: PeerInfo) -> Result<Message> {
@@ -83,10 +117,11 @@ impl BrokerHandler {
                     .with_registry(|r| r.publish(key, service_addr, bind_addr, ping, token, now))
                 {
                     Ok(id) => {
+                        self.broker.metrics().registered(Role::Service);
                         self.broker.watch(id);
                         Ok(Message::Registered { id, token })
                     }
-                    Err(Error::Rejected(reason)) => Ok(Message::nack(reason)),
+                    Err(Error::Rejected(reason)) => Ok(self.refused_by_registry(reason)),
                     Err(e) => Err(e),
                 }
             }
@@ -110,6 +145,7 @@ impl BrokerHandler {
                         .with_registry(|r| r.claim(key, bind_addr.clone(), ping, token, now))
                     {
                         Ok((id, service)) => {
+                            self.broker.metrics().registered(Role::Client);
                             self.broker.watch(id);
                             return Ok(Message::Paired { id, token, service });
                         }
@@ -119,9 +155,12 @@ impl BrokerHandler {
                             sleep(pause).await;
                         }
                         Err(Error::NoService(k)) => {
+                            self.broker.metrics().refused(RefusalReason::NoService);
                             return Ok(Message::nack(format!("no service available for key {k}")));
                         }
-                        Err(Error::Rejected(reason)) => return Ok(Message::nack(reason)),
+                        Err(Error::Rejected(reason)) => {
+                            return Ok(self.refused_by_registry(reason));
+                        }
                         Err(e) => return Err(e),
                     }
                 }
@@ -166,6 +205,7 @@ impl BrokerHandler {
 
             Message::StoreRelay { from, token, op } => {
                 debug!(%from, op = op.kind(), "store request");
+                let kind = StoreOpKind::from(&op);
                 // The registry finds the sender's store; the sender names none.
                 let outcome = self.broker.with_registry(|r| {
                     if !r.verify(from, &token) {
@@ -173,10 +213,20 @@ impl BrokerHandler {
                     }
                     r.store(from, op).map(Ok)
                 });
+                let metrics = self.broker.metrics();
                 match outcome {
-                    Ok(Ok(stored)) => Ok(Message::Stored(stored)),
-                    Ok(Err(reason)) => Ok(Message::nack(reason)),
-                    Err(Error::Rejected(reason)) => Ok(Message::nack(reason)),
+                    Ok(Ok(stored)) => {
+                        metrics.store_op(kind, StoreOutcome::of(&stored));
+                        Ok(Message::Stored(stored))
+                    }
+                    Ok(Err(reason)) => {
+                        metrics.store_op(kind, StoreOutcome::Refused);
+                        Ok(Message::nack(reason))
+                    }
+                    Err(Error::Rejected(reason)) => {
+                        metrics.store_op(kind, StoreOutcome::Refused);
+                        Ok(Message::nack(reason))
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -191,7 +241,17 @@ impl BrokerHandler {
 
 impl Handler for BrokerHandler {
     fn handle(&self, msg: Message, peer: PeerInfo) -> impl Future<Output = Result<Message>> + Send {
-        self.dispatch(msg, peer)
+        let kind = RequestKind::from(&msg);
+        async move {
+            let reply = self.dispatch(msg, peer).await;
+            let outcome = match &reply {
+                Ok(Message::Nack { .. }) => Outcome::Nack,
+                Ok(_) => Outcome::Ok,
+                Err(_) => Outcome::Error,
+            };
+            self.broker.metrics().request(kind, outcome);
+            reply
+        }
     }
 }
 
@@ -255,6 +315,167 @@ mod tests {
 
     fn wrong() -> RegToken {
         RegToken::from_bytes([0xee; 16])
+    }
+
+    #[tokio::test]
+    async fn every_request_and_decision_is_counted() {
+        crate::tls::install_default_provider();
+        let h = handler(BrokerPolicy {
+            max_registrations_per_host: 2,
+            ..BrokerPolicy::default()
+        });
+        let m = h.broker.metrics();
+
+        // A granted service, then a refused claim (no service under key 2).
+        let (sid, stoken) = registered(h.handle(publish("127.0.0.1", 7000), peer()).await.unwrap());
+        let refused = h
+            .handle(
+                Message::Claim {
+                    key: 2,
+                    bind_addr: Addr::tcp("127.0.0.1", 7001),
+                    ping: true,
+                },
+                peer(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(refused, Message::Nack { .. }), "{refused:?}");
+        // A granted client under key 1.
+        let (cid, ctoken, _) = paired(
+            h.handle(
+                Message::Claim {
+                    key: 1,
+                    bind_addr: Addr::tcp("127.0.0.1", 7002),
+                    ping: true,
+                },
+                peer(),
+            )
+            .await
+            .unwrap(),
+        );
+        assert_ne!(sid, cid);
+        // The per-host cap (2) refuses the third, port 0 the fourth.
+        let capped = h.handle(publish("127.0.0.1", 7003), peer()).await.unwrap();
+        assert!(matches!(capped, Message::Nack { .. }), "{capped:?}");
+        let bad_port = h.handle(publish("10.0.0.5", 0), peer()).await.unwrap();
+        assert!(matches!(bad_port, Message::Nack { .. }), "{bad_port:?}");
+        // Store operations: applied, not applied, refused (wrong token).
+        let key: crate::protocol::StoreKey = "k".parse().unwrap();
+        let put = |if_version| Message::StoreRelay {
+            from: cid,
+            token: ctoken,
+            op: crate::protocol::StoreOp::Put {
+                key: key.clone(),
+                value: "v".into(),
+                if_version,
+            },
+        };
+        assert!(matches!(
+            h.handle(put(None), peer()).await.unwrap(),
+            Message::Stored(_)
+        ));
+        match h.handle(put(Some(0)), peer()).await.unwrap() {
+            Message::Stored(s) => assert!(!s.applied),
+            other => panic!("{other:?}"),
+        }
+        let forged = Message::StoreRelay {
+            from: sid,
+            token: wrong(),
+            op: crate::protocol::StoreOp::List,
+        };
+        assert!(matches!(
+            h.handle(forged, peer()).await.unwrap(),
+            Message::Nack { .. }
+        ));
+        // A refused deliver (the service has a client, so use a wrong token)
+        // and an unexpected message.
+        let deliver = Message::Deliver {
+            from: sid,
+            token: wrong(),
+            text: "x".into(),
+        };
+        assert!(matches!(
+            h.handle(deliver, peer()).await.unwrap(),
+            Message::Nack { .. }
+        ));
+        let _ = stoken;
+        assert!(matches!(
+            h.handle(Message::Delivered, peer()).await.unwrap(),
+            Message::Nack { .. }
+        ));
+
+        assert_eq!(m.requests(RequestKind::Publish, Outcome::Ok), 1);
+        assert_eq!(m.requests(RequestKind::Publish, Outcome::Nack), 2);
+        assert_eq!(m.requests(RequestKind::Claim, Outcome::Ok), 1);
+        assert_eq!(m.requests(RequestKind::Claim, Outcome::Nack), 1);
+        assert_eq!(m.requests(RequestKind::StoreRelay, Outcome::Ok), 2);
+        assert_eq!(m.requests(RequestKind::StoreRelay, Outcome::Nack), 1);
+        assert_eq!(m.requests(RequestKind::Deliver, Outcome::Nack), 1);
+        assert_eq!(m.requests(RequestKind::Other, Outcome::Nack), 1);
+        assert_eq!(m.requests(RequestKind::Ping, Outcome::Ok), 0);
+        assert_eq!(m.registrations(Role::Service), 1);
+        assert_eq!(m.registrations(Role::Client), 1);
+        assert_eq!(m.refusals(RefusalReason::NoService), 1);
+        assert_eq!(m.refusals(RefusalReason::PerHost), 1);
+        assert_eq!(m.refusals(RefusalReason::BadPort), 1);
+        assert_eq!(m.refusals(RefusalReason::HostMismatch), 0);
+        assert_eq!(m.refusals(RefusalReason::Full), 0);
+        assert_eq!(m.store_ops(StoreOpKind::Put, StoreOutcome::Applied), 1);
+        assert_eq!(m.store_ops(StoreOpKind::Put, StoreOutcome::NotApplied), 1);
+        assert_eq!(m.store_ops(StoreOpKind::List, StoreOutcome::Refused), 1);
+        assert_eq!(m.store_ops(StoreOpKind::Get, StoreOutcome::Applied), 0);
+
+        // The gauges follow the registry, and the exposition renders them.
+        let g = h.broker.gauges();
+        assert_eq!(g.parties_of(Role::Service), 1);
+        assert_eq!(g.parties_of(Role::Client), 1);
+        assert_eq!(g.services_unclaimed, 0);
+        assert_eq!(g.store_entries, 1);
+        let text = h.broker.render_metrics();
+        assert!(text.contains("nsm_requests_total{kind=\"publish\",outcome=\"nack\"} 2\n"));
+        assert!(text.contains("nsm_registrations_refused_total{reason=\"per_host\"} 1\n"));
+        let status = h.broker.status(None);
+        assert_eq!(status.counts.clients, 1);
+        assert_eq!(status.totals.requests["store_relay"]["ok"], 2);
+        assert_eq!(status.parties.len(), 2);
+        assert_eq!(status.bound, None);
+    }
+
+    #[tokio::test]
+    async fn a_full_registry_is_counted_as_such() {
+        crate::tls::install_default_provider();
+        let client = Arc::new(Client::new(
+            TlsPaths::default(),
+            Timing::fast(),
+            Limits::default(),
+        ));
+        let h = BrokerHandler::new(Broker::new(
+            client,
+            Timing::fast(),
+            Limits {
+                max_registrations: 1,
+                ..Limits::default()
+            },
+            BrokerPolicy::default(),
+            CancellationToken::new(),
+        ));
+        registered(h.handle(publish("127.0.0.1", 7000), peer()).await.unwrap());
+        let full = h.handle(publish("127.0.0.1", 7001), peer()).await.unwrap();
+        assert!(matches!(full, Message::Nack { .. }), "{full:?}");
+        let claim = h
+            .handle(
+                Message::Claim {
+                    key: 1,
+                    bind_addr: Addr::tcp("127.0.0.1", 7002),
+                    ping: true,
+                },
+                peer(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(claim, Message::Nack { .. }), "{claim:?}");
+        assert_eq!(h.broker.metrics().refusals(RefusalReason::Full), 2);
+        assert_eq!(h.broker.metrics().refusals(RefusalReason::NoService), 0);
     }
 
     #[tokio::test]
