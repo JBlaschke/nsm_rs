@@ -15,6 +15,7 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
              │                        one store per claim)                           │
              │                        Broker monitor: heartbeat task per party,      │
              │                        sweeper for ping-mode parties                  │
+             │                        Admin listener: /metrics, /v1/status           │
              └───────────▲──────────────────────────────────────────────▲────────────┘
      publish / ping /    │                                              │  claim / ping /
      deliver /           │                                              │  deliver /
@@ -33,7 +34,9 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
 - The **broker** is the only fixed address. It admits registrations, pairs
   clients with services, monitors liveness, relays short texts and keeps the
   one copy of the store each claim shares. It never sees the service's own
-  traffic.
+  traffic. With `--admin-bind` it also answers an operator, on a separate
+  plain-HTTP socket parties never use: Prometheus metrics and a status
+  document ([`MONITORING.md`](MONITORING.md)).
 - A **party** is a service or a client. Both run the same small server on
   their bind address, keep the last text they were sent, relay `send` to
   their peer through the broker and relay `store` to the broker; a client
@@ -57,7 +60,7 @@ One library crate, `nsm`, and one binary of the same name built from
 | `protocol` | the tagged `Message` enum, the records it carries, JSON encoding and the length-prefixed `MessageCodec` for streams |
 | `tls` | rustls server and client configuration from PEM files; the trust model in one place; crypto provider selection |
 | `transport` | one request, one reply over TCP, TLS, HTTP or HTTPS behind the `Handler` trait, `serve()` and `Client::call()` |
-| `broker` | `Registry` (pure, synchronous state), `Store` (the key-value store each claim shares with its service), `Broker` (monitor tasks and removal), `BrokerHandler` (admission and dispatch), `Metrics` and `Status` (what the broker counts), `listen()` |
+| `broker` | `Registry` (pure, synchronous state), `Store` (the key-value store each claim shares with its service), `Broker` (monitor tasks and removal), `BrokerHandler` (admission and dispatch), `Metrics` and `Status` (what the broker counts), the admin listener that reports them, `listen()` |
 | `party` | `Session` (bind, register, stay alive), `PartyHandler`, `PartyState` |
 | `ops` | typed requests and results for every operation |
 | `rest` | the axum control plane behind `nsm serve`: routes, jobs, bearer token |
@@ -176,8 +179,19 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   critical section. Every request is counted once by kind and outcome, and
   registrations, refusals (by reason) and store operations (by operation
   and outcome) where the decision is made.
+- `admin.rs` is the admin listener (monitoring plan, decision M6): an axum
+  router with `GET /metrics` (the exposition, as
+  `text/plain; version=0.0.4`), `GET /v1/status` (`Status` as JSON) and
+  `GET /healthz`, on its own `TcpListener` under the broker's shutdown
+  token. It follows D9: loopback needs no token, any other bind address
+  needs `--admin-token`, checked on every route in constant time (the
+  control plane shares the comparison). It reads the broker and changes
+  nothing.
 - `listen.rs` wires the three together with a transport listener, after
-  checking that a full store's reply fits the frame limit.
+  checking that a full store's reply fits the frame limit and, when an admin
+  listener is wanted, that its bind address is loopback or has a token;
+  then it starts the admin listener with the protocol listener's address,
+  which `/v1/status` reports.
 
 ### Party (`party`)
 
@@ -239,6 +253,10 @@ on the types and overridable from the CLI (`TimingOpts`, `LimitsOpts`,
 `BrokerOpts`, `TlsOpts`); `Timing::fast()` scales everything down for tests.
 Broker and parties should run with the same timing values.
 
+The admin listener is `AdminOpts` (`--admin-bind`, `--admin-token` or
+`NSM_ADMIN_TOKEN`), optional in `ListenOpts`; nothing else about it is
+tunable.
+
 Two limits only matter at a broker: `max_registrations` and
 `max_store_bytes` (`--max-store-bytes`, default 16384, allowed 256 to
 32768). `serve` accepts both with the other limits and ignores them.
@@ -282,6 +300,12 @@ exist: about 80 MiB of accounted store bytes with the defaults, and at most
   only.
 - **The control plane** binds loopback by default, requires a bearer token
   elsewhere, takes no file paths from requests and limits body sizes.
+- **The admin listener** is off by default and follows the same rule when
+  on: loopback, or a bearer token on every request. It is read-only, but
+  its status document lists every party with its key and bind address, an
+  operator's view that no party can obtain through the protocol listener.
+  It speaks plain HTTP; on a shared network it belongs on loopback behind an
+  SSH tunnel, or behind a TLS-terminating proxy.
 - **Resource bounds** everywhere: frame sizes, connection counts, request
   timeouts, registration counts; malformed input never reaches a handler.
 
@@ -329,6 +353,9 @@ misconfiguration; registration retries only on the former.
   re-pairings, the end of a claim, ping mode and concurrent writers.
 - **`tests/rest.rs`**: every control-plane route, the job lifecycle, status
   mapping and the token.
+- **`tests/admin.rs`**: the admin listener over a running cluster: every
+  gauge and counter against what the test did, including a service dying
+  and a re-pairing; the status document; the token.
 - **`tests/cli.rs`**: the built binary: parsing, exit codes, stdout/stderr
   discipline, a closed stdout, complete sessions with the store, SIGTERM.
 - **`tests/stress.rs`** (`--ignored`): 50 services and 50 clients, text and

@@ -50,6 +50,7 @@ jobs:
             <li><a href="guide/docs/ARCHITECTURE.html">Architecture</a></li>
             <li><a href="guide/docs/PROTOCOL.html">Wire protocol</a></li>
             <li><a href="guide/docs/REST_API.html">REST control plane</a></li>
+            <li><a href="guide/docs/MONITORING.html">Monitoring: the admin listener, metrics, the status document</a></li>
             <li><a href="guide/CONTRIBUTING.html">Contributing</a></li>
             <li><a href="guide/CHANGELOG.html">Changelog</a></li>
             <li>History: <a href="guide/docs/history/2026-refactor/PLAN.html">the 2026 refactor</a> and its <a href="guide/docs/history/2026-refactor/audit/README.html">audit</a>; <a href="guide/docs/history/2026-peer-text/PLAN.html">the 2026 peer-address and two-way text work</a>; <a href="guide/docs/history/2026-shared-store/PLAN.html">the 2026 shared store</a></li>

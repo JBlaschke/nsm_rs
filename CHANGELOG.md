@@ -175,7 +175,19 @@ version: 3.
   exposition `Metrics::render`, and `Status`, the JSON view;
   `Broker::metrics`, `gauges`, `render_metrics` and `status`;
   `Broker::drop_party` takes a `RemovalReason` instead of free text.
-  Nothing serves these yet; the admin listener and `nsm status` follow.
+- `nsm listen --admin-bind ADDR [--admin-token TOKEN]` (`NSM_ADMIN_TOKEN`):
+  an admin listener on a second, plain-HTTP socket with `GET /metrics` (the
+  Prometheus text exposition), `GET /v1/status` (one JSON document: version,
+  uptime, limits and timing in force, the current counts with a per-key and
+  a per-host breakdown, the counters since start, every party) and
+  `GET /healthz`. Off unless asked for; loopback needs no token, any other
+  address requires one, checked on every request in constant time, as for
+  `nsm serve` (decision D9). Parties never use it. The broker prints
+  `nsm: admin listener on http://ADDR` on stderr. Documented in
+  `docs/MONITORING.md`. In the library: `broker::admin` (`AdminOpts`,
+  `serve`, `router`), `ListenOpts::admin`, `ListenRequest::admin`,
+  `BrokerHandle::admin_addr` and `BrokerHandle::status`; `cli::AdminOpts`.
+  Monitoring plan, decision M6.
 
 ### Changed
 

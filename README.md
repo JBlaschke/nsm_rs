@@ -18,6 +18,7 @@ one protocol.
 - [Command-line reference](#command-line-reference)
 - [TLS](#tls)
 - [REST control plane](#rest-control-plane)
+- [Monitoring](#monitoring)
 - [Logging](#logging)
 - [Deployment](#deployment)
 - [Notes for HPC systems](#notes-for-hpc-systems)
@@ -150,7 +151,7 @@ nsm [--log-level FILTER] <COMMAND>
 |---|---|---|
 | `nsm list-interfaces [--ip-version 4\|6] [-v]` | interfaces on this host | one name per line |
 | `nsm list-ips [-n IFACE] [-i PREFIX] [--ip-version 4\|6] [-v]` | addresses on this host | one address per line |
-| `nsm listen --bind-port PORT [--transport tcp\|tls\|http\|https] [options]` | run the broker | nothing |
+| `nsm listen --bind-port PORT [--transport tcp\|tls\|http\|https] [--admin-bind ADDR] [options]` | run the broker | nothing |
 | `nsm publish BROKER --bind-port PORT --service-port PORT --key KEY [--ping] [options]` | register a service and keep it registered | nothing |
 | `nsm claim BROKER --bind-port PORT --key KEY [--ping] [options]` | pair with a service and stay paired | the service's `host:port`, one line per pairing |
 | `nsm collect PARTY [options]` | the last text a party received from its peer | the text |
@@ -392,6 +393,15 @@ On `listen`.
 a third party; leave it off when parties sit behind NAT or advertise a
 different interface on purpose.
 
+### Admin options
+
+On `listen`. See [Monitoring](#monitoring).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--admin-bind ADDR` | off | serve `GET /metrics` (Prometheus), `GET /v1/status` (JSON) and `GET /healthz` on this address, over plain HTTP |
+| `--admin-token TOKEN` (`NSM_ADMIN_TOKEN`) | none | bearer token every request to the admin listener must carry; required unless `--admin-bind` is a loopback address |
+
 ## TLS
 
 Which side needs what:
@@ -444,6 +454,30 @@ file paths: TLS material comes from the `serve` process's own flags. Bodies
 are limited to 64 KiB. Every route, field and status code is documented in
 [`docs/REST_API.md`](docs/REST_API.md).
 
+## Monitoring
+
+A broker started with `--admin-bind` reports what it holds and what it has
+done on a second, plain-HTTP socket that parties never use:
+
+```bash
+nsm listen --bind-port 12000 -i 127. --ip-version 4 --admin-bind 127.0.0.1:9108
+curl -s http://127.0.0.1:9108/metrics      # Prometheus text exposition
+curl -s http://127.0.0.1:9108/v1/status    # one JSON document: counts, per key, per host, every party
+```
+
+Gauges (parties by role and liveness mode, unclaimed services, failing
+parties, stores and their bytes) are read from the registry at the moment
+of the request; counters (requests by kind and outcome, registrations
+granted and refused by reason, removals by role and reason, re-pairings,
+heartbeats with a round-trip histogram, store operations) count since the
+broker started. Every metric is `nsm_*` with labels from closed sets, so a
+job array cannot blow up the time series; per-key and per-host counts are
+in the status document instead. Binding the admin listener anywhere but
+loopback requires `--admin-token` (`NSM_ADMIN_TOKEN`), sent as
+`Authorization: Bearer <token>` on every request. The metrics, the status
+document and scrape configuration are described in
+[`docs/MONITORING.md`](docs/MONITORING.md).
+
 ## Logging
 
 | Variable | Purpose |
@@ -454,8 +488,9 @@ are limited to 64 KiB. Every route, field and status code is documented in
 
 Logs go to stderr; stdout carries only a command's result. Message payloads and
 tokens are never logged. Other environment variables: `CERT_PATH`, `KEY_PATH`,
-`ROOT_PATH` (defaults for the TLS flags) and `NSM_TOKEN` (default for `nsm
-serve --token`). A template is in [`.env.example`](.env.example).
+`ROOT_PATH` (defaults for the TLS flags), `NSM_TOKEN` (default for `nsm
+serve --token`) and `NSM_ADMIN_TOKEN` (default for `nsm listen
+--admin-token`). A template is in [`.env.example`](.env.example).
 
 ## Deployment
 
@@ -534,6 +569,8 @@ cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | crate layout, components, concurrency and error rules |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | wire format, every message, sequence diagrams, timing and re-pairing rules |
 | [`docs/REST_API.md`](docs/REST_API.md) | the control plane's routes, bodies and status codes |
+| [`docs/MONITORING.md`](docs/MONITORING.md) | the admin listener: every metric, the status document, scraping |
+| [`docs/PLAN.md`](docs/PLAN.md) | the monitoring plan in progress: decisions M1 to M10 and the state of each branch |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | building, testing, dependency and protocol changes |
 | [`CHANGELOG.md`](./CHANGELOG.md) | what changed, including every breaking change |
 | [`docs/history/2026-refactor/`](docs/history/2026-refactor/PLAN.md) | the 2026 refactor: its plan, its audit of the previous code, and the decisions D1 to D12 the code cites |
