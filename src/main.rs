@@ -291,6 +291,38 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
             eprintln!("nsm: delivered");
         }
         Command::Store { op } => return store(op).await,
+        Command::Status {
+            admin,
+            json,
+            parties,
+            watch,
+            admin_token,
+            timing,
+        } => {
+            let net = net_opts(&TlsOpts::default(), &timing, &LimitsOpts::default());
+            loop {
+                let status = ops::status(&admin, admin_token.as_deref(), &net).await?;
+                if json {
+                    print_line(serde_json::to_string(&status)?)?;
+                } else {
+                    if watch.is_some() {
+                        print_line(format_args!(
+                            "--- {}",
+                            nsm::broker::metrics::utc_timestamp(now_unix_seconds())
+                        ))?;
+                    }
+                    print_line(status.summary(parties).trim_end())?;
+                }
+                let Some(every) = watch else { break };
+                tokio::select! {
+                    _ = tokio::time::sleep(every) => {}
+                    _ = shutdown.cancelled() => break,
+                }
+                if !json {
+                    print_line("")?;
+                }
+            }
+        }
         Command::Serve {
             bind,
             token,
@@ -363,6 +395,13 @@ async fn store(command: StoreCommand) -> Result<ExitCode> {
 }
 
 /// Run a party session until Ctrl-C or until the broker is lost.
+/// Now, in seconds since the Unix epoch (0 if the clock is before it).
+fn now_unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 async fn run_session(session: nsm::party::Session, shutdown: CancellationToken) -> Result<()> {
     let token = session.shutdown_token();
     tokio::spawn(async move {

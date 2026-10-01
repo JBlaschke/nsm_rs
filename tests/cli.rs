@@ -248,6 +248,7 @@ fn version_and_help_for_every_command() {
         "peer",
         "send",
         "store",
+        "status",
         "serve",
     ] {
         assert!(out.stdout.contains(cmd), "top-level help lacks {cmd}");
@@ -1170,6 +1171,181 @@ async fn listen_serves_an_admin_listener_when_asked() {
         "{}",
         out.stderr
     );
+}
+
+#[test]
+fn status_prints_usage_statistics() {
+    let broker_port = unused_port();
+    let mut broker = Proc::spawn_with_env(
+        "broker",
+        &argv(&[
+            &[
+                "listen",
+                "--bind-port",
+                &broker_port.to_string(),
+                "--admin-bind",
+                "127.0.0.1:0",
+            ],
+            IFACE,
+            FAST,
+        ]),
+        &[("NSM_ADMIN_TOKEN", "adm1n")],
+    );
+    broker.stderr_line_containing("broker listening on ");
+    let line = broker.stderr_line_containing("admin listener on ");
+    let admin = line.rsplit(' ').next().unwrap().to_owned();
+    let broker_addr = format!("127.0.0.1:{broker_port}");
+
+    // An empty broker, no token: refused with a message naming the flag.
+    let out = run(["status", &admin]);
+    assert_eq!(out.code, 1, "{}", out.stderr);
+    assert!(out.stdout.is_empty());
+    assert!(out.stderr.contains("--admin-token"), "{}", out.stderr);
+
+    // With the token from the environment.
+    let out = nsm()
+        .args(["status", &admin])
+        .env("NSM_ADMIN_TOKEN", "adm1n")
+        .output()
+        .expect("nsm runs");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.starts_with(&format!("broker {broker_addr}   nsm ")),
+        "{text}"
+    );
+    assert!(
+        text.contains("parties      0 services (0 unclaimed), 0 clients, 0 keys;"),
+        "{text}"
+    );
+    assert!(!text.contains("keys "), "{text}");
+
+    // A session: one service, one client, a text and a store entry.
+    let mut service = Proc::spawn(
+        "service",
+        &argv(&[
+            &[
+                "publish",
+                &broker_addr,
+                "--bind-port",
+                "0",
+                "--service-port",
+                "9000",
+                "--key",
+                "77",
+            ],
+            IFACE,
+            FAST,
+        ]),
+    );
+    service.stderr_line_containing("service registered as ");
+    let mut client = Proc::spawn(
+        "client",
+        &argv(&[
+            &["claim", &broker_addr, "--bind-port", "0", "--key", "77"],
+            IFACE,
+            FAST,
+        ]),
+    );
+    assert_eq!(client.stdout_line(), "127.0.0.1:9000");
+    let client_hb = heartbeat_addr(&client.stderr_line_containing("client registered as "));
+    let out = run(argv(&[
+        &["store", "put", &client_hb, "step", "--value", "1"],
+        FAST,
+    ]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+
+    let out = run(["status", &admin, "--admin-token", "adm1n", "--parties"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let text = out.stdout;
+    assert!(
+        text.contains("parties      1 services (0 unclaimed), 1 clients, 1 keys;"),
+        "{text}"
+    );
+    assert!(
+        text.contains("stores       1 stores, 1 entries, "),
+        "{text}"
+    );
+    assert!(
+        text.contains("since start  registrations 2 granted, 0 refused\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("store ops 1: 1 applied, 0 not applied, 0 refused\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("keys         key services unclaimed clients\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("             77         1         0       1\n"),
+        "{text}"
+    );
+    assert!(text.contains("hosts        host      parties\n"), "{text}");
+    assert!(text.contains("             127.0.0.1       2\n"), "{text}");
+    assert!(
+        text.contains("parties      id role    key mode      bind "),
+        "{text}"
+    );
+    assert!(text.contains(" service 77  heartbeat 127.0.0.1:"), "{text}");
+    assert!(text.contains(" client  77  heartbeat 127.0.0.1:"), "{text}");
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+
+    // --json is the status document as one line.
+    let out = run(["status", &admin, "--admin-token", "adm1n", "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let doc: serde_json::Value = serde_json::from_str(out.stdout.trim()).expect("JSON");
+    assert_eq!(doc["counts"]["services"], 1);
+    assert_eq!(doc["counts"]["clients"], 1);
+    assert_eq!(doc["bound"], broker_addr);
+    assert_eq!(doc["keys"][0]["key"], 77);
+    assert_eq!(doc["parties"].as_array().map(Vec::len), Some(2));
+    assert_eq!(doc["totals"]["store_ops"]["put"]["applied"], 1);
+
+    // --watch repeats with a timestamp header until interrupted.
+    let mut watch = Proc::spawn_with_env(
+        "watch",
+        &["status", &admin, "--watch", "0.2"],
+        &[("NSM_ADMIN_TOKEN", "adm1n")],
+    );
+    let first = watch.stdout_line();
+    assert!(
+        first.starts_with("--- 20") && first.ends_with('Z'),
+        "{first}"
+    );
+    assert!(watch.stdout_line().starts_with("broker "), "{first}");
+    let mut headers = 1;
+    while headers < 2 {
+        if watch.stdout_line().starts_with("--- ") {
+            headers += 1;
+        }
+    }
+    let exit = watch.terminate();
+    assert_eq!(exit.code(), Some(0), "watch exit after SIGTERM: {exit}");
+
+    // Unreachable, and not an admin address at all.
+    let out = run(argv(&[
+        &["status", &format!("127.0.0.1:{}", unused_port())],
+        FAST,
+    ]));
+    assert_eq!(out.code, 1);
+    assert!(out.stdout.is_empty());
+    assert!(out.stderr.starts_with("nsm: "), "{}", out.stderr);
+    let out = run(["status", "tls://127.0.0.1:1"]);
+    assert_eq!(out.code, 2);
+    assert!(out.stderr.contains("plain HTTP"), "{}", out.stderr);
+
+    client.kill();
+    service.kill();
+    let exit = broker.terminate();
+    assert_eq!(exit.code(), Some(0), "broker exit after SIGTERM: {exit}");
 }
 
 #[tokio::test]

@@ -1204,6 +1204,152 @@ pub struct Status {
 }
 
 impl Status {
+    /// The document as `nsm status` prints it: one header line, the current
+    /// counts, the counters since start, then the per-key and per-host
+    /// tables and, with `with_parties`, one row per party. Ends with a
+    /// newline.
+    pub fn summary(&self, with_parties: bool) -> String {
+        let mut out = String::new();
+        let c = &self.counts;
+        let t = &self.totals;
+        let _ = writeln!(
+            out,
+            "broker {}   nsm {}, protocol {}   up {}, since {}",
+            self.bound
+                .as_ref()
+                .map_or_else(|| "?".to_owned(), ToString::to_string),
+            self.version,
+            self.protocol_version,
+            duration_text(self.uptime_seconds),
+            utc_timestamp(self.started_at),
+        );
+        let _ = writeln!(
+            out,
+            "parties      {} services ({} unclaimed), {} clients, {} keys; {} in ping mode, {} heartbeat tasks, {} failing; {} of {} registrations",
+            c.services,
+            c.services_unclaimed,
+            c.clients,
+            c.keys,
+            c.ping_parties,
+            c.heartbeat_tasks,
+            c.failing,
+            c.services.saturating_add(c.clients),
+            self.limits.max_registrations,
+        );
+        let _ = writeln!(
+            out,
+            "stores       {} stores, {} entries, {} bytes ({} per store at most)",
+            c.clients, c.store_entries, c.store_bytes, self.limits.max_store_bytes,
+        );
+        let refused = Totals::sum(&t.registrations_refused);
+        let _ = writeln!(
+            out,
+            "since start  registrations {} granted, {} refused{}",
+            Totals::sum(&t.registrations),
+            refused,
+            nonzero(&t.registrations_refused),
+        );
+        let removed = |role: &str| t.removals.get(role).map_or(0, Totals::sum);
+        let mut reasons: BTreeMap<String, u64> = BTreeMap::new();
+        for by_reason in t.removals.values() {
+            for (reason, n) in by_reason {
+                *reasons.entry(reason.clone()).or_default() += n;
+            }
+        }
+        let _ = writeln!(
+            out,
+            "             removals {} services, {} clients{}; re-pairings {}",
+            removed("service"),
+            removed("client"),
+            nonzero(&reasons),
+            t.repairings,
+        );
+        let acked = t.heartbeats.get("ack").copied().unwrap_or(0);
+        let failed = t.heartbeats.get("fail").copied().unwrap_or(0);
+        let mean_ms = if t.heartbeat_seconds.count > 0 {
+            t.heartbeat_seconds.sum * 1000.0 / t.heartbeat_seconds.count as f64
+        } else {
+            0.0
+        };
+        let _ = writeln!(
+            out,
+            "             heartbeats {acked} acknowledged, {failed} failed; mean round trip {mean_ms:.1} ms",
+        );
+        let _ = writeln!(
+            out,
+            "             requests {} answered, {} refused, {} failed",
+            t.requests_with("ok"),
+            t.requests_with("nack"),
+            t.requests_with("error"),
+        );
+        let store_with = |outcome: &str| {
+            t.store_ops
+                .values()
+                .filter_map(|by_outcome| by_outcome.get(outcome))
+                .fold(0u64, |a, b| a.saturating_add(*b))
+        };
+        let _ = writeln!(
+            out,
+            "             store ops {}: {} applied, {} not applied, {} refused",
+            Totals::sum_nested(&t.store_ops),
+            store_with("applied"),
+            store_with("not_applied"),
+            store_with("refused"),
+        );
+        if !self.keys.is_empty() {
+            let mut rows = vec![row(["key", "services", "unclaimed", "clients"])];
+            rows.extend(self.keys.iter().map(|k| {
+                row([
+                    &k.key.to_string(),
+                    &k.services.to_string(),
+                    &k.unclaimed.to_string(),
+                    &k.clients.to_string(),
+                ])
+            }));
+            table(&mut out, "keys", &rows, 0);
+        }
+        if !self.hosts.is_empty() {
+            let mut rows = vec![row(["host", "parties"])];
+            rows.extend(
+                self.hosts
+                    .iter()
+                    .map(|h| row([h.host.as_str(), &h.parties.to_string()])),
+            );
+            table(&mut out, "hosts", &rows, 1);
+        }
+        if with_parties {
+            let mut rows = vec![row([
+                "id",
+                "role",
+                "key",
+                "mode",
+                "bind",
+                "peer",
+                "failures",
+                "last seen",
+            ])];
+            rows.extend(self.parties.iter().map(|p| {
+                row([
+                    &p.id.to_string(),
+                    &p.role.to_string(),
+                    &p.key.to_string(),
+                    if p.ping { "ping" } else { "heartbeat" },
+                    &p.bind_addr.to_string(),
+                    &p.paired_with
+                        .map_or_else(|| "-".to_owned(), |id| id.to_string()),
+                    &p.failures.to_string(),
+                    &format!("{} ago", duration_text(p.last_seen_seconds_ago)),
+                ])
+            }));
+            if rows.len() == 1 {
+                let _ = writeln!(out, "parties      none");
+            } else {
+                table(&mut out, "parties", &rows, 5);
+            }
+        }
+        out
+    }
+
     /// Assemble the view. `bound` is the listener's address when the
     /// caller knows it.
     pub fn new(
@@ -1232,11 +1378,239 @@ impl Status {
     }
 }
 
+fn row<const N: usize>(cells: [&str; N]) -> Vec<String> {
+    cells.iter().map(|c| (*c).to_owned()).collect()
+}
+
+/// The non-zero entries of a map as ` (a 1, b 2)`, or nothing.
+fn nonzero(map: &BTreeMap<String, u64>) -> String {
+    let parts: Vec<String> = map
+        .iter()
+        .filter(|(_, n)| **n > 0)
+        .map(|(k, n)| format!("{k} {n}"))
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+/// Append `rows` (the first is the header) under `title`, columns aligned:
+/// the first `left` columns left-aligned, the rest right-aligned.
+fn table(out: &mut String, title: &str, rows: &[Vec<String>], left: usize) {
+    let columns = rows.first().map_or(0, Vec::len);
+    let widths: Vec<usize> = (0..columns)
+        .map(|i| {
+            rows.iter()
+                .map(|r| r.get(i).map_or(0, |c| c.chars().count()))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    for (n, r) in rows.iter().enumerate() {
+        let label = if n == 0 { title } else { "" };
+        let _ = write!(out, "{label:<12}");
+        for (i, cell) in r.iter().enumerate() {
+            let w = widths[i];
+            if i < left.max(1) {
+                let _ = write!(out, " {cell:<w$}");
+            } else {
+                let _ = write!(out, " {cell:>w$}");
+            }
+        }
+        out.push('\n');
+    }
+}
+
+/// `3d 04h 05m 06s`, dropping leading zero units (`4h 05m 06s`, `5m 06s`,
+/// `6s`).
+pub fn duration_text(secs: u64) -> String {
+    let (d, h, m, s) = (secs / 86_400, secs / 3600 % 24, secs / 60 % 60, secs % 60);
+    if d > 0 {
+        format!("{d}d {h:02}h {m:02}m {s:02}s")
+    } else if h > 0 {
+        format!("{h}h {m:02}m {s:02}s")
+    } else if m > 0 {
+        format!("{m}m {s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// Seconds since the Unix epoch as `YYYY-MM-DDTHH:MM:SSZ`.
+pub fn utc_timestamp(secs: u64) -> String {
+    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
+    let rem = secs % 86_400;
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem / 60 % 60,
+        rem % 60
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::net::Transport;
     use crate::protocol::{RegToken, StoreKey};
+
+    #[test]
+    fn durations_and_timestamps_read_well() {
+        assert_eq!(duration_text(0), "0s");
+        assert_eq!(duration_text(6), "6s");
+        assert_eq!(duration_text(306), "5m 06s");
+        assert_eq!(duration_text(3723), "1h 02m 03s");
+        assert_eq!(duration_text(90_061), "1d 01h 01m 01s");
+        assert_eq!(utc_timestamp(0), "1970-01-01T00:00:00Z");
+        assert_eq!(utc_timestamp(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(utc_timestamp(1_759_312_800), "2025-10-01T10:00:00Z");
+        assert_eq!(utc_timestamp(1_790_848_800), "2026-10-01T10:00:00Z");
+        assert_eq!(utc_timestamp(4_102_444_799), "2099-12-31T23:59:59Z");
+    }
+
+    #[test]
+    fn summary_lists_counts_totals_and_tables() {
+        let r = registry_with_two_keys();
+        let m = Metrics::new();
+        m.registered(Role::Service);
+        m.registered(Role::Service);
+        m.registered(Role::Service);
+        m.registered(Role::Client);
+        m.refused(RefusalReason::NoService);
+        m.refused(RefusalReason::NoService);
+        m.removed(Role::Service, RemovalReason::HeartbeatsFailed);
+        m.repaired();
+        m.heartbeat(HeartbeatOutcome::Ack, Duration::from_millis(4));
+        m.heartbeat(HeartbeatOutcome::Fail, Duration::from_millis(200));
+        m.request(RequestKind::Publish, Outcome::Ok);
+        m.request(RequestKind::Claim, Outcome::Nack);
+        m.store_op(StoreOpKind::Put, StoreOutcome::Applied);
+        let mut gauges = Gauges::of(&r);
+        gauges.heartbeat_tasks = 3;
+        let mut status = Status::new(
+            &m,
+            &gauges,
+            PartyRow::all(&r, now()),
+            r.limits(),
+            &BrokerPolicy::default(),
+            &Timing::default(),
+            Some(Addr::tcp("127.0.0.1", 12000)),
+        );
+        status.started_at = 1_790_848_800;
+        status.uptime_seconds = 3723;
+
+        let text = status.summary(false);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines[0],
+            format!(
+                "broker 127.0.0.1:12000   nsm {}, protocol {PROTOCOL_VERSION}   up 1h 02m 03s, since 2026-10-01T10:00:00Z",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+        assert_eq!(
+            lines[1],
+            "parties      3 services (2 unclaimed), 1 clients, 2 keys; 1 in ping mode, 3 heartbeat tasks, 1 failing; 4 of 10000 registrations"
+        );
+        assert!(
+            lines[2].starts_with("stores       1 stores, 1 entries, "),
+            "{}",
+            lines[2]
+        );
+        assert!(
+            lines[2].ends_with(" bytes (16384 per store at most)"),
+            "{}",
+            lines[2]
+        );
+        assert_eq!(
+            lines[3],
+            "since start  registrations 4 granted, 2 refused (no_service 2)"
+        );
+        assert_eq!(
+            lines[4],
+            "             removals 1 services, 0 clients (heartbeats_failed 1); re-pairings 1"
+        );
+        assert_eq!(
+            lines[5],
+            "             heartbeats 1 acknowledged, 1 failed; mean round trip 102.0 ms"
+        );
+        assert_eq!(
+            lines[6],
+            "             requests 1 answered, 1 refused, 0 failed"
+        );
+        assert_eq!(
+            lines[7],
+            "             store ops 1: 1 applied, 0 not applied, 0 refused"
+        );
+        assert_eq!(lines[8], "keys         key services unclaimed clients");
+        assert_eq!(lines[9], "             7          2         1       1");
+        assert_eq!(lines[10], "             9          1         1       0");
+        assert_eq!(lines[11], "hosts        host        parties");
+        assert_eq!(lines[12], "             10.0.0.1          2");
+        assert_eq!(lines[13], "             10.0.0.2          1");
+        assert_eq!(lines[14], "             svc.example       1");
+        assert_eq!(lines.len(), 15, "{text}");
+        assert!(text.ends_with('\n'));
+
+        let with_parties = status.summary(true);
+        let rows: Vec<&str> = with_parties.lines().skip(15).collect();
+        assert_eq!(rows.len(), 5, "{with_parties}");
+        assert!(
+            rows[0].starts_with("parties      id role    key mode      bind"),
+            "{}",
+            rows[0]
+        );
+        assert!(rows[0].ends_with("peer failures last seen"), "{}", rows[0]);
+        assert!(
+            rows[1].contains(" service 7   heartbeat 10.0.0.1:7001 "),
+            "{}",
+            rows[1]
+        );
+        assert!(rows[1].ends_with("0s ago"), "{}", rows[1]);
+        assert!(rows[3].contains("https://svc.example:4434"), "{}", rows[3]);
+        assert!(
+            rows[3].contains(" - "),
+            "an unclaimed service has no peer: {}",
+            rows[3]
+        );
+        assert!(
+            rows[4].contains(" client  7   heartbeat 10.0.0.1:7003 "),
+            "{}",
+            rows[4]
+        );
+
+        let empty = Status::new(
+            &Metrics::new(),
+            &Gauges::of(&Registry::default()),
+            Vec::new(),
+            &Limits::default(),
+            &BrokerPolicy::default(),
+            &Timing::default(),
+            None,
+        )
+        .summary(true);
+        assert!(empty.starts_with("broker ?   nsm "), "{empty}");
+        assert!(
+            empty.contains("registrations 0 granted, 0 refused\n"),
+            "{empty}"
+        );
+        assert!(empty.contains("mean round trip 0.0 ms\n"), "{empty}");
+        assert!(!empty.contains("keys "), "{empty}");
+        assert!(empty.ends_with("parties      none\n"), "{empty}");
+    }
 
     fn token(n: u8) -> RegToken {
         RegToken::from_bytes([n; 16])
