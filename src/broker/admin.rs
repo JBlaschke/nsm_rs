@@ -10,7 +10,10 @@
 //!
 //! Exposure follows the control plane (decision D9): a non-loopback bind
 //! requires a bearer token, checked on every route in constant time, and the
-//! check happens before anything is bound.
+//! check happens before anything is bound. [`bind`] and
+//! [`AdminListener::serve`] are two steps so that `listen` can bind the
+//! admin address before it starts anything else and serve it once the
+//! protocol listener's address, which `/v1/status` reports, is known.
 //!
 //! | Method and path | Result |
 //! |---|---|
@@ -89,6 +92,50 @@ impl AdminServer {
     }
 }
 
+/// An admin listener that is bound but not serving yet: the result of
+/// [`bind`], started by [`AdminListener::serve`]. Dropping it closes the
+/// socket.
+#[derive(Debug)]
+pub struct AdminListener {
+    listener: TcpListener,
+    local_addr: SocketAddr,
+    token: Option<String>,
+}
+
+impl AdminListener {
+    /// The address actually bound.
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    /// Start serving over the given broker. `bound` is the protocol
+    /// listener's address, reported by `/v1/status`. The listener stops
+    /// when `shutdown` is cancelled.
+    pub fn serve(
+        self,
+        broker: Arc<Broker>,
+        bound: Addr,
+        shutdown: CancellationToken,
+    ) -> AdminServer {
+        let AdminListener {
+            listener,
+            local_addr,
+            token,
+        } = self;
+        let app = router(AdminState::new(broker, bound, token));
+        let task = tokio::spawn(async move {
+            let result = axum::serve(listener, app)
+                .with_graceful_shutdown(async move { shutdown.cancelled().await })
+                .await;
+            if let Err(e) = result {
+                warn!(error = %e, "admin listener stopped with an error");
+            }
+        });
+        info!(%local_addr, "admin listener listening");
+        AdminServer { local_addr, task }
+    }
+}
+
 /// What the routes read: the broker and the protocol listener's address.
 #[derive(Debug)]
 pub struct AdminState {
@@ -108,20 +155,14 @@ impl AdminState {
     }
 }
 
-/// Bind and start serving over the given broker. `bound` is the protocol
-/// listener's address, reported by `/v1/status`. The listener stops when
-/// `shutdown` is cancelled.
+/// Check the loopback-or-token rule and bind the address, without serving
+/// yet.
 ///
 /// # Errors
 ///
 /// [`AdminOpts::check`]'s error, and [`Error::Bind`] when the address
 /// cannot be bound.
-pub async fn serve(
-    opts: AdminOpts,
-    broker: Arc<Broker>,
-    bound: Addr,
-    shutdown: CancellationToken,
-) -> Result<AdminServer> {
+pub async fn bind(opts: AdminOpts) -> Result<AdminListener> {
     opts.check()?;
     let listener = TcpListener::bind(opts.bind)
         .await
@@ -130,17 +171,27 @@ pub async fn serve(
             source,
         })?;
     let local_addr = listener.local_addr()?;
-    let app = router(AdminState::new(broker, bound, opts.token));
-    let task = tokio::spawn(async move {
-        let result = axum::serve(listener, app)
-            .with_graceful_shutdown(async move { shutdown.cancelled().await })
-            .await;
-        if let Err(e) = result {
-            warn!(error = %e, "admin listener stopped with an error");
-        }
-    });
-    info!(%local_addr, "admin listener listening");
-    Ok(AdminServer { local_addr, task })
+    Ok(AdminListener {
+        listener,
+        local_addr,
+        token: opts.token,
+    })
+}
+
+/// [`bind`] and [`AdminListener::serve`] in one step, for a broker that is
+/// already running. `bound` is the protocol listener's address, reported by
+/// `/v1/status`.
+///
+/// # Errors
+///
+/// Those of [`bind`].
+pub async fn serve(
+    opts: AdminOpts,
+    broker: Arc<Broker>,
+    bound: Addr,
+    shutdown: CancellationToken,
+) -> Result<AdminServer> {
+    Ok(bind(opts).await?.serve(broker, bound, shutdown))
 }
 
 /// Build the router over shared state (exposed for tests).
@@ -282,21 +333,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serve_refuses_a_non_loopback_bind_without_a_token_before_binding() {
+    async fn bind_refuses_a_non_loopback_bind_without_a_token_before_binding() {
         // Port 0 on the unspecified address would bind fine; the check
         // must come first.
-        let err = serve(
-            AdminOpts {
-                bind: "0.0.0.0:0".parse().unwrap(),
-                token: None,
-            },
-            broker(),
-            Addr::tcp("127.0.0.1", 1),
-            CancellationToken::new(),
-        )
+        let err = bind(AdminOpts {
+            bind: "0.0.0.0:0".parse().unwrap(),
+            token: None,
+        })
         .await
         .unwrap_err();
         assert!(matches!(err, Error::Config(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn bind_reports_a_taken_port_and_holds_the_socket_until_served() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = held.local_addr().unwrap();
+        let err = bind(AdminOpts {
+            bind: taken,
+            token: None,
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::Bind { addr, .. } if addr == taken),
+            "{err:?}"
+        );
+        drop(held);
+
+        let bound = bind(AdminOpts {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            token: None,
+        })
+        .await
+        .unwrap();
+        let addr = bound.local_addr();
+        // Bound but not serving: a connection is accepted by the kernel's
+        // backlog, but nothing answers; and the port cannot be taken again.
+        assert!(std::net::TcpListener::bind(addr).is_err());
+        let shutdown = CancellationToken::new();
+        let server = bound.serve(broker(), Addr::tcp("127.0.0.1", 1), shutdown.clone());
+        assert_eq!(server.local_addr(), addr);
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/healthz"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        shutdown.cancel();
+        server.wait().await;
     }
 
     #[tokio::test]

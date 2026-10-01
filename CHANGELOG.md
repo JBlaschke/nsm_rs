@@ -186,7 +186,8 @@ version: 3.
   `nsm: admin listener on http://ADDR` on stderr. Documented in
   `docs/MONITORING.md`. In the library: `broker::admin` (`AdminOpts`,
   `serve`, `router`), `ListenOpts::admin`, `ListenRequest::admin`,
-  `BrokerHandle::admin_addr` and `BrokerHandle::status`; `cli::AdminOpts`.
+  `BrokerHandle::admin_addr` and `BrokerHandle::status`;
+  `cli::AdminListenerOpts`.
   Monitoring plan, decision M6.
 
 ### Changed

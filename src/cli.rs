@@ -213,9 +213,10 @@ impl LimitsOpts {
     }
 }
 
-/// The broker's admin listener (monitoring plan, decision M6).
+/// The broker's admin listener (monitoring plan, decision M6); becomes a
+/// [`broker::admin::AdminOpts`](crate::broker::admin::AdminOpts).
 #[derive(Debug, Clone, Default, Args)]
-pub struct AdminOpts {
+pub struct AdminListenerOpts {
     /// Serve `GET /metrics` (Prometheus), `GET /v1/status` (JSON) and
     /// `GET /healthz` on this address, over plain HTTP. Off when omitted.
     /// Binding anything but a loopback address requires --admin-token.
@@ -232,7 +233,7 @@ pub struct AdminOpts {
     pub admin_token: Option<String>,
 }
 
-impl AdminOpts {
+impl AdminListenerOpts {
     /// The admin listener's settings, or `None` when `--admin-bind` was not
     /// given (a token alone starts nothing).
     pub fn admin(&self) -> Option<crate::broker::admin::AdminOpts> {
@@ -319,7 +320,7 @@ pub enum Command {
         policy: BrokerOpts,
         /// Admin listener.
         #[command(flatten)]
-        admin: AdminOpts,
+        admin: AdminListenerOpts,
     },
 
     /// Announce a service to the broker and keep it registered.
