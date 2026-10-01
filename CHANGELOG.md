@@ -198,6 +198,16 @@ version: 3.
   or refuses the token, 2 for a `tls://` or `https://` address. In the
   library: `ops::status` and `Status::summary`. Monitoring plan, decision
   M7.
+- A local monitoring stack: `deploy/monitoring/compose.yaml` runs
+  Prometheus and Grafana on loopback with the datasource and the `NSM
+  broker` dashboard provisioned (`grafana/dashboards/nsm.json`), scraping a
+  broker on the host through `host.docker.internal` with the token from
+  `NSM_ADMIN_TOKEN_FILE` (default `admin-token.example`), or a broker
+  inside the stack with `--profile broker`. `scripts/monitoring-local.sh
+  fetch|start|status|stop` runs the same two servers without containers,
+  as the current user, from one work directory, for interactive HPC nodes:
+  `fetch` downloads the release tarballs and checks their SHA-256 sums.
+  Monitoring plan, decisions M8 and M9.
 
 ### Changed
 

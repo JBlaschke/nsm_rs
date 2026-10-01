@@ -248,3 +248,95 @@ scrape_configs:
 A scrape takes the registry lock once for the gauges and renders about 60
 lines plus 11 per histogram bucket; it is cheap at any interval Prometheus
 would use. Metric values are exact at the instant of the scrape.
+
+## Running Prometheus and Grafana locally
+
+Two ways to get a graph of a broker you are testing, both bound to the
+host's loopback and both provisioning the same dashboard,
+[`deploy/monitoring/grafana/dashboards/nsm.json`](../deploy/monitoring/grafana/dashboards/nsm.json)
+(`NSM broker`: the stat row, parties by role and mode, registrations
+granted and refused, removals and re-pairings, heartbeats and their round
+trip quantiles, requests, store operations and bytes, with a `Broker`
+variable when several brokers are scraped and an annotation at every
+restart).
+
+### On a laptop, with containers
+
+[`deploy/monitoring/compose.yaml`](../deploy/monitoring/compose.yaml) runs
+Prometheus on `127.0.0.1:9090` and Grafana on `127.0.0.1:3000` (user
+`admin`, password `admin` unless `GRAFANA_ADMIN_PASSWORD` is set) with
+Docker or Podman:
+
+```bash
+cd deploy/monitoring
+docker compose up                # or: podman compose up
+```
+
+Prometheus scrapes a broker running on the host at
+`host.docker.internal:9108`. A container reaches the host's interfaces,
+not its loopback, so the broker's admin listener must bind every interface,
+which needs a token; the stack presents the token from the file
+`NSM_ADMIN_TOKEN_FILE` names, by default the committed
+`admin-token.example` (`change-me`):
+
+```bash
+nsm listen --bind-port 12000 -i 127. --ip-version 4 --admin-bind 0.0.0.0:9108 --admin-token change-me
+```
+
+For a real token, write it to a file and name the file:
+
+```bash
+openssl rand -hex 16 > admin-token
+nsm listen ... --admin-bind 0.0.0.0:9108 --admin-token "$(cat admin-token)"
+NSM_ADMIN_TOKEN_FILE=./admin-token docker compose up
+```
+
+For a self-contained demo with nothing on the host, the `broker` profile
+builds the image and runs a broker inside the stack with the same token,
+reachable from the host at `http://127.0.0.1:12000`:
+
+```bash
+docker compose --profile broker up --build
+nsm publish http://127.0.0.1:12000 --bind-port 12010 --service-port 9000 --key 1 -i 127. --ip-version 4
+```
+
+Then open <http://localhost:3000/d/nsm-broker>. Prometheus's own view of
+the target is at <http://localhost:9090/targets>. Data is kept in two named
+volumes; `docker compose down -v` removes it.
+
+### On an interactive HPC node, without containers
+
+[`scripts/monitoring-local.sh`](../scripts/monitoring-local.sh) runs the
+Prometheus and Grafana binaries directly, as the current user, with
+everything (configuration, data, logs, pids) in one work directory, by
+default `$SCRATCH/nsm-monitoring` (then `$TMPDIR/nsm-monitoring`). Nothing
+touches `$HOME` and nothing needs root.
+
+```bash
+scripts/monitoring-local.sh fetch     # once: download both release tarballs into the work directory
+scripts/monitoring-local.sh start     # write the configuration, start both on loopback, print the URLs
+scripts/monitoring-local.sh status
+scripts/monitoring-local.sh stop
+```
+
+`fetch` is the only step that needs the network (run it on a login node):
+it downloads the official release tarballs for the host's platform
+(Prometheus from GitHub, Grafana from grafana.com, Linux or macOS, x86-64
+or arm64), checks each against its published SHA-256 sum, and extracts
+them into the work directory. If `prometheus` and `grafana` are already on
+`PATH` (a Homebrew install, a module), `fetch` is not needed; `PROMETHEUS_BIN`,
+`GRAFANA_BIN` and `GRAFANA_HOME` name them explicitly otherwise.
+
+`start` scrapes `NSM_ADMIN` (default `127.0.0.1:9108`), presenting the
+token in `NSM_ADMIN_TOKEN_FILE` when set, and binds Prometheus to
+`127.0.0.1:$PROMETHEUS_PORT` (9090) and Grafana to
+`127.0.0.1:$GRAFANA_PORT` (3000). On a compute node the broker's admin
+listener on loopback is enough, with no token. To look at the graphs from
+a laptop, forward the two ports over SSH; `start` prints the command:
+
+```bash
+ssh -L 3000:localhost:3000 -L 9090:localhost:9090 nid001234   # through the login node if needed
+```
+
+and open <http://localhost:3000/d/nsm-broker>. Every variable the script
+reads is listed at its top (`scripts/monitoring-local.sh help`).

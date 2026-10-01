@@ -542,6 +542,15 @@ mount the certificate and key, set `CERT_PATH`/`KEY_PATH` and append `--tls`.
 **Compose.** `docker compose up --build` runs the same broker; see
 [`compose.yaml`](./compose.yaml) for the TLS variant.
 
+**Monitoring stack.** [`deploy/monitoring/`](./deploy/monitoring/README.md)
+runs Prometheus and Grafana on loopback with the `NSM broker` dashboard
+provisioned (`docker compose up`, or `podman compose up`), scraping a broker
+on the host or, with `--profile broker`, one inside the stack.
+[`scripts/monitoring-local.sh`](./scripts/monitoring-local.sh) does the same
+without containers, for an interactive HPC node: `fetch` the two release
+tarballs once, then `start`, `status`, `stop`. See
+[`docs/MONITORING.md`](docs/MONITORING.md#running-prometheus-and-grafana-locally).
+
 **Kubernetes.** The broker is a plain Deployment with one Service on its bind
 port; parties inside the cluster reach it by DNS name, parties outside through
 whatever ingress exposes that port (TCP, not HTTP-only, unless the broker runs
