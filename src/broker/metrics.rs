@@ -16,7 +16,7 @@
 //! rendezvous key, a host or a party id (decision M3). The per-key and
 //! per-host breakdowns are in [`Status`] only.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -894,7 +894,6 @@ impl Gauges {
         };
         let mut keys: BTreeMap<Key, KeyRow> = BTreeMap::new();
         let mut hosts: BTreeMap<String, u64> = BTreeMap::new();
-        let mut distinct_keys: BTreeSet<Key> = BTreeSet::new();
         for party in registry.parties() {
             let role = match party {
                 Party::Service(_) => Role::Service,
@@ -904,7 +903,6 @@ impl Gauges {
             if party.failures() > 0 {
                 g.failing += 1;
             }
-            distinct_keys.insert(party.key());
             *hosts.entry(party.bind_addr().host.clone()).or_default() += 1;
             let row = keys.entry(party.key()).or_insert_with(|| KeyRow {
                 key: party.key(),
@@ -928,7 +926,7 @@ impl Gauges {
                 }
             }
         }
-        g.keys = count(distinct_keys.len());
+        g.keys = count(keys.len());
         g.per_key = keys.into_values().collect();
         g.per_host = hosts
             .into_iter()

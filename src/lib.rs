@@ -11,7 +11,7 @@
 //! | [`protocol`] | typed wire messages and framing shared by all transports |
 //! | [`tls`] | rustls configuration from PEM files |
 //! | [`transport`] | one request, one reply over TCP, TLS, HTTP or HTTPS; the `Handler` trait |
-//! | [`broker`] | registry, heartbeat monitor and request handler of the broker |
+//! | [`broker`] | registry, heartbeat monitor, request handler, metrics and admin listener of the broker |
 //! | [`party`] | the service and client sides: bind, register, stay alive |
 //! | [`ops`] | the operations, typed and print-free, shared by the CLI and the control plane |
 //! | [`rest`] | the REST control plane behind `nsm serve` |
