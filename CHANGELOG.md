@@ -189,6 +189,15 @@ version: 3.
   `BrokerHandle::admin_addr` and `BrokerHandle::status`;
   `cli::AdminListenerOpts`.
   Monitoring plan, decision M6.
+- `nsm status ADMIN [--json] [--parties] [--watch SECS] [--admin-token
+  TOKEN]`: a broker's usage statistics from its admin listener, as one
+  block (the broker and its uptime, parties by role, key and host, stores,
+  and the counters since start), with one row per party on `--parties`,
+  the status document as one JSON line on `--json`, and repeated with a
+  timestamp header on `--watch`. Exit 1 when the listener cannot be reached
+  or refuses the token, 2 for a `tls://` or `https://` address. In the
+  library: `ops::status` and `Status::summary`. Monitoring plan, decision
+  M7.
 
 ### Changed
 

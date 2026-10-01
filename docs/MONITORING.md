@@ -122,7 +122,7 @@ reads:
 {
   "version": "0.1.0",
   "protocol_version": 3,
-  "started_at": 1759300000,
+  "started_at": 1790845077,
   "uptime_seconds": 3723,
   "bound": "10.0.0.1:12000",
   "limits": {"max_frame_bytes": 65536, "max_connections": 1024, "max_registrations": 10000,
@@ -162,6 +162,61 @@ with `paired_with` naming a service's client or a client's service and
 `last_seen_seconds_ago` the time since the broker last heard from the party
 (a registration, an acknowledged heartbeat or a ping). In the library the
 document is `nsm::broker::Status`.
+
+## Quick statistics from a shell
+
+`nsm status ADMIN` reads the status document and prints it as one block;
+`ADMIN` is the admin listener's address (`host:port` or `http://host:port`),
+and `--admin-token` (`NSM_ADMIN_TOKEN`) is the broker's token when it has
+one.
+
+```bash
+nsm status 127.0.0.1:9108
+nsm status 127.0.0.1:9108 --parties          # plus one row per registered party
+nsm status 127.0.0.1:9108 --json             # the document as one line, for scripts
+nsm status 127.0.0.1:9108 --watch 5          # again every 5 seconds until Ctrl-C
+```
+
+```text
+broker 127.0.0.1:12000   nsm 0.1.0, protocol 3   up 1h 02m 03s, since 2026-10-01T10:00:00Z
+parties      3 services (1 unclaimed), 2 clients, 2 keys; 0 in ping mode, 5 heartbeat tasks, 0 failing; 5 of 10000 registrations
+stores       2 stores, 4 entries, 420 bytes (16384 per store at most)
+since start  registrations 5 granted, 1 refused (no_service 1)
+             removals 0 services, 0 clients; re-pairings 0
+             heartbeats 9300 acknowledged, 2 failed; mean round trip 2.0 ms
+             requests 9315 answered, 3 refused, 0 failed
+             store ops 40: 40 applied, 0 not applied, 0 refused
+keys         key  services unclaimed clients
+             1234        2         0       2
+             99          1         1       0
+hosts        host     parties
+             10.0.0.7       3
+             10.0.0.9       2
+parties      id role    key  mode      bind           peer failures last seen
+             1  service 1234 heartbeat 10.0.0.7:12010    4        0 1s ago
+             4  client  1234 heartbeat 10.0.0.9:12020    1        0 0s ago
+```
+
+The header names the broker's protocol listener, its version and how long
+it has been up. `parties` and `stores` are the gauges; the `since start`
+lines are the counters, with the non-zero reasons in parentheses. The
+`keys` and `hosts` tables are the breakdowns the metrics do not carry; a
+key with unclaimed services and no clients is a service nobody uses, a host
+near `--max-registrations-per-host` is a node about to be refused. In the
+`parties` table (with `--parties`), `peer` is a service's client or a
+client's service (`-` for an unclaimed service), `failures` the consecutive
+failed heartbeats, and `last seen` the time since the broker last heard
+from the party.
+
+Stdout carries only the summary (or the JSON), so it can be captured. With
+`--watch` each text block is preceded by `--- <UTC timestamp>` and the
+blocks are separated by a blank line, nothing is cleared, so the output can
+go to a file; `--json --watch` prints one document per line. The exit
+status is 0, 1 when the admin listener cannot be reached, refuses the token
+or answers something else (`nsm: ...` on stderr), 2 for a usage error, which
+includes a `tls://` or `https://` address: the admin listener speaks plain
+HTTP. The request and connect timeouts are the usual `--request-timeout`
+and `--connect-timeout`.
 
 ## Scraping
 

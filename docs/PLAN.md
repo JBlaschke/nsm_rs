@@ -13,8 +13,8 @@
 | Branch | State | Notes |
 |---|---|---|
 | `metrics/01-broker-metrics` | done | `broker::metrics`: counters bumped where things happen, gauges read from the registry, the Prometheus text exposition written by hand, and `Status`, the JSON view; nothing is served yet |
-| `metrics/02-admin-listener` | in progress | `nsm listen --admin-bind ADDR [--admin-token T]`: a plain-HTTP admin listener with `GET /metrics`, `GET /v1/status` and `GET /healthz`; loopback or token (D9); `docs/MONITORING.md` |
-| `metrics/03-status-cli` | planned | `nsm status ADMIN [--json] [--parties] [--watch SECS]`: quick usage statistics from `/v1/status` |
+| `metrics/02-admin-listener` | done | `nsm listen --admin-bind ADDR [--admin-token T]`: a plain-HTTP admin listener with `GET /metrics`, `GET /v1/status` and `GET /healthz`; loopback or token (D9); `docs/MONITORING.md` |
+| `metrics/03-status-cli` | in progress | `nsm status ADMIN [--json] [--parties] [--watch SECS]`: quick usage statistics from `/v1/status` |
 | `metrics/04-local-stack` | planned | `deploy/monitoring/`: Prometheus and Grafana by compose with a provisioned dashboard; `scripts/monitoring-local.sh` for a laptop or an interactive HPC node without containers |
 
 Each branch builds on the previous one and passes the checks in

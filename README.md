@@ -135,6 +135,10 @@ nsm store get 127.0.0.1:12010 step             # prints: 5    (at once, no heart
 nsm store list 127.0.0.1:12010                 # prints: step
 ```
 
+To watch the broker while this runs, start it with `--admin-bind
+127.0.0.1:9108` as well and ask `nsm status 127.0.0.1:9108` (see
+[Monitoring](#monitoring)).
+
 `publish` and `claim` keep running: they are the party. Stop them with Ctrl-C
 (or SIGTERM), which unregisters nothing but stops answering heartbeats, and
 the broker removes the party after the failure threshold. The same session
@@ -161,6 +165,7 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm store put PARTY KEY --value TEXT [--if-version N] [--json] [options]` | set an entry, replacing what was there; with `--if-version`, only if the key is at version N (0: not set) | the write's version (exit 4 when the condition does not hold) |
 | `nsm store delete PARTY KEY [--if-version N] [--json] [options]` | remove an entry; succeeds whether or not it was set; with `--if-version`, only if the key is at version N | nothing (stderr says which; exit 4 when the condition does not hold) |
 | `nsm store list PARTY [--json] [options]` | every key in the store | one key per line, sorted |
+| `nsm status ADMIN [--json] [--parties] [--watch SECS] [--admin-token TOKEN]` | a broker's usage statistics, from its admin listener | a summary, or the status document as one JSON line |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
 
 `nsm <command> --help` lists every option with its default. The snake_case
@@ -463,6 +468,32 @@ done on a second, plain-HTTP socket that parties never use:
 nsm listen --bind-port 12000 -i 127. --ip-version 4 --admin-bind 127.0.0.1:9108
 curl -s http://127.0.0.1:9108/metrics      # Prometheus text exposition
 curl -s http://127.0.0.1:9108/v1/status    # one JSON document: counts, per key, per host, every party
+nsm status 127.0.0.1:9108                  # the same document as a summary for a shell
+```
+
+`nsm status` prints one block: the broker, how long it has been up, the
+parties it holds by role, key and host, the stores, and what it has done
+since it started (registrations granted and refused, removals, re-pairings,
+heartbeats, requests, store operations). `--parties` adds one row per
+registered party, `--json` prints the document as one line for scripts,
+and `--watch SECS` repeats until interrupted, each block headed by a
+timestamp:
+
+```text
+broker 127.0.0.1:12000   nsm 0.1.0, protocol 3   up 1h 02m 03s, since 2026-10-01T10:00:00Z
+parties      3 services (1 unclaimed), 2 clients, 2 keys; 0 in ping mode, 5 heartbeat tasks, 0 failing; 5 of 10000 registrations
+stores       2 stores, 4 entries, 420 bytes (16384 per store at most)
+since start  registrations 5 granted, 1 refused (no_service 1)
+             removals 0 services, 0 clients; re-pairings 0
+             heartbeats 9300 acknowledged, 2 failed; mean round trip 2.0 ms
+             requests 9315 answered, 3 refused, 0 failed
+             store ops 40: 40 applied, 0 not applied, 0 refused
+keys         key  services unclaimed clients
+             1234        2         0       2
+             99          1         1       0
+hosts        host     parties
+             10.0.0.7       3
+             10.0.0.9       2
 ```
 
 Gauges (parties by role and liveness mode, unclaimed services, failing
