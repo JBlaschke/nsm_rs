@@ -243,6 +243,11 @@ one line), and `POST /v1/store` returns the reply as its body, with status
 the same operations over HTTP: `publish` and `claim` become background jobs
 with a view the API reports, cancels and reaps; a bearer token guards every
 route when one is configured, and it is mandatory off loopback.
+`ops::status` is the one operation that talks to a broker's admin listener
+instead of a party: it reads `GET /v1/status` into `Status`, and `nsm
+status` prints `Status::summary` (or the document as one JSON line with
+`--json`), so the binary adds no formatting of its own. The control plane
+has no status route: the admin listener already speaks HTTP.
 
 ## 5. Configuration
 

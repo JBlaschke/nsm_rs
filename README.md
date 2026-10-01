@@ -165,7 +165,7 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm store put PARTY KEY --value TEXT [--if-version N] [--json] [options]` | set an entry, replacing what was there; with `--if-version`, only if the key is at version N (0: not set) | the write's version (exit 4 when the condition does not hold) |
 | `nsm store delete PARTY KEY [--if-version N] [--json] [options]` | remove an entry; succeeds whether or not it was set; with `--if-version`, only if the key is at version N | nothing (stderr says which; exit 4 when the condition does not hold) |
 | `nsm store list PARTY [--json] [options]` | every key in the store | one key per line, sorted |
-| `nsm status ADMIN [--json] [--parties] [--watch SECS] [--admin-token TOKEN]` | a broker's usage statistics, from its admin listener | a summary, or the status document as one JSON line |
+| `nsm status ADMIN [--json] [--parties] [--watch SECS] [--admin-token TOKEN] [options]` | a broker's usage statistics, from its admin listener | a summary, or the status document as one JSON line |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
 
 `nsm <command> --help` lists every option with its default. The snake_case
@@ -180,6 +180,8 @@ its broker (TCP for `host:port` and `tls://`, HTTP for `http://` and
 `https://`). IPv6 literals are written in brackets: `[fe80::1]:12000`. `listen`
 has no peer, so it takes `--transport`. `--bind-port 0` picks a free port; the
 broker and the parties print the address they actually bound on stderr.
+`ADMIN`, for `nsm status`, is a broker's admin listener (what `--admin-bind`
+named): `host:port` or `http://host:port`, plain HTTP only.
 
 **Exit codes and output.** 0 on success; 1 when an operation fails at run time
 (a message prefixed `nsm: ` goes to stderr); 2 for a command-line error; 3 when
