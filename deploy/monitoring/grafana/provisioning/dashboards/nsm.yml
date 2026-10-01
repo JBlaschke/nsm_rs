@@ -1,0 +1,11 @@
+# Load every dashboard JSON mounted under /var/lib/grafana/dashboards.
+apiVersion: 1
+providers:
+  - name: nsm
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

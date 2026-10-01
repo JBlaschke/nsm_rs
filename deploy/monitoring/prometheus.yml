@@ -1,0 +1,21 @@
+# Scrape configuration for the compose stack in this directory. Two targets
+# share one job: the broker on the host (host.docker.internal, reachable
+# when the broker binds its admin listener on every interface) and the
+# optional broker of the `broker` profile. Whichever is not running shows as
+# down and nothing else. Both present the token from the mounted file.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: nsm
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/nsm-admin-token
+    static_configs:
+      - targets: ["host.docker.internal:9108"]
+        labels:
+          broker: host
+      - targets: ["broker:9108"]
+        labels:
+          broker: compose

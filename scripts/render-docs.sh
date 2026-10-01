@@ -50,7 +50,7 @@ pre { background: #f4f4f4; padding: .75rem; overflow-x: auto; }
 code { font-size: 90%; }
 table { border-collapse: collapse; } th, td { border: 1px solid #ccc; padding: .25rem .5rem; text-align: left; vertical-align: top; }
 CSS
-for md in README.md CHANGELOG.md CONTRIBUTING.md deploy/k8s/README.md; do
+for md in README.md CHANGELOG.md CONTRIBUTING.md deploy/k8s/README.md deploy/monitoring/README.md; do
   render "$md" "${md%.md}.html"
 done
 find docs -name '*.md' | sort | while read -r md; do
