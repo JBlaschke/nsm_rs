@@ -61,9 +61,11 @@ rules they follow. The short version:
   with `Timing::fast()`, and `publish`/`claim`/`kill`/`wait_until` build the
   scenario. Add a scenario there when behaviour spans the broker and the
   parties.
-- **Control plane** tests go in `tests/rest.rs`, **binary** tests in
-  `tests/cli.rs` (they run the built `nsm` through `CARGO_BIN_EXE_nsm`), and
-  load scenarios in `tests/stress.rs` behind `#[ignore]`.
+- **Control plane** tests go in `tests/rest.rs`, **admin listener** tests
+  (metrics and the status document against a running cluster) in
+  `tests/admin.rs`, **binary** tests in `tests/cli.rs` (they run the built
+  `nsm` through `CARGO_BIN_EXE_nsm`), and load scenarios in
+  `tests/stress.rs` behind `#[ignore]`.
 - Tests must not depend on the host: select the loopback address with
   `-i 127.` rather than an interface name, bind port 0, generate
   certificates with `rcgen`, and give every async test a deadline.
@@ -121,6 +123,11 @@ Dependencies are vendored (decision D1 in [`docs/ARCHITECTURE.md`](docs/ARCHITEC
 - The markdown guides in `docs/` and the README are rendered to HTML by
   `scripts/render-docs.sh` (pandoc) and published together with the rustdoc
   by the Pages workflow. Run the script locally to check a change renders.
+  Links to `.md` files become links to the rendered pages; links to other
+  repository files point at the repository, resolved against the source
+  file's directory.
+- Shell scripts under `scripts/` are POSIX `sh`; run `shellcheck -s sh` on
+  them after a change.
 
 ## License
 

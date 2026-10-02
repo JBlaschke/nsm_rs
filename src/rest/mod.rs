@@ -52,6 +52,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::broker::admin::constant_time_eq;
 use crate::cli::IfaceOpts;
 use crate::net::{Addr, IpVersion};
 use crate::ops::{self, Collected, NetOpts, StoreOp, Stored};
@@ -468,13 +469,6 @@ async fn require_token(State(app): State<Arc<AppState>>, req: Request, next: Nex
         }
     }
     next.run(req).await
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 async fn healthz() -> Json<serde_json::Value> {

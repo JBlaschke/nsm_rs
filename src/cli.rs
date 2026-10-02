@@ -5,7 +5,8 @@
 //! definition and one set of validation rules.
 //!
 //! `store` is a group of four subcommands ([`StoreCommand`]), one per
-//! operation on the store a client shares with its service.
+//! operation on the store a client shares with its service. `status` is the
+//! one command that talks to a broker's admin listener instead of a party.
 //!
 //! The transport is taken from the peer address: `host:port` is raw TCP,
 //! `http://host:port` and `https://host:port` are HTTP. `listen` and `serve`
@@ -114,6 +115,20 @@ fn parse_secs(s: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs_f64(secs))
 }
 
+/// An admin listener's address: `host:port` or `http://host:port`. The
+/// admin listener speaks plain HTTP, so `tls://` and `https://` are refused.
+fn admin_addr(s: &str) -> Result<Addr, String> {
+    let addr: Addr = s
+        .parse()
+        .map_err(|e: crate::net::ParseAddrError| e.to_string())?;
+    match addr.transport {
+        Transport::Tcp | Transport::Http => Ok(Addr::new(Transport::Http, addr.host, addr.port)),
+        Transport::Tls | Transport::Https => Err(
+            "the admin listener speaks plain HTTP: give host:port or http://host:port".to_owned(),
+        ),
+    }
+}
+
 /// Overrides for heartbeat and request timing, in seconds. Anything not
 /// given keeps the default from [`Timing`].
 #[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
@@ -213,6 +228,37 @@ impl LimitsOpts {
     }
 }
 
+/// The broker's admin listener (decision D23); becomes a
+/// [`broker::admin::AdminOpts`](crate::broker::admin::AdminOpts).
+#[derive(Debug, Clone, Default, Args)]
+pub struct AdminListenerOpts {
+    /// Serve `GET /metrics` (Prometheus), `GET /v1/status` (JSON) and
+    /// `GET /healthz` on this address, over plain HTTP. Off when omitted.
+    /// Binding anything but a loopback address requires --admin-token.
+    #[arg(long, value_name = "ADDR")]
+    pub admin_bind: Option<SocketAddr>,
+    /// Bearer token the admin listener requires on every request
+    /// (`Authorization: Bearer <TOKEN>`).
+    #[arg(
+        long,
+        env = "NSM_ADMIN_TOKEN",
+        value_name = "TOKEN",
+        hide_env_values = true
+    )]
+    pub admin_token: Option<String>,
+}
+
+impl AdminListenerOpts {
+    /// The admin listener's settings, or `None` when `--admin-bind` was not
+    /// given (a token alone starts nothing).
+    pub fn admin(&self) -> Option<crate::broker::admin::AdminOpts> {
+        self.admin_bind.map(|bind| crate::broker::admin::AdminOpts {
+            bind,
+            token: self.admin_token.clone(),
+        })
+    }
+}
+
 /// Broker admission policy.
 #[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
 pub struct BrokerOpts {
@@ -287,6 +333,9 @@ pub enum Command {
         /// Admission policy.
         #[command(flatten)]
         policy: BrokerOpts,
+        /// Admin listener.
+        #[command(flatten)]
+        admin: AdminListenerOpts,
     },
 
     /// Announce a service to the broker and keep it registered.
@@ -398,6 +447,34 @@ pub enum Command {
         /// The operation.
         #[command(subcommand)]
         op: StoreCommand,
+    },
+
+    /// Print a broker's usage statistics, read from its admin listener.
+    Status {
+        /// The broker's admin listener (`host:port` or `http://host:port`,
+        /// what `--admin-bind` named).
+        #[arg(value_parser = admin_addr)]
+        admin: Addr,
+        /// Print the status document as one line of JSON instead.
+        #[arg(long)]
+        json: bool,
+        /// Also list every registered party.
+        #[arg(long)]
+        parties: bool,
+        /// Repeat every SECS seconds until interrupted.
+        #[arg(long, value_name = "SECS", value_parser = parse_secs)]
+        watch: Option<Duration>,
+        /// Bearer token the admin listener requires.
+        #[arg(
+            long,
+            env = "NSM_ADMIN_TOKEN",
+            value_name = "TOKEN",
+            hide_env_values = true
+        )]
+        admin_token: Option<String>,
+        /// Timing overrides (the request and connect timeouts apply).
+        #[command(flatten)]
+        timing: TimingOpts,
     },
 
     /// Run the REST control plane that exposes the operations above over HTTP.
@@ -620,6 +697,69 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn status_takes_an_admin_address_and_its_flags() {
+        for (given, expected) in [
+            ("127.0.0.1:9108", "http://127.0.0.1:9108"),
+            ("http://broker.example:9108", "http://broker.example:9108"),
+            ("[::1]:9108", "http://[::1]:9108"),
+        ] {
+            let cli = parse(&["status", given]);
+            match cli.command {
+                Command::Status {
+                    admin,
+                    json,
+                    parties,
+                    watch,
+                    admin_token,
+                    timing: _,
+                } => {
+                    assert_eq!(admin.to_string(), expected);
+                    assert!(!json && !parties && watch.is_none() && admin_token.is_none());
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        let cli = parse(&[
+            "status",
+            "127.0.0.1:9108",
+            "--json",
+            "--parties",
+            "--watch",
+            "2.5",
+            "--admin-token",
+            "t",
+            "--request-timeout",
+            "1",
+        ]);
+        match cli.command {
+            Command::Status {
+                json,
+                parties,
+                watch,
+                admin_token,
+                timing,
+                ..
+            } => {
+                assert!(json && parties);
+                assert_eq!(watch, Some(Duration::from_millis(2500)));
+                assert_eq!(admin_token.as_deref(), Some("t"));
+                assert_eq!(timing.timing().request_timeout, Duration::from_secs(1));
+            }
+            other => panic!("{other:?}"),
+        }
+        for bad in ["tls://127.0.0.1:9108", "https://broker:9108"] {
+            let err = Cli::try_parse_from(["nsm", "status", bad]).unwrap_err();
+            assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation, "{bad}");
+            assert!(err.to_string().contains("plain HTTP"), "{err}");
+        }
+        let err =
+            Cli::try_parse_from(["nsm", "status", "127.0.0.1:9108", "--watch", "0"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+        let err = Cli::try_parse_from(["nsm", "status"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

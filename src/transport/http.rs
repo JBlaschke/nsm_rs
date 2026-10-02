@@ -307,7 +307,7 @@ pub(super) async fn call(client: &Client, to: &Addr, msg: Message) -> Result<Mes
 /// with the underlying kind when there is one, and everything else is a
 /// protocol error. The URL is always in the text; `reqwest` prints it too, so
 /// its own copy is stripped first.
-fn map_reqwest(e: reqwest::Error, url: &str, timing: &Timing) -> Error {
+pub(crate) fn map_reqwest(e: reqwest::Error, url: &str, timing: &Timing) -> Error {
     let connect = e.is_connect();
     if e.is_timeout() {
         return Error::Timeout(if connect {

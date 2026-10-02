@@ -10,6 +10,7 @@ use std::net::IpAddr;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::broker::admin::AdminOpts;
 use crate::broker::listen::{BrokerHandle, ListenOpts, listen as start_broker};
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, LocalAddr, Selector, Transport, interfaces};
@@ -18,6 +19,7 @@ use crate::protocol::{Key, Message, Role, ServiceHandle};
 use crate::transport::Client;
 use crate::{Error, Result};
 
+pub use crate::broker::metrics::Status;
 pub use crate::protocol::{StoreEntry, StoreKey, StoreOp, Stored};
 
 /// Names of the interfaces carrying an address of the given family (any
@@ -70,6 +72,8 @@ pub struct ListenRequest {
     pub net: NetOpts,
     /// Admission policy.
     pub policy: BrokerPolicy,
+    /// The admin listener (`/metrics`, `/v1/status`), when wanted.
+    pub admin: Option<AdminOpts>,
 }
 
 /// Bind the broker's listener and start its monitor; the returned handle
@@ -83,6 +87,7 @@ pub async fn listen(req: ListenRequest, shutdown: CancellationToken) -> Result<B
             timing: req.net.timing,
             limits: req.net.limits,
             policy: req.policy,
+            admin: req.admin,
         },
         shutdown,
     )
@@ -280,6 +285,43 @@ pub async fn store(party: &Addr, op: StoreOp, net: &NetOpts) -> Result<Stored> {
             "store answered with {}",
             other.kind()
         ))),
+    }
+}
+
+/// Ask a broker's admin listener for its status document (`GET
+/// /v1/status`). `admin` is the admin listener's address; its transport is
+/// ignored, the admin listener speaks plain HTTP. `token` is sent as a
+/// bearer token when given and not empty. The timeouts are
+/// [`NetOpts::timing`]'s.
+///
+/// # Errors
+///
+/// [`Error::Rejected`] when the listener refuses the token (401),
+/// [`Error::Timeout`] or [`Error::Io`] when it cannot be reached, and
+/// [`Error::Protocol`] for any other answer.
+pub async fn status(admin: &Addr, token: Option<&str>, net: &NetOpts) -> Result<Status> {
+    let Some(url) = Addr::new(Transport::Http, admin.host.clone(), admin.port).url("v1/status")
+    else {
+        return Err(Error::protocol("no URL for the admin listener"));
+    };
+    let http = net.client().http_client(false)?;
+    let mut request = http.get(&url);
+    if let Some(token) = token.filter(|t| !t.is_empty()) {
+        request = request.bearer_auth(token);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| crate::transport::http::map_reqwest(e, &url, &net.timing))?;
+    match response.status() {
+        reqwest::StatusCode::OK => response
+            .json::<Status>()
+            .await
+            .map_err(|e| Error::protocol(format!("{url}: {e}"))),
+        reqwest::StatusCode::UNAUTHORIZED => Err(Error::Rejected(
+            "the admin listener refused the token (--admin-token or NSM_ADMIN_TOKEN)".into(),
+        )),
+        other => Err(Error::protocol(format!("HTTP {other} from {url}"))),
     }
 }
 

@@ -3,14 +3,21 @@
 //! [`listen`] checks the limits before it binds anything: a full store's
 //! `stored` reply, at most [`Limits::max_store_bytes`] plus
 //! [`REPLY_OVERHEAD`], must fit the broker's own frame limit, or a party's
-//! `list` of a full store could never be answered.
+//! `list` of a full store could never be answered. With
+//! [`ListenOpts::admin`] it also runs the [admin listener](super::admin)
+//! (`/metrics`, `/v1/status`, `/healthz`): checked and bound before any
+//! task starts, so a wrong address or a taken port fails the start with
+//! nothing left running, and served once the protocol listener's address is
+//! known.
 
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use super::admin::{self, AdminListener, AdminOpts, AdminServer};
 use super::handler::BrokerHandler;
+use super::metrics::Status;
 use super::monitor::Broker;
 use super::store::REPLY_OVERHEAD;
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
@@ -32,6 +39,8 @@ pub struct ListenOpts {
     pub limits: Limits,
     /// Admission policy.
     pub policy: BrokerPolicy,
+    /// The admin listener, when wanted (decision D23).
+    pub admin: Option<AdminOpts>,
 }
 
 /// A running broker.
@@ -39,6 +48,7 @@ pub struct ListenOpts {
 pub struct BrokerHandle {
     server: Server,
     broker: Arc<Broker>,
+    admin: Option<AdminServer>,
     shutdown: CancellationToken,
 }
 
@@ -53,6 +63,16 @@ impl BrokerHandle {
         &self.broker
     }
 
+    /// Where the admin listener answers, when one was started.
+    pub fn admin_addr(&self) -> Option<std::net::SocketAddr> {
+        self.admin.as_ref().map(AdminServer::local_addr)
+    }
+
+    /// The JSON view of this broker as of now, naming its bound address.
+    pub fn status(&self) -> Status {
+        self.broker.status(Some(self.bound()))
+    }
+
     /// Cancelling this token stops the listener and every monitor task.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()
@@ -64,10 +84,13 @@ impl BrokerHandle {
         Ok(())
     }
 
-    /// Stop the broker and wait for its listener to close.
+    /// Stop the broker and wait for its listeners to close.
     pub async fn shutdown(self) {
         self.shutdown.cancel();
         self.server.shutdown().await;
+        if let Some(admin) = self.admin {
+            admin.wait().await;
+        }
     }
 }
 
@@ -76,10 +99,17 @@ impl BrokerHandle {
 /// # Errors
 ///
 /// [`Error::Config`] when a full store's reply would not fit
-/// [`Limits::max_frame_bytes`] (checked before anything is bound), and
-/// whatever binding the listener fails with.
+/// [`Limits::max_frame_bytes`] or when the admin listener would bind a
+/// non-loopback address without a token (both checked before anything is
+/// bound), and whatever binding either listener fails with; the admin
+/// address is bound before the protocol listener and before any task
+/// starts.
 pub async fn listen(opts: ListenOpts, shutdown: CancellationToken) -> Result<BrokerHandle> {
     check_limits(&opts.limits)?;
+    let admin_listener: Option<AdminListener> = match opts.admin {
+        Some(admin_opts) => Some(admin::bind(admin_opts).await?),
+        None => None,
+    };
     let client = Arc::new(Client::new(
         opts.tls.clone(),
         opts.timing.clone(),
@@ -103,9 +133,12 @@ pub async fn listen(opts: ListenOpts, shutdown: CancellationToken) -> Result<Bro
     )
     .await?;
     info!(bound = %server.bound(), "broker listening");
+    let admin = admin_listener
+        .map(|l| l.serve(Arc::clone(&broker), server.bound(), shutdown.child_token()));
     Ok(BrokerHandle {
         server,
         broker,
+        admin,
         shutdown,
     })
 }
@@ -170,6 +203,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_admin_listener_binds_before_the_protocol_listener() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // Both ports are taken; the failure names the admin address,
+            // so nothing was bound or started before it.
+            let held_admin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let held_proto = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let admin_addr = held_admin.local_addr().unwrap();
+            let opts = ListenOpts {
+                bind: Addr::new(
+                    Transport::Tcp,
+                    "127.0.0.1",
+                    held_proto.local_addr().unwrap().port(),
+                ),
+                tls: TlsPaths::default(),
+                timing: Timing::fast(),
+                limits: Limits::default(),
+                policy: BrokerPolicy::default(),
+                admin: Some(AdminOpts {
+                    bind: admin_addr,
+                    token: None,
+                }),
+            };
+            let err = listen(opts, CancellationToken::new()).await.unwrap_err();
+            assert!(
+                matches!(err, Error::Bind { addr, .. } if addr == admin_addr),
+                "{err:?}"
+            );
+            // And a non-loopback admin bind without a token is refused the
+            // same way, before anything binds.
+            let opts = ListenOpts {
+                bind: Addr::new(
+                    Transport::Tcp,
+                    "127.0.0.1",
+                    held_proto.local_addr().unwrap().port(),
+                ),
+                tls: TlsPaths::default(),
+                timing: Timing::fast(),
+                limits: Limits::default(),
+                policy: BrokerPolicy::default(),
+                admin: Some(AdminOpts {
+                    bind: "0.0.0.0:0".parse().unwrap(),
+                    token: None,
+                }),
+            };
+            let err = listen(opts, CancellationToken::new()).await.unwrap_err();
+            assert!(matches!(err, Error::Config(_)), "{err:?}");
+            drop(held_admin);
+            drop(held_proto);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn listen_refuses_a_budget_that_does_not_fit_before_binding() {
         tokio::time::timeout(Duration::from_secs(5), async {
             // Hold the port: had `listen` tried to bind before checking, it
@@ -183,6 +270,7 @@ mod tests {
                 timing: Timing::fast(),
                 limits: limits(4096, 16 * 1024),
                 policy: BrokerPolicy::default(),
+                admin: None,
             };
             let err = listen(opts, CancellationToken::new()).await.unwrap_err();
             assert!(matches!(err, Error::Config(_)), "{err:?}");

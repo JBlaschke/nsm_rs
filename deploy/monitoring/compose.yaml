@@ -1,0 +1,90 @@
+# Prometheus and Grafana for watching an nsm broker, bound to this host's
+# loopback only: http://localhost:9090 (Prometheus) and http://localhost:3000
+# (Grafana, user admin, password admin unless GRAFANA_ADMIN_PASSWORD is set).
+# The datasource and the nsm dashboard are provisioned; see docs/MONITORING.md.
+#
+#   docker compose up            # or: podman compose up
+#
+# Prometheus scrapes a broker running ON THIS HOST at host.docker.internal:9108.
+# A container reaches the host's interfaces, not its loopback, so start the
+# broker with an admin listener on every interface, which needs a token:
+#
+#   nsm listen ... --admin-bind 0.0.0.0:9108 --admin-token "$(cat admin-token)"
+#   NSM_ADMIN_TOKEN_FILE=./admin-token docker compose up
+#
+# Without NSM_ADMIN_TOKEN_FILE the committed admin-token.example ("change-me")
+# is used, so a broker started with --admin-token change-me works out of the
+# box. For a self-contained demo, the `broker` profile builds the image and
+# runs a broker inside the stack with that same token:
+#
+#   docker compose --profile broker up --build
+#
+# Parties on this host then reach it at http://127.0.0.1:12000. With a token
+# of your own, set both NSM_ADMIN_TOKEN_FILE (what Prometheus presents) and
+# NSM_ADMIN_TOKEN (what the profile's broker expects) to the same value.
+services:
+  prometheus:
+    image: docker.io/prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${NSM_ADMIN_TOKEN_FILE:-./admin-token.example}:/etc/prometheus/nsm-admin-token:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: docker.io/grafana/grafana:13.2.3
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Optional: a broker inside the stack (docker compose --profile broker up).
+  broker:
+    profiles: ["broker"]
+    build:
+      context: ../..
+      target: final
+    command:
+      - listen
+      - --transport
+      - http
+      - --bind-port
+      - "12000"
+      - -n
+      - eth0
+      - --ip-version
+      - "4"
+      - --admin-bind
+      - 0.0.0.0:9108
+    environment:
+      NSM_ADMIN_TOKEN: ${NSM_ADMIN_TOKEN:-change-me}
+      NSM_LOG_LEVEL: info
+      NSM_LOG_STYLE: never
+    ports:
+      - "127.0.0.1:12000:12000"
+      - "127.0.0.1:9108:9108"
+
+volumes:
+  prometheus-data:
+  grafana-data:

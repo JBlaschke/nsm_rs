@@ -9,21 +9,36 @@
 set -eu
 out=${1:?usage: render-docs.sh OUTPUT_DIR}
 command -v pandoc >/dev/null || { echo "pandoc is required" >&2; exit 1; }
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 filter=$(mktemp)
 trap 'rm -f "$filter"' EXIT
 repo=${NSM_REPO_URL:-https://github.com/JBlaschke/nsm_rs/blob/main}
 cat > "$filter" <<LUA
 -- Point links at the rendered pages instead of the markdown sources, and
 -- send links to other repository files (Dockerfile, compose.yaml, ...) to
--- the repository itself.
+-- the repository itself, resolved against the source file's directory so
+-- that docs/MONITORING.md's "../scripts/x.sh" becomes "scripts/x.sh".
+local source = PANDOC_STATE.input_files[1] or ""
+local source_dir = source:match("^(.*)/[^/]*$") or ""
+local function normalise(path)
+  local parts = {}
+  for segment in path:gmatch("[^/]+") do
+    if segment == ".." then
+      table.remove(parts)
+    elseif segment ~= "." then
+      parts[#parts + 1] = segment
+    end
+  end
+  return table.concat(parts, "/")
+end
 function Link(el)
   local t = el.target
   if t:match("^%a[%w+.-]*:") or t:match("^#") then return el end
   if t:match("%.md$") or t:match("%.md#") then
     el.target = t:gsub("%.md$", ".html"):gsub("%.md#", ".html#")
   else
-    el.target = "$repo/" .. t:gsub("^%./", "")
+    local path = source_dir ~= "" and (source_dir .. "/" .. t) or t
+    el.target = "$repo/" .. normalise(path)
   end
   return el
 end
@@ -50,7 +65,7 @@ pre { background: #f4f4f4; padding: .75rem; overflow-x: auto; }
 code { font-size: 90%; }
 table { border-collapse: collapse; } th, td { border: 1px solid #ccc; padding: .25rem .5rem; text-align: left; vertical-align: top; }
 CSS
-for md in README.md CHANGELOG.md CONTRIBUTING.md deploy/k8s/README.md; do
+for md in README.md CHANGELOG.md CONTRIBUTING.md deploy/k8s/README.md deploy/monitoring/README.md; do
   render "$md" "${md%.md}.html"
 done
 find docs -name '*.md' | sort | while read -r md; do

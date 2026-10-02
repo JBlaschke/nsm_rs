@@ -164,6 +164,48 @@ version: 3.
   Pages workflow publishing all of it.
 - Crypto provider features that work: `aws-lc-rs` (default) and `ring` (pure
   Rust, for static musl builds and the Docker image). Decision D11.
+- The broker counts what it does (decisions D21 and D22):
+  requests by kind and outcome, registrations granted and refused by
+  reason, removals by role and reason, re-pairings, heartbeats by outcome
+  with a round-trip histogram, and store operations by operation and
+  outcome; and it reads the current state (parties by role and mode,
+  unclaimed services, failing parties, stores and their bytes, per key and
+  per host) from the registry on demand. In the library:
+  `broker::metrics` with `Metrics`, `Gauges`, the Prometheus text
+  exposition `Metrics::render`, and `Status`, the JSON view;
+  `Broker::metrics`, `gauges`, `render_metrics` and `status`;
+  `Broker::drop_party` takes a `RemovalReason` instead of free text.
+- `nsm listen --admin-bind ADDR [--admin-token TOKEN]` (`NSM_ADMIN_TOKEN`):
+  an admin listener on a second, plain-HTTP socket with `GET /metrics` (the
+  Prometheus text exposition), `GET /v1/status` (one JSON document: version,
+  uptime, limits and timing in force, the current counts with a per-key and
+  a per-host breakdown, the counters since start, every party) and
+  `GET /healthz`. Off unless asked for; loopback needs no token, any other
+  address requires one, checked on every request in constant time, as for
+  `nsm serve` (decision D9). Parties never use it. The broker prints
+  `nsm: admin listener on http://ADDR` on stderr. Documented in
+  `docs/MONITORING.md`. In the library: `broker::admin` (`AdminOpts`,
+  `serve`, `router`), `ListenOpts::admin`, `ListenRequest::admin`,
+  `BrokerHandle::admin_addr` and `BrokerHandle::status`;
+  `cli::AdminListenerOpts`. Decision D23.
+- `nsm status ADMIN [--json] [--parties] [--watch SECS] [--admin-token
+  TOKEN]`: a broker's usage statistics from its admin listener, as one
+  block (the broker and its uptime, parties by role, key and host, stores,
+  and the counters since start), with one row per party on `--parties`,
+  the status document as one JSON line on `--json`, and repeated with a
+  timestamp header on `--watch`. Exit 1 when the listener cannot be reached
+  or refuses the token, 2 for a `tls://` or `https://` address. In the
+  library: `ops::status` and `Status::summary`. Decision D22.
+- A local monitoring stack: `deploy/monitoring/compose.yaml` runs
+  Prometheus and Grafana on loopback with the datasource and the `NSM
+  broker` dashboard provisioned (`grafana/dashboards/nsm.json`), scraping a
+  broker on the host through `host.docker.internal` with the token from
+  `NSM_ADMIN_TOKEN_FILE` (default `admin-token.example`), or a broker
+  inside the stack with `--profile broker`. `scripts/monitoring-local.sh
+  fetch|start|status|stop` runs the same two servers without containers,
+  as the current user, from one work directory, for interactive HPC nodes:
+  `fetch` downloads the release tarballs and checks their SHA-256 sums.
+  Decision D24.
 
 ### Changed
 

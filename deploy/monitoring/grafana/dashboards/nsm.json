@@ -1,0 +1,1507 @@
+{
+  "uid": "nsm-broker",
+  "title": "NSM broker",
+  "description": "What an nsm broker holds and what it has done: parties, registrations, removals, heartbeats, requests and the shared stores. Source: nsm listen --admin-bind, GET /metrics.",
+  "tags": [
+    "nsm"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "version": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Broker",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(nsm_build_info, instance)",
+          "refId": "instance"
+        },
+        "definition": "label_values(nsm_build_info, instance)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Broker restarts",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "enable": true,
+        "iconColor": "red",
+        "expr": "changes(nsm_start_time_seconds{instance=~\"$instance\"}[5m]) > 0",
+        "titleFormat": "broker restarted",
+        "textFormat": "{{instance}}"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Now",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Services",
+      "description": "Registered services, both liveness modes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_parties{instance=~\"$instance\",role=\"service\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Unclaimed services",
+      "description": "Services no client holds.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_services_unclaimed{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Clients",
+      "description": "Registered clients; each holds one service and one store.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_parties{instance=~\"$instance\",role=\"client\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Keys",
+      "description": "Distinct rendezvous keys with at least one party.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_keys{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Failing parties",
+      "description": "Parties with at least one consecutive failed heartbeat.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_parties_failing{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Registry used",
+      "description": "Registered parties over --max-registrations.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_parties{instance=~\"$instance\"}) / sum(nsm_registrations_limit{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Uptime",
+      "description": "Since the broker started; a drop means a restart and reset counters.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "time() - min(nsm_start_time_seconds{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Stores",
+      "description": "One per client.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 5,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_stores{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Store entries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 5,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_store_entries{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Store bytes",
+      "description": "Accounted bytes over every store.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_store_bytes{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Store fullness (mean)",
+      "description": "Accounted bytes over every store's budget; empty when there is no store.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 5,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_store_bytes{instance=~\"$instance\"}) / (sum(nsm_stores{instance=~\"$instance\"}) * max(nsm_store_bytes_limit{instance=~\"$instance\"}))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Heartbeat tasks",
+      "description": "Two-sided parties the broker is dialling.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 5,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_heartbeat_tasks{instance=~\"$instance\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Parties",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Parties by role and mode",
+      "description": "Gauges read from the registry at each scrape.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (role, mode) (nsm_parties{instance=~\"$instance\"})",
+          "legendFormat": "{{role}} / {{mode}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Registrations granted and refused",
+      "description": "`no_service`: claims that found nothing under their key; `full`, `per_host`: admission limits; `host_mismatch`, `bad_port`: bad advertisements.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (role) (rate(nsm_registrations_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "granted {{role}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (rate(nsm_registrations_refused_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "refused {{reason}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Removals and re-pairings",
+      "description": "`heartbeats_failed`: a two-sided party stopped answering; `no_ping`: a ping-mode party fell silent; `no_replacement`: a client whose service vanished with no spare. Re-pairings are the clients that found one.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (role, reason) (increase(nsm_removals_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{role}} {{reason}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(nsm_repairings_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "re-pairings",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "text",
+      "title": "Parties per host and per key (status only)",
+      "description": "Per-key and per-host counts carry no metric labels on purpose (a job array can invent thousands of keys). Use `nsm status` or GET /v1/status for them.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Per-key and per-host breakdowns are deliberately **not** metrics: a rendezvous key or a host as a label would create one time series per value, and a job array can invent thousands. Ask the broker instead:\n\n```\nnsm status ADMIN            # keys and hosts tables\nnsm status ADMIN --parties  # one row per party\ncurl -s http://ADMIN/v1/status | jq .keys\n```\n\nSee `docs/MONITORING.md`."
+      }
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Heartbeats",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Heartbeats per second",
+      "description": "Two-sided heartbeats the broker sends, by outcome.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fail"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (outcome) (rate(nsm_heartbeats_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Heartbeat round trip",
+      "description": "Quantiles from the fixed buckets (5 ms to 5 s); failures and timeouts included, so a rising p99 shows a slow fabric before anything is removed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 27,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(nsm_heartbeat_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(nsm_heartbeat_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "legendFormat": "p90",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(nsm_heartbeat_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "refId": "C",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "Requests and the store",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Requests per second",
+      "description": "Everything the broker answered: registrations, pings, relayed texts and store operations.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (kind, outcome) (rate(nsm_requests_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{kind}} {{outcome}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Store operations per second",
+      "description": "`not_applied`: a conditional write whose version did not match; `refused`: a write at a service nobody holds, a full store, a wrong token.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 36,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (op, outcome) (rate(nsm_store_ops_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{op}} {{outcome}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Store bytes against the budget",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_store_bytes{instance=~\"$instance\"})",
+          "legendFormat": "accounted bytes",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_stores{instance=~\"$instance\"}) * max(nsm_store_bytes_limit{instance=~\"$instance\"})",
+          "legendFormat": "budget (stores x limit)",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Stores and entries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 44,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_stores{instance=~\"$instance\"})",
+          "legendFormat": "stores",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(nsm_store_entries{instance=~\"$instance\"})",
+          "legendFormat": "entries",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    }
+  ]
+}

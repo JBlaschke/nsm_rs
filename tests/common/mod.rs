@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use nsm::Result;
+use nsm::broker::admin::AdminOpts;
 use nsm::broker::listen::{BrokerHandle, ListenOpts, listen};
 use nsm::broker::monitor::{Broker, PartySummary};
 use nsm::config::{BrokerPolicy, Limits, Timing, TlsPaths};
@@ -157,6 +158,10 @@ impl Cluster {
                 timing: net.timing.clone(),
                 limits: net.limits.clone(),
                 policy,
+                admin: Some(AdminOpts {
+                    bind: "127.0.0.1:0".parse().expect("loopback"),
+                    token: None,
+                }),
             },
             shutdown.clone(),
         )
@@ -176,6 +181,15 @@ impl Cluster {
     }
     pub fn broker_addr(&self) -> Addr {
         self.broker.bound()
+    }
+    /// Base URL of the broker's admin listener (`http://127.0.0.1:PORT`).
+    pub fn admin_url(&self) -> String {
+        format!(
+            "http://{}",
+            self.broker
+                .admin_addr()
+                .expect("the harness starts an admin listener")
+        )
     }
     pub fn net(&self) -> &NetOpts {
         &self.net

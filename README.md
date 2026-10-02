@@ -18,6 +18,7 @@ one protocol.
 - [Command-line reference](#command-line-reference)
 - [TLS](#tls)
 - [REST control plane](#rest-control-plane)
+- [Monitoring](#monitoring)
 - [Logging](#logging)
 - [Deployment](#deployment)
 - [Notes for HPC systems](#notes-for-hpc-systems)
@@ -134,6 +135,10 @@ nsm store get 127.0.0.1:12010 step             # prints: 5    (at once, no heart
 nsm store list 127.0.0.1:12010                 # prints: step
 ```
 
+To watch the broker while this runs, start it with `--admin-bind
+127.0.0.1:9108` as well and ask `nsm status 127.0.0.1:9108` (see
+[Monitoring](#monitoring)).
+
 `publish` and `claim` keep running: they are the party. Stop them with Ctrl-C
 (or SIGTERM), which unregisters nothing but stops answering heartbeats, and
 the broker removes the party after the failure threshold. The same session
@@ -150,7 +155,7 @@ nsm [--log-level FILTER] <COMMAND>
 |---|---|---|
 | `nsm list-interfaces [--ip-version 4\|6] [-v]` | interfaces on this host | one name per line |
 | `nsm list-ips [-n IFACE] [-i PREFIX] [--ip-version 4\|6] [-v]` | addresses on this host | one address per line |
-| `nsm listen --bind-port PORT [--transport tcp\|tls\|http\|https] [options]` | run the broker | nothing |
+| `nsm listen --bind-port PORT [--transport tcp\|tls\|http\|https] [--admin-bind ADDR] [options]` | run the broker | nothing |
 | `nsm publish BROKER --bind-port PORT --service-port PORT --key KEY [--ping] [options]` | register a service and keep it registered | nothing |
 | `nsm claim BROKER --bind-port PORT --key KEY [--ping] [options]` | pair with a service and stay paired | the service's `host:port`, one line per pairing |
 | `nsm collect PARTY [options]` | the last text a party received from its peer | the text |
@@ -160,6 +165,7 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm store put PARTY KEY --value TEXT [--if-version N] [--json] [options]` | set an entry, replacing what was there; with `--if-version`, only if the key is at version N (0: not set) | the write's version (exit 4 when the condition does not hold) |
 | `nsm store delete PARTY KEY [--if-version N] [--json] [options]` | remove an entry; succeeds whether or not it was set; with `--if-version`, only if the key is at version N | nothing (stderr says which; exit 4 when the condition does not hold) |
 | `nsm store list PARTY [--json] [options]` | every key in the store | one key per line, sorted |
+| `nsm status ADMIN [--json] [--parties] [--watch SECS] [--admin-token TOKEN] [options]` | a broker's usage statistics, from its admin listener | a summary, or the status document as one JSON line |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
 
 `nsm <command> --help` lists every option with its default. The snake_case
@@ -174,6 +180,8 @@ its broker (TCP for `host:port` and `tls://`, HTTP for `http://` and
 `https://`). IPv6 literals are written in brackets: `[fe80::1]:12000`. `listen`
 has no peer, so it takes `--transport`. `--bind-port 0` picks a free port; the
 broker and the parties print the address they actually bound on stderr.
+`ADMIN`, for `nsm status`, is a broker's admin listener (what `--admin-bind`
+named): `host:port` or `http://host:port`, plain HTTP only.
 
 **Exit codes and output.** 0 on success; 1 when an operation fails at run time
 (a message prefixed `nsm: ` goes to stderr); 2 for a command-line error; 3 when
@@ -392,6 +400,15 @@ On `listen`.
 a third party; leave it off when parties sit behind NAT or advertise a
 different interface on purpose.
 
+### Admin options
+
+On `listen`. See [Monitoring](#monitoring).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--admin-bind ADDR` | off | serve `GET /metrics` (Prometheus), `GET /v1/status` (JSON) and `GET /healthz` on this address, over plain HTTP |
+| `--admin-token TOKEN` (`NSM_ADMIN_TOKEN`) | none | bearer token every request to the admin listener must carry; required unless `--admin-bind` is a loopback address |
+
 ## TLS
 
 Which side needs what:
@@ -444,6 +461,56 @@ file paths: TLS material comes from the `serve` process's own flags. Bodies
 are limited to 64 KiB. Every route, field and status code is documented in
 [`docs/REST_API.md`](docs/REST_API.md).
 
+## Monitoring
+
+A broker started with `--admin-bind` reports what it holds and what it has
+done on a second, plain-HTTP socket that parties never use:
+
+```bash
+nsm listen --bind-port 12000 -i 127. --ip-version 4 --admin-bind 127.0.0.1:9108
+curl -s http://127.0.0.1:9108/metrics      # Prometheus text exposition
+curl -s http://127.0.0.1:9108/v1/status    # one JSON document: counts, per key, per host, every party
+nsm status 127.0.0.1:9108                  # the same document as a summary for a shell
+```
+
+`nsm status` prints one block: the broker, how long it has been up, the
+parties it holds by role, key and host, the stores, and what it has done
+since it started (registrations granted and refused, removals, re-pairings,
+heartbeats, requests, store operations). `--parties` adds one row per
+registered party, `--json` prints the document as one line for scripts,
+and `--watch SECS` repeats until interrupted, each block headed by a
+timestamp:
+
+```text
+broker 127.0.0.1:12000   nsm 0.1.0, protocol 3   up 1h 02m 03s, since 2026-10-01T10:00:00Z
+parties      3 services (1 unclaimed), 2 clients, 2 keys; 0 in ping mode, 5 heartbeat tasks, 0 failing; 5 of 10000 registrations
+stores       2 stores, 4 entries, 420 bytes (16384 per store at most)
+since start  registrations 5 granted, 1 refused (no_service 1)
+             removals 0 services, 0 clients; re-pairings 0
+             heartbeats 9300 acknowledged, 2 failed; mean round trip 2.0 ms
+             requests 9315 answered, 3 refused, 0 failed
+             store ops 40: 40 applied, 0 not applied, 0 refused
+keys         key  services unclaimed clients
+             1234        2         0       2
+             99          1         1       0
+hosts        host     parties
+             10.0.0.7       3
+             10.0.0.9       2
+```
+
+Gauges (parties by role and liveness mode, unclaimed services, failing
+parties, stores and their bytes) are read from the registry at the moment
+of the request; counters (requests by kind and outcome, registrations
+granted and refused by reason, removals by role and reason, re-pairings,
+heartbeats with a round-trip histogram, store operations) count since the
+broker started. Every metric is `nsm_*` with labels from closed sets, so a
+job array cannot blow up the time series; per-key and per-host counts are
+in the status document instead. Binding the admin listener anywhere but
+loopback requires `--admin-token` (`NSM_ADMIN_TOKEN`), sent as
+`Authorization: Bearer <token>` on every request. The metrics, the status
+document and scrape configuration are described in
+[`docs/MONITORING.md`](docs/MONITORING.md).
+
 ## Logging
 
 | Variable | Purpose |
@@ -454,8 +521,9 @@ are limited to 64 KiB. Every route, field and status code is documented in
 
 Logs go to stderr; stdout carries only a command's result. Message payloads and
 tokens are never logged. Other environment variables: `CERT_PATH`, `KEY_PATH`,
-`ROOT_PATH` (defaults for the TLS flags) and `NSM_TOKEN` (default for `nsm
-serve --token`). A template is in [`.env.example`](.env.example).
+`ROOT_PATH` (defaults for the TLS flags), `NSM_TOKEN` (default for `nsm
+serve --token`) and `NSM_ADMIN_TOKEN` (default for `nsm listen
+--admin-token`). A template is in [`.env.example`](.env.example).
 
 ## Deployment
 
@@ -473,6 +541,15 @@ mount the certificate and key, set `CERT_PATH`/`KEY_PATH` and append `--tls`.
 
 **Compose.** `docker compose up --build` runs the same broker; see
 [`compose.yaml`](./compose.yaml) for the TLS variant.
+
+**Monitoring stack.** [`deploy/monitoring/`](./deploy/monitoring/README.md)
+runs Prometheus and Grafana on loopback with the `NSM broker` dashboard
+provisioned (`docker compose up`, or `podman compose up`), scraping a broker
+on the host or, with `--profile broker`, one inside the stack.
+[`scripts/monitoring-local.sh`](./scripts/monitoring-local.sh) does the same
+without containers, for an interactive HPC node: `fetch` the two release
+tarballs once, then `start`, `status`, `stop`. See
+[`docs/MONITORING.md`](docs/MONITORING.md#running-prometheus-and-grafana-locally).
 
 **Kubernetes.** The broker is a plain Deployment with one Service on its bind
 port; parties inside the cluster reach it by DNS name, parties outside through
@@ -521,8 +598,9 @@ Unit tests live next to the code; the randomized address and framing tests
 draw from a seeded generator in `src/testing.rs`, so a failure names the
 iteration that produced it. Under `tests/`, `e2e.rs` runs a broker with
 services and clients over all four transports, `rest.rs` exercises every
-control-plane route, `cli.rs` drives the built binary through complete
-sessions, and `stress.rs` is the load test. CI runs all of this on Linux and
+control-plane route, `admin.rs` checks the metrics and the status document
+against what a cluster did, `cli.rs` drives the built binary through
+complete sessions, and `stress.rs` is the load test. CI runs all of this on Linux and
 macOS with both crypto providers, plus rustfmt, clippy, rustdoc, cargo-deny,
 cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) has the details.
@@ -534,11 +612,13 @@ cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | crate layout, components, concurrency and error rules |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | wire format, every message, sequence diagrams, timing and re-pairing rules |
 | [`docs/REST_API.md`](docs/REST_API.md) | the control plane's routes, bodies and status codes |
+| [`docs/MONITORING.md`](docs/MONITORING.md) | the admin listener: every metric, the status document, scraping |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | building, testing, dependency and protocol changes |
 | [`CHANGELOG.md`](./CHANGELOG.md) | what changed, including every breaking change |
 | [`docs/history/2026-refactor/`](docs/history/2026-refactor/PLAN.md) | the 2026 refactor: its plan, its audit of the previous code, and the decisions D1 to D12 the code cites |
 | [`docs/history/2026-peer-text/`](docs/history/2026-peer-text/PLAN.md) | the 2026 peer-address and two-way text work: its plan and the decisions P1 to P10 (D13 to D16 in the architecture guide) |
 | [`docs/history/2026-shared-store/`](docs/history/2026-shared-store/PLAN.md) | the 2026 shared-store work: its plan and the decisions S1 to S12 (D17 to D20 in the architecture guide) |
+| [`docs/history/2026-monitoring/`](docs/history/2026-monitoring/PLAN.md) | the 2026 monitoring work: its plan and the decisions M1 to M10 (D21 to D24 in the architecture guide) |
 
 API documentation (`cargo doc`) and these pages are published by CI to
 <https://jblaschke.github.io/nsm_rs/> (the repository's Pages source must be

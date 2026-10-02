@@ -4,7 +4,9 @@
 //! is never held across an `.await`, plus one heartbeat task per two-sided
 //! party and one sweeper task for one-sided (ping) parties. Removal is a
 //! single code path, [`Broker::drop_party`], which also re-pairs or removes
-//! the clients orphaned by a vanished service.
+//! the clients orphaned by a vanished service. The broker also owns the
+//! [`Metrics`]: the monitor counts heartbeats with their round trip,
+//! removals and re-pairings here; the handler counts the rest.
 //!
 //! Compared with the previous implementation this replaces the shared
 //! `VecDeque` that was popped once per 200 ms tick (so the heartbeat period
@@ -19,10 +21,11 @@ use tokio::time::{Instant, sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use super::metrics::{Gauges, HeartbeatOutcome, Metrics, PartyRow, RemovalReason, Status};
 use super::registry::{Party, Registry, Removed};
 use crate::config::{BrokerPolicy, Limits, Timing};
 use crate::net::Addr;
-use crate::protocol::{Key, Message, PartyId};
+use crate::protocol::{Key, Message, PartyId, Role};
 use crate::transport::Client;
 
 /// The broker's shared state and background tasks.
@@ -34,6 +37,7 @@ pub struct Broker {
     policy: BrokerPolicy,
     tasks: Mutex<HashMap<PartyId, AbortHandle>>,
     shutdown: CancellationToken,
+    metrics: Metrics,
 }
 
 /// One row of [`Broker::snapshot`].
@@ -71,7 +75,50 @@ impl Broker {
             policy,
             tasks: Mutex::new(HashMap::new()),
             shutdown,
+            metrics: Metrics::new(),
         })
+    }
+
+    /// The counters, for the handler and the monitor to bump and for the
+    /// admin listener to report.
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
+    }
+
+    /// The gauges as of now, read from the registry, plus the number of
+    /// heartbeat tasks.
+    pub fn gauges(&self) -> Gauges {
+        let mut g = self.with_registry(|r| Gauges::of(r));
+        g.heartbeat_tasks = u64::try_from(lock(&self.tasks).len()).unwrap_or(u64::MAX);
+        g
+    }
+
+    /// The Prometheus text exposition of the counters and the gauges as of
+    /// now.
+    pub fn render_metrics(&self) -> String {
+        self.metrics.render(&self.gauges())
+    }
+
+    /// The JSON view of the broker as of now; `bound` is the protocol
+    /// listener's address when the caller knows it.
+    pub fn status(&self, bound: Option<Addr>) -> Status {
+        let (mut gauges, parties, limits) = self.with_registry(|r| {
+            (
+                Gauges::of(r),
+                PartyRow::all(r, Instant::now()),
+                r.limits().clone(),
+            )
+        });
+        gauges.heartbeat_tasks = u64::try_from(lock(&self.tasks).len()).unwrap_or(u64::MAX);
+        Status::new(
+            &self.metrics,
+            &gauges,
+            parties,
+            &limits,
+            &self.policy,
+            &self.timing,
+            bound,
+        )
     }
 
     /// Intervals and thresholds in force.
@@ -122,29 +169,35 @@ impl Broker {
     /// Remove a party and deal with the consequences: a vanished service's
     /// clients are re-paired with another service of the same key when one
     /// is free, otherwise removed; a vanished client frees its service.
-    pub fn drop_party(&self, id: PartyId, reason: &str) -> Removed {
+    /// Every removal and re-pairing is counted.
+    pub fn drop_party(&self, id: PartyId, reason: RemovalReason) -> Removed {
         let removed = self.with_registry(|r| r.remove(id));
         self.abort_task(id);
         match &removed {
             Removed::Service { orphaned_clients } => {
-                info!(%id, reason, orphans = orphaned_clients.len(), "service removed");
+                self.metrics.removed(Role::Service, reason);
+                info!(%id, %reason, orphans = orphaned_clients.len(), "service removed");
                 for client in orphaned_clients {
                     match self.with_registry(|r| r.reclaim(*client)) {
                         Some(handle) => {
+                            self.metrics.repaired();
                             info!(client = %client, service = %handle.id, "client re-paired")
                         }
                         None => {
                             warn!(client = %client, "no replacement service; client removed");
                             let _ = self.with_registry(|r| r.remove(*client));
                             self.abort_task(*client);
+                            self.metrics
+                                .removed(Role::Client, RemovalReason::NoReplacement);
                         }
                     }
                 }
             }
             Removed::Client { freed_service } => {
-                info!(%id, reason, freed = ?freed_service, "client removed");
+                self.metrics.removed(Role::Client, reason);
+                info!(%id, %reason, freed = ?freed_service, "client removed");
             }
-            Removed::Unknown => debug!(%id, reason, "removal of an unknown party"),
+            Removed::Unknown => debug!(%id, %reason, "removal of an unknown party"),
         }
         removed
     }
@@ -212,14 +265,21 @@ async fn heartbeat_loop(broker: Arc<Broker>, id: PartyId) {
             Message::Heartbeat { inbox, service, .. } => (inbox.clone(), service.clone()),
             _ => (None, None),
         };
+        let started = Instant::now();
         match timeout(t.heartbeat_timeout, broker.client.call(&addr, hb)).await {
             Ok(Ok(Message::HeartbeatAck { id: acked })) => {
+                broker
+                    .metrics
+                    .heartbeat(HeartbeatOutcome::Ack, started.elapsed());
                 if acked != id && acked != PartyId(0) {
                     debug!(%id, %acked, "heartbeat acknowledged with another id");
                 }
                 broker.with_registry(|r| r.mark_alive(id, Instant::now()));
             }
             outcome => {
+                broker
+                    .metrics
+                    .heartbeat(HeartbeatOutcome::Fail, started.elapsed());
                 let failures = broker.with_registry(|r| {
                     r.restore(id, pending.0, pending.1);
                     r.record_failure(id)
@@ -227,7 +287,7 @@ async fn heartbeat_loop(broker: Arc<Broker>, id: PartyId) {
                 let Some(failures) = failures else { return };
                 debug!(%id, %addr, failures, ?outcome, "heartbeat failed");
                 if failures >= t.fail_threshold {
-                    let _ = broker.drop_party(id, "heartbeats failed");
+                    let _ = broker.drop_party(id, RemovalReason::HeartbeatsFailed);
                     return;
                 }
             }
@@ -245,7 +305,7 @@ async fn sweeper_loop(broker: Arc<Broker>) {
         }
         let stale = broker.with_registry(|r| r.stale(Instant::now(), t.ping_staleness));
         for id in stale {
-            let _ = broker.drop_party(id, "no ping received");
+            let _ = broker.drop_party(id, RemovalReason::NoPing);
         }
     }
 }
@@ -424,9 +484,79 @@ mod tests {
         let b = broker();
         let id = publish(&b, 1, &Addr::tcp("127.0.0.1", unused_port()), false);
         b.watch(id);
+        assert_eq!(b.gauges().heartbeat_tasks, 1);
         wait_for(|| !present(&b, id), "removal of an unreachable party").await;
         assert!(lock(&b.tasks).is_empty());
+        let m = b.metrics();
+        let failed = m.heartbeats(HeartbeatOutcome::Fail);
+        assert_eq!(failed, u64::from(Timing::fast().fail_threshold));
+        assert_eq!(m.heartbeats(HeartbeatOutcome::Ack), 0);
+        assert_eq!(m.heartbeat_seconds().count(), failed);
+        assert_eq!(
+            m.removals(Role::Service, RemovalReason::HeartbeatsFailed),
+            1
+        );
+        assert_eq!(b.gauges().heartbeat_tasks, 0);
         b.shutdown_token().cancel();
+    }
+
+    #[tokio::test]
+    async fn acknowledged_heartbeats_are_counted_with_their_round_trip() {
+        let (server, _handler) = party(Respond::Ack).await;
+        let b = broker();
+        let id = publish(&b, 1, &server.bound(), false);
+        b.watch(id);
+        wait_for(
+            || b.metrics().heartbeats(HeartbeatOutcome::Ack) >= 2,
+            "two acknowledged heartbeats",
+        )
+        .await;
+        let m = b.metrics();
+        assert_eq!(m.heartbeats(HeartbeatOutcome::Fail), 0);
+        assert!(m.heartbeat_seconds().count() >= 2);
+        assert!(m.heartbeat_seconds().sum_seconds() > 0.0);
+        let text = b.render_metrics();
+        assert!(text.contains("nsm_heartbeat_tasks 1\n"), "{text}");
+        b.shutdown_token().cancel();
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn removals_and_repairings_are_counted() {
+        let b = broker();
+        let first = publish(&b, 1, &Addr::tcp("10.0.0.1", 1), true);
+        let second = publish(&b, 1, &Addr::tcp("10.0.0.2", 1), true);
+        let (client, handle) = claim(&b, 1, &Addr::tcp("10.0.0.3", 1));
+        let (taken, spare) = if handle.id == first {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let _ = b.drop_party(taken, RemovalReason::NoPing);
+        let _ = b.drop_party(spare, RemovalReason::HeartbeatsFailed);
+        assert!(!present(&b, client));
+        let (other, _) = {
+            let s = publish(&b, 2, &Addr::tcp("10.0.0.4", 1), true);
+            (s, claim(&b, 2, &Addr::tcp("10.0.0.5", 1)))
+        };
+        let c2 = b.with_registry(|r| r.client_ids())[0];
+        let _ = b.drop_party(c2, RemovalReason::NoPing);
+        assert!(present(&b, other));
+        let m = b.metrics();
+        assert_eq!(m.removals(Role::Service, RemovalReason::NoPing), 1);
+        assert_eq!(
+            m.removals(Role::Service, RemovalReason::HeartbeatsFailed),
+            1
+        );
+        assert_eq!(m.removals(Role::Client, RemovalReason::NoReplacement), 1);
+        assert_eq!(m.removals(Role::Client, RemovalReason::NoPing), 1);
+        assert_eq!(m.repairings(), 1);
+        let status = b.status(Some(Addr::tcp("127.0.0.1", 1)));
+        assert_eq!(status.totals.repairings, 1);
+        assert_eq!(status.totals.removals["client"]["no_replacement"], 1);
+        assert_eq!(status.counts.services, 1);
+        assert_eq!(status.counts.services_unclaimed, 1);
+        assert_eq!(status.bound, Some(Addr::tcp("127.0.0.1", 1)));
     }
 
     #[tokio::test]
@@ -459,7 +589,7 @@ mod tests {
         };
 
         // The claimed service vanishes: its client moves to the spare one.
-        match b.drop_party(taken, "test") {
+        match b.drop_party(taken, RemovalReason::HeartbeatsFailed) {
             Removed::Service { orphaned_clients } => assert_eq!(orphaned_clients, vec![client]),
             other => panic!("{other:?}"),
         }
@@ -468,12 +598,15 @@ mod tests {
         assert_eq!(row(&b, spare).unwrap().paired_with, Some(client));
 
         // The spare vanishes too: nothing is left for the client, so it goes.
-        match b.drop_party(spare, "test") {
+        match b.drop_party(spare, RemovalReason::HeartbeatsFailed) {
             Removed::Service { orphaned_clients } => assert_eq!(orphaned_clients, vec![client]),
             other => panic!("{other:?}"),
         }
         assert!(b.with_registry(|r| r.is_empty()));
-        assert!(matches!(b.drop_party(client, "test"), Removed::Unknown));
+        assert!(matches!(
+            b.drop_party(client, RemovalReason::HeartbeatsFailed),
+            Removed::Unknown
+        ));
     }
 
     #[tokio::test]
@@ -485,7 +618,7 @@ mod tests {
         let (c2, h2) = claim(&b, 1, &Addr::tcp("10.0.0.4", 1));
         assert_ne!(h1.id, h2.id);
         let orphan = if h1.id == s1 { c1 } else { c2 };
-        match b.drop_party(s1, "test") {
+        match b.drop_party(s1, RemovalReason::NoPing) {
             Removed::Service { orphaned_clients } => assert_eq!(orphaned_clients, vec![orphan]),
             other => panic!("{other:?}"),
         }
@@ -504,7 +637,7 @@ mod tests {
         let (c, handle) = claim(&b, 1, &Addr::tcp("10.0.0.3", 1));
         assert_eq!(handle.id, s);
         assert_eq!(row(&b, s).unwrap().paired_with, Some(c));
-        match b.drop_party(c, "test") {
+        match b.drop_party(c, RemovalReason::NoPing) {
             Removed::Client { freed_service } => assert_eq!(freed_service, Some(s)),
             other => panic!("{other:?}"),
         }
@@ -514,7 +647,7 @@ mod tests {
         assert_eq!(handle.id, s);
         assert_eq!(row(&b, s).unwrap().paired_with, Some(again));
         assert!(matches!(
-            b.drop_party(PartyId(999), "test"),
+            b.drop_party(PartyId(999), RemovalReason::NoPing),
             Removed::Unknown
         ));
     }
