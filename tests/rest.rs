@@ -389,6 +389,37 @@ async fn store_through_the_api() {
         assert_eq!(status, StatusCode::OK, "{got}");
         assert_eq!(got, put, "the service reads the client's write");
 
+        // The reserved entry nsm_mesh_data: where the claim's parties
+        // listen, as the JSON text of an entry at version 0; a write of a
+        // reserved key is the caller's fault.
+        let (status, mesh) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": service_hb, "op": "get", "key": "nsm_mesh_data" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{mesh}");
+        assert_eq!(mesh["client"], owner, "{mesh}");
+        assert_eq!(mesh["entries"][0]["version"], 0, "{mesh}");
+        let text = mesh["entries"][0]["value"].as_str().expect("JSON text");
+        let data: Value = serde_json::from_str(text).expect("mesh data");
+        assert_eq!(data["nsm_key"], 7, "{data}");
+        assert_eq!(data["nsm_mesh_client"], client_hb, "{data}");
+        assert_eq!(data["nsm_mesh_service"], service_hb, "{data}");
+        assert_eq!(data["nsm_service_port"], 9100, "{data}");
+        assert_eq!(data["nsm_service_address"], "127.0.0.1", "{data}");
+        let (status, body) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": client_hb, "op": "put", "key": "nsm_mesh_data", "value": "x" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"].as_str().unwrap_or("").contains("reserved"),
+            "{body}"
+        );
+
         // The service writes a second entry; either party lists both.
         let (status, second) = api
             .post(

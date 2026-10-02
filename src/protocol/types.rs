@@ -16,10 +16,14 @@
 //! - [`StoreOp`] is one operation on the store (get, put, delete, list);
 //! - [`StoreEntry`] is one key with its value and version, and [`Stored`] is
 //!   the answer to every operation: whose store it is, its revision and the
-//!   entries the operation returns.
+//!   entries the operation returns;
+//! - [`MeshData`] is where the parties of a claim listen: the value of the
+//!   reserved store entry `nsm_mesh_data`, which the broker builds from its
+//!   registry when it is read (discovery plan, decisions L3 and L4).
 //!
 //! All of them serialise as plain JSON and travel inside
-//! [`Message`](super::Message) variants; none of them is ever sent bare.
+//! [`Message`](super::Message) variants; none of them is ever sent bare
+//! (a [`MeshData`] travels as the JSON text of a [`StoreEntry`]'s value).
 
 use std::fmt;
 use std::str::FromStr;
@@ -257,6 +261,16 @@ pub struct ClientRecord {
 /// Longest [`StoreKey`], in bytes.
 pub const MAX_STORE_KEY_BYTES: usize = 128;
 
+/// The prefix of the store keys the broker keeps for itself (discovery
+/// plan, decision L3). A put or a delete of such a key is refused, a get of
+/// one the broker does not know answers no entry, and `list` never shows
+/// one: nothing reserved is ever in a store.
+pub const RESERVED_STORE_KEY_PREFIX: &str = "nsm_";
+
+/// The reserved store key whose `get` answers a [`MeshData`]: where the
+/// parties of the claim listen.
+pub const MESH_DATA_KEY: &str = "nsm_mesh_data";
+
 /// The name of one entry in a shared store.
 ///
 /// A store key is 1 to [`MAX_STORE_KEY_BYTES`] characters from `A-Z`,
@@ -282,6 +296,25 @@ impl StoreKey {
     /// The key as text.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// True for the keys the broker keeps for itself: those starting with
+    /// [`RESERVED_STORE_KEY_PREFIX`] (`nsm_`). They are answered by the
+    /// broker from what it knows and are never stored; writing one is
+    /// refused.
+    pub fn is_reserved(&self) -> bool {
+        self.0.starts_with(RESERVED_STORE_KEY_PREFIX)
+    }
+
+    /// The key of the reserved entry that says where a claim's parties
+    /// listen ([`MESH_DATA_KEY`]).
+    pub fn mesh_data() -> StoreKey {
+        StoreKey(MESH_DATA_KEY.to_owned())
+    }
+
+    /// True for [`StoreKey::mesh_data`].
+    pub fn is_mesh_data(&self) -> bool {
+        self.0 == MESH_DATA_KEY
     }
 
     /// True when `text` is a valid store key.
@@ -506,6 +539,110 @@ impl Stored {
             None => format!("the {} was not applied", op.kind()),
         }
     }
+
+    /// The [`MeshData`] this reply carries as the value of the reserved
+    /// entry `nsm_mesh_data`, parsed; `None` when it carries no such entry
+    /// (the reply to another operation).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Json`](crate::Error::Json) when the entry's value is not
+    /// mesh data: a broker that predates the reservation lets a `put` write
+    /// anything under that key.
+    pub fn mesh_data(&self) -> crate::Result<Option<MeshData>> {
+        self.get(&StoreKey::mesh_data())
+            .map(|entry| serde_json::from_str::<MeshData>(&entry.value).map_err(crate::Error::from))
+            .transpose()
+    }
+}
+
+/// Where the parties of a claim listen: the value of the reserved store
+/// entry `nsm_mesh_data` (discovery plan, decisions L3 and L4).
+///
+/// The broker builds it from its registry when the entry is read, for the
+/// claim of whichever party the read concerns: a client and the service it
+/// holds, or a service and the client holding it. Every field is prefixed
+/// `nsm_`, and the value travels as JSON text in a [`StoreEntry`] of
+/// version 0, since the versions of writes start at 1. A side that is not
+/// there is `null`: the client's fields at a service nobody holds, the
+/// service's at a client whose service died and that is not re-paired yet.
+///
+/// ```json
+/// {"nsm_key":1234,
+///  "nsm_service_id":1,"nsm_service_address":"10.0.0.5","nsm_service_port":9000,"nsm_service":"10.0.0.5:9000",
+///  "nsm_mesh_service_address":"10.0.0.5","nsm_mesh_service_port":12010,"nsm_mesh_service":"10.0.0.5:12010",
+///  "nsm_client_id":2,"nsm_mesh_client_address":"10.0.0.6","nsm_mesh_client_port":12020,"nsm_mesh_client":"10.0.0.6:12020"}
+/// ```
+///
+/// The `*_address` fields are hosts (an IPv6 literal without brackets) and
+/// the `*_port` fields ports; `nsm_service`, `nsm_mesh_service` and
+/// `nsm_mesh_client` are the same endpoints as one string each, ready for
+/// the command line: `host:port` for the service's data-plane endpoint,
+/// which is what `claim` prints, and a party's heartbeat address with its
+/// transport (`http://10.0.0.6:12020`) for the other two, as `send`,
+/// `collect` and `store` take them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshData {
+    /// The rendezvous key of the claim.
+    pub nsm_key: Key,
+    /// The service's broker-assigned id.
+    pub nsm_service_id: Option<PartyId>,
+    /// Host of the service's data-plane endpoint.
+    pub nsm_service_address: Option<String>,
+    /// Port of the service's data-plane endpoint (its `--service-port`).
+    pub nsm_service_port: Option<u16>,
+    /// The service's data-plane endpoint as `host:port`.
+    pub nsm_service: Option<Addr>,
+    /// Host the service listens on for the broker's heartbeats.
+    pub nsm_mesh_service_address: Option<String>,
+    /// Port the service listens on for the broker's heartbeats.
+    pub nsm_mesh_service_port: Option<u16>,
+    /// The service's heartbeat address, with its transport.
+    pub nsm_mesh_service: Option<Addr>,
+    /// The client's broker-assigned id.
+    pub nsm_client_id: Option<PartyId>,
+    /// Host the client listens on for the broker's heartbeats.
+    pub nsm_mesh_client_address: Option<String>,
+    /// Port the client listens on for the broker's heartbeats.
+    pub nsm_mesh_client_port: Option<u16>,
+    /// The client's heartbeat address, with its transport.
+    pub nsm_mesh_client: Option<Addr>,
+}
+
+impl MeshData {
+    /// The data for the claim under `key` with these parties, either of
+    /// which may be missing.
+    pub fn new(key: Key, service: Option<&ServiceRecord>, client: Option<&ClientRecord>) -> Self {
+        MeshData {
+            nsm_key: key,
+            nsm_service_id: service.map(|s| s.id),
+            nsm_service_address: service.map(|s| s.service_addr.host.clone()),
+            nsm_service_port: service.map(|s| s.service_addr.port),
+            nsm_service: service.map(|s| s.service_addr.clone()),
+            nsm_mesh_service_address: service.map(|s| s.bind_addr.host.clone()),
+            nsm_mesh_service_port: service.map(|s| s.bind_addr.port),
+            nsm_mesh_service: service.map(|s| s.bind_addr.clone()),
+            nsm_client_id: client.map(|c| c.id),
+            nsm_mesh_client_address: client.map(|c| c.bind_addr.host.clone()),
+            nsm_mesh_client_port: client.map(|c| c.bind_addr.port),
+            nsm_mesh_client: client.map(|c| c.bind_addr.clone()),
+        }
+    }
+
+    /// The entry `get nsm_mesh_data` answers: this value as one line of
+    /// JSON, at version 0.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Json`](crate::Error::Json) if the value cannot be encoded,
+    /// which plain fields of these types never trigger.
+    pub fn entry(&self) -> crate::Result<StoreEntry> {
+        Ok(StoreEntry {
+            key: StoreKey::mesh_data(),
+            value: serde_json::to_string(self)?,
+            version: 0,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +656,16 @@ mod tests {
             key: 42,
             service_addr: Addr::tcp("10.0.0.5", 9000),
             bind_addr: Addr::new(Transport::Https, "10.0.0.5", 9001),
+            ping: false,
+        }
+    }
+
+    fn client() -> ClientRecord {
+        ClientRecord {
+            id: PartyId(4),
+            key: 42,
+            bind_addr: Addr::new(Transport::Https, "10.0.0.6", 7000),
+            service: PartyId(3),
             ping: false,
         }
     }
@@ -957,5 +1104,162 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<Stored>(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn reserved_store_keys_start_with_nsm_() {
+        for reserved in ["nsm_", "nsm_mesh_data", "nsm_x/y", "nsm_-"] {
+            assert!(key(reserved).is_reserved(), "{reserved}");
+        }
+        for plain in ["nsm", "NSM_x", "mesh_data", "step", "a/nsm_b", "nsm.x"] {
+            assert!(!key(plain).is_reserved(), "{plain}");
+        }
+        let mesh = StoreKey::mesh_data();
+        assert_eq!(mesh.as_str(), MESH_DATA_KEY);
+        assert!(mesh.is_reserved() && mesh.is_mesh_data());
+        assert!(!key("nsm_other").is_mesh_data());
+        assert!(MESH_DATA_KEY.starts_with(RESERVED_STORE_KEY_PREFIX));
+        // A reserved key is still a valid key: it decodes, and only the
+        // broker refuses it.
+        assert_eq!(
+            serde_json::from_str::<StoreKey>(r#""nsm_mesh_data""#).unwrap(),
+            mesh
+        );
+    }
+
+    #[test]
+    fn mesh_data_json_shape_is_flat_with_nsm_prefixed_fields() {
+        let both = MeshData::new(42, Some(&service()), Some(&client()));
+        let json = serde_json::to_string(&both).unwrap();
+        assert_eq!(
+            json,
+            concat!(
+                r#"{"nsm_key":42,"#,
+                r#""nsm_service_id":3,"nsm_service_address":"10.0.0.5","nsm_service_port":9000,"nsm_service":"10.0.0.5:9000","#,
+                r#""nsm_mesh_service_address":"10.0.0.5","nsm_mesh_service_port":9001,"nsm_mesh_service":"https://10.0.0.5:9001","#,
+                r#""nsm_client_id":4,"nsm_mesh_client_address":"10.0.0.6","nsm_mesh_client_port":7000,"nsm_mesh_client":"https://10.0.0.6:7000"}"#
+            )
+        );
+        assert_eq!(serde_json::from_str::<MeshData>(&json).unwrap(), both);
+        // Every field is nsm_-prefixed and present, null or not.
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let fields = value.as_object().unwrap();
+        assert_eq!(fields.len(), 12);
+        assert!(fields.keys().all(|k| k.starts_with("nsm_")), "{json}");
+
+        // A side that is not there is null, not missing.
+        let service_only = MeshData::new(42, Some(&service()), None);
+        let json = serde_json::to_string(&service_only).unwrap();
+        assert!(
+            json.ends_with(
+                r#""nsm_client_id":null,"nsm_mesh_client_address":null,"nsm_mesh_client_port":null,"nsm_mesh_client":null}"#
+            ),
+            "{json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<MeshData>(&json).unwrap(),
+            service_only
+        );
+        let client_only = MeshData::new(42, None, Some(&client()));
+        assert_eq!(client_only.nsm_service, None);
+        assert_eq!(client_only.nsm_service_port, None);
+        assert_eq!(client_only.nsm_mesh_client, Some(client().bind_addr));
+        assert_eq!(client_only.nsm_mesh_client_port, Some(7000));
+
+        // IPv6 hosts are bare in the address fields and bracketed in the
+        // combined ones, as everywhere else.
+        let mut v6 = service();
+        v6.service_addr = Addr::tcp("fe80::1", 9000);
+        v6.bind_addr = Addr::new(Transport::Tcp, "fe80::1", 9001);
+        let data = serde_json::to_value(MeshData::new(42, Some(&v6), None)).unwrap();
+        assert_eq!(data["nsm_service_address"], "fe80::1");
+        assert_eq!(data["nsm_service"], "[fe80::1]:9000");
+        assert_eq!(data["nsm_mesh_service"], "[fe80::1]:9001");
+
+        // Like every Option, a null may be left out on the way in; the key
+        // may not.
+        let sparse: MeshData = serde_json::from_str(r#"{"nsm_key":1}"#).unwrap();
+        assert_eq!(sparse, MeshData::new(1, None, None));
+        assert!(serde_json::from_str::<MeshData>(r#"{"nsm_service_id":1}"#).is_err());
+    }
+
+    #[test]
+    fn the_mesh_data_entry_is_version_0_and_a_reply_parses_it_back() {
+        let data = MeshData::new(42, Some(&service()), Some(&client()));
+        let entry = data.entry().unwrap();
+        assert_eq!(entry.key, StoreKey::mesh_data());
+        assert_eq!(entry.version, 0, "nothing was written");
+        assert_eq!(
+            serde_json::from_str::<MeshData>(&entry.value).unwrap(),
+            data
+        );
+        let stored = Stored {
+            client: Some(PartyId(4)),
+            revision: 7,
+            applied: true,
+            entries: vec![entry],
+        };
+        assert_eq!(stored.mesh_data().unwrap(), Some(data));
+        // No such entry: nothing, not an error. A value that is not mesh
+        // data (a broker that predates the reservation let a user write
+        // one): an error.
+        let none = Stored {
+            client: Some(PartyId(4)),
+            revision: 7,
+            applied: true,
+            entries: vec![],
+        };
+        assert_eq!(none.mesh_data().unwrap(), None);
+        let other = Stored {
+            client: Some(PartyId(4)),
+            revision: 9,
+            applied: true,
+            entries: vec![StoreEntry {
+                key: StoreKey::mesh_data(),
+                value: "not json".into(),
+                version: 9,
+            }],
+        };
+        assert!(matches!(other.mesh_data(), Err(crate::Error::Json(_))));
+    }
+
+    #[test]
+    fn the_largest_mesh_data_reply_fits_the_smallest_broker_frame() {
+        // A broker may run with --max-store-bytes 256 and --max-frame-bytes
+        // 1280 (the budget plus REPLY_OVERHEAD, which `listen` checks). The
+        // mesh data entry is not counted against the budget, so its reply
+        // must fit that frame on its own. nsm's parties advertise IP
+        // literals, of which an IPv6 text is the longest (39 characters).
+        let host = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+        let service = ServiceRecord {
+            id: PartyId(u64::MAX),
+            key: u64::MAX,
+            service_addr: Addr::tcp(host, u16::MAX),
+            bind_addr: Addr::new(Transport::Https, host, u16::MAX),
+            ping: false,
+        };
+        let client = ClientRecord {
+            id: PartyId(u64::MAX),
+            key: u64::MAX,
+            bind_addr: Addr::new(Transport::Https, host, u16::MAX),
+            service: PartyId(u64::MAX),
+            ping: false,
+        };
+        let reply = crate::protocol::Message::Stored(Stored {
+            client: Some(PartyId(u64::MAX)),
+            revision: u64::MAX,
+            applied: true,
+            entries: vec![
+                MeshData::new(u64::MAX, Some(&service), Some(&client))
+                    .entry()
+                    .unwrap(),
+            ],
+        });
+        let wire = serde_json::to_vec(&reply).unwrap().len();
+        let smallest_frame = 256 + crate::broker::store::REPLY_OVERHEAD;
+        assert!(
+            wire <= smallest_frame,
+            "{wire} bytes do not fit the smallest frame of {smallest_frame}"
+        );
     }
 }

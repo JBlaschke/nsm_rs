@@ -20,7 +20,7 @@ use crate::transport::Client;
 use crate::{Error, Result};
 
 pub use crate::broker::metrics::Status;
-pub use crate::protocol::{StoreEntry, StoreKey, StoreOp, Stored};
+pub use crate::protocol::{MeshData, StoreEntry, StoreKey, StoreOp, Stored};
 
 /// Names of the interfaces carrying an address of the given family (any
 /// family when `None`).

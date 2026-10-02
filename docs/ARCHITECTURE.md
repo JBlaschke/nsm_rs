@@ -147,7 +147,10 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   `Registry::store` finds the store the way `deliver` finds the peer: a
   client uses its own, also while orphaned; a service uses the store of the
   client holding it, and a service nobody holds reads an empty store and may
-  not write.
+  not write. Store keys starting with `nsm_` are reserved for the broker:
+  `Registry::store` answers `get nsm_mesh_data` from `Registry::mesh_data`
+  (where the claim's parties listen, projected from the records as an entry
+  of version 0), refuses a write of any reserved key and never stores one.
 - `store.rs` is `Store`: a key-value map with a byte budget, pure like the
   registry. Each entry counts as its JSON-encoded key and value plus 64
   bytes, which bounds the largest `stored` reply as well as memory; write
@@ -302,9 +305,10 @@ exist: about 80 MiB of accounted store bytes with the defaults, and at most
   service can write nothing, and the next claimer of a service never sees
   the previous claim's data. The operator presents no token: **a party's
   listener is the capability**. Anyone who can reach a party's bind address
-  can read and write its store through it, as with `send` and `collect`, and
-  TLS on that listener encrypts but does not authenticate callers (mutual
-  TLS is a listed follow-up). The store is not a place for secrets. Store
+  can read and write its store through it, as with `send` and `collect`,
+  and can learn where its peer listens for heartbeats (`nsm_mesh_data`),
+  and TLS on that listener encrypts but does not authenticate callers
+  (mutual TLS is a listed follow-up). The store is not a place for secrets. Store
   keys and values are never logged, and a `Store`'s `Debug` shows counts
   only.
 - **The control plane** binds loopback by default, requires a bearer token

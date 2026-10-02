@@ -712,6 +712,117 @@ async fn unclaimed_service_reads_an_empty_store_and_may_not_write() {
 }
 
 #[tokio::test]
+async fn mesh_data_says_where_a_claims_parties_listen() {
+    for &t in TRANSPORTS {
+        with_deadline(async {
+            let c = Cluster::start(t).await;
+            let service = c.publish(12, 9000).await;
+            // Before any claim: the service's side only, from an "empty"
+            // store that nobody owns.
+            let alone = store(&c, &service, get("nsm_mesh_data")).await;
+            assert_eq!((alone.client, alone.revision), (None, 0), "{t:?}");
+            assert_eq!(alone.entries.len(), 1, "{t:?}: {alone:?}");
+            assert_eq!(alone.entries[0].version, 0, "{t:?}");
+            let data = alone.mesh_data().unwrap().expect("mesh data");
+            assert_eq!(data.nsm_key, 12, "{t:?}");
+            assert_eq!(data.nsm_service_id, Some(service.id()), "{t:?}");
+            assert_eq!(data.nsm_mesh_service, Some(service.bound()), "{t:?}");
+            assert_eq!(data.nsm_mesh_service_port, Some(service.bound().port));
+            assert_eq!(data.nsm_service_port, Some(9000), "{t:?}");
+            assert_eq!(data.nsm_service_address.as_deref(), Some("127.0.0.1"));
+            assert_eq!(data.nsm_client_id, None, "{t:?}");
+            assert_eq!(data.nsm_mesh_client, None, "{t:?}");
+
+            // Paired: the same answer through either party, naming both.
+            let client = c.claim(12).await;
+            let via_client = store(&c, &client, get("nsm_mesh_data")).await;
+            let via_service = store(&c, &service, get("nsm_mesh_data")).await;
+            assert_eq!(via_client, via_service, "{t:?}");
+            assert_eq!(via_client.client, Some(client.id()), "{t:?}");
+            let data = via_client.mesh_data().unwrap().expect("mesh data");
+            assert_eq!(data.nsm_client_id, Some(client.id()), "{t:?}");
+            assert_eq!(data.nsm_mesh_client, Some(client.bound()), "{t:?}");
+            assert_eq!(data.nsm_mesh_service, Some(service.bound()), "{t:?}");
+            // The combined service endpoint is what the claim was told.
+            assert_eq!(
+                data.nsm_service.map(|a| a.to_string()),
+                Some(client.service().expect("paired").to_string()),
+                "{t:?}"
+            );
+
+            // It is not an entry: list shows none, a put of it is refused,
+            // and the store is as it was.
+            let listed = store(&c, &client, StoreOp::List).await;
+            assert!(listed.entries.is_empty(), "{t:?}: {listed:?}");
+            let err = ops::store(&client.bound(), put("nsm_mesh_data", "mine"), c.net())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Rejected(reason) if reason.contains("reserved")),
+                "{t:?}: {err}"
+            );
+            let again = store(&c, &service, get("nsm_mesh_data")).await;
+            assert_eq!(again.revision, 0, "{t:?}");
+            assert_eq!(again.mesh_data().unwrap(), via_client.mesh_data().unwrap());
+            c.stop().await;
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn mesh_data_follows_a_repairing() {
+    with_deadline(async {
+        let c = Cluster::start(Transport::Tcp).await;
+        let s1 = c.publish(13, 9001).await;
+        let s2 = c.publish(13, 9002).await;
+        let client = c.claim(13).await;
+        let mut pairings = client.pairings();
+        pairings.borrow_and_update();
+        let before = store(&c, &client, get("nsm_mesh_data"))
+            .await
+            .mesh_data()
+            .unwrap()
+            .expect("mesh data");
+        assert_eq!(before.nsm_service_id, Some(s1.id()));
+        // The spare is unclaimed: its own data names no client.
+        let spare = store(&c, &s2, get("nsm_mesh_data")).await;
+        assert_eq!(spare.client, None);
+        let spare = spare.mesh_data().unwrap().expect("mesh data");
+        assert_eq!(
+            (spare.nsm_service_id, spare.nsm_client_id),
+            (Some(s2.id()), None)
+        );
+
+        // The first service dies and the client moves to the spare: the
+        // data follows, through either party.
+        c.kill(s1).await;
+        while pairings.borrow_and_update().as_ref().map(|h| h.id) != Some(s2.id()) {
+            pairings.changed().await.unwrap();
+        }
+        let after = store(&c, &client, get("nsm_mesh_data"))
+            .await
+            .mesh_data()
+            .unwrap()
+            .expect("mesh data");
+        assert_eq!(after.nsm_service_id, Some(s2.id()));
+        assert_eq!(after.nsm_mesh_service, Some(s2.bound()));
+        assert_eq!(after.nsm_service_port, Some(9002));
+        assert_eq!(after.nsm_mesh_client, before.nsm_mesh_client);
+        assert_eq!(after.nsm_client_id, Some(client.id()));
+        assert_eq!(
+            store(&c, &s2, get("nsm_mesh_data"))
+                .await
+                .mesh_data()
+                .unwrap(),
+            Some(after)
+        );
+        c.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn store_works_in_ping_mode() {
     with_deadline(async {
         let c = Cluster::start(Transport::Http).await;

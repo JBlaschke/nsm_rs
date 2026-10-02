@@ -236,6 +236,19 @@ options](#limit-options)); a put that does not fit is refused.
   parties on the new binary before relying on `--if-version`.
 - `list` prints the keys, one per line, in sorted order, and nothing for an
   empty store (exit 0).
+- `get nsm_mesh_data` prints where the claim's parties listen, as one line
+  of JSON the broker builds from its registry when asked:
+  `nsm_service_address` and `nsm_service_port` (the service's data-plane
+  endpoint, what `claim` printed, also as `nsm_service`),
+  `nsm_mesh_service_address` and `nsm_mesh_service_port` (the service's
+  heartbeat address, also as `nsm_mesh_service`, the form `send`, `collect`
+  and `store` take) and `nsm_mesh_client_address` and
+  `nsm_mesh_client_port` (the client's, also as `nsm_mesh_client`), with
+  `nsm_key` and the two party ids. A side that is not there is `null`: the
+  client's fields at a service nobody holds, the service's at a client
+  whose service died and that is not re-paired yet. Store keys starting
+  with `nsm_` are reserved: `put` and `delete` refuse them (exit 1) and
+  `list` never shows them.
 - `--json` prints the broker's reply instead, as one line:
   `{"client":8,"revision":3,"applied":true,"entries":[{"key":"step","value":"5","version":3}]}`,
   the same body `POST /v1/store` returns. `client` is the id of the client

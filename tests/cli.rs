@@ -820,6 +820,45 @@ fn store_session(client_hb: &str, service_hb: &str) {
         assert!(out.stderr.is_empty(), "{}", out.stderr);
     }
 
+    // The reserved entry nsm_mesh_data: where the claim's parties listen,
+    // as one line of JSON the broker builds, the same through either party
+    // and never in the list above.
+    let out = store(&["get", client_hb, "nsm_mesh_data"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let data: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(data["nsm_key"], 1234, "{data}");
+    assert_eq!(data["nsm_service"], "127.0.0.1:9000", "{data}");
+    assert_eq!(data["nsm_service_address"], "127.0.0.1", "{data}");
+    assert_eq!(data["nsm_service_port"], 9000, "{data}");
+    assert_eq!(data["nsm_mesh_service"], service_hb, "{data}");
+    assert_eq!(data["nsm_mesh_client"], client_hb, "{data}");
+    let client_port: u64 = client_hb.rsplit(':').next().unwrap().parse().unwrap();
+    assert_eq!(data["nsm_mesh_client_port"], client_port, "{data}");
+    assert_eq!(data["nsm_mesh_client_address"], "127.0.0.1", "{data}");
+    assert!(
+        data["nsm_service_id"].is_u64() && data["nsm_client_id"].is_u64(),
+        "{data}"
+    );
+    let via_service = store(&["get", service_hb, "nsm_mesh_data"]);
+    assert_eq!(via_service.code, 0, "{}", via_service.stderr);
+    assert_eq!(via_service.stdout, out.stdout);
+    // With --json it is an entry of version 0 in the usual reply.
+    let out = store(&["get", client_hb, "nsm_mesh_data", "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(reply["entries"][0]["key"], "nsm_mesh_data", "{reply}");
+    assert_eq!(reply["entries"][0]["version"], 0, "{reply}");
+    assert!(reply["client"].is_u64(), "{reply}");
+    // Reserved: a put is refused, exit 1, and nothing changed.
+    let out = store(&["put", client_hb, "nsm_mesh_data", "--value", "x"]);
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(out.stderr.contains("reserved"), "{}", out.stderr);
+    let out = store(&["delete", service_hb, "nsm_other"]);
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(out.stderr.contains("reserved"), "{}", out.stderr);
+
     // An unset key is "not yet": exit 3, nothing on stdout.
     let out = store(&["get", service_hb, "missing"]);
     assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);

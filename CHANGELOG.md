@@ -157,6 +157,20 @@ version: 3.
   listener, and the party prints the address it bound on stderr. `listen`
   still requires it: the broker is the one fixed address. Discovery plan,
   decision L1.
+- `nsm store get PARTY nsm_mesh_data`, and the same read over
+  `POST /v1/store`: where the parties of the claim listen, as one JSON value
+  the broker builds from its registry when asked and never stores:
+  `nsm_service_address` and `nsm_service_port` (the service's data-plane
+  endpoint), `nsm_mesh_service_address` and `nsm_mesh_service_port` (its
+  heartbeat address), `nsm_mesh_client_address` and `nsm_mesh_client_port`
+  (the client's), each endpoint also as one string (`nsm_service`,
+  `nsm_mesh_service`, `nsm_mesh_client`), with `nsm_key` and both ids;
+  `null` for a side that is not there. It is an entry of version 0 that
+  `list` never shows. Store keys starting with `nsm_` are reserved from now
+  on: a put or a delete of one is refused (exit 1, HTTP 400). In the
+  library: `protocol::MeshData`, `StoreKey::is_reserved`,
+  `StoreKey::mesh_data`, `Stored::mesh_data` and `Registry::mesh_data`.
+  Discovery plan, decisions L2 to L4.
 - Graceful shutdown on Ctrl-C and SIGTERM.
 - Tests: 160+ unit tests, end-to-end tests over all four transports, control
   plane and binary tests, a stress test; CI on Linux and macOS with both

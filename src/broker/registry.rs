@@ -38,6 +38,12 @@
 //!   a service nobody holds reads an empty store and may not write (D17).
 //!   Every write takes the next number from one version counter for the
 //!   broker's whole life, starting at 1 (decision D18).
+//! - Store keys starting with `nsm_` are the broker's (discovery plan,
+//!   decision L3) and never reach a [`Store`]: `store` answers
+//!   `get nsm_mesh_data` with [`mesh_data`](Registry::mesh_data), where the
+//!   parties of the asking party's claim listen, as an entry of version 0;
+//!   a get of another reserved key answers no entry, and a put or a delete
+//!   of one is refused.
 //! - [`deliver`](Registry::deliver) parks text as the sender's peer's
 //!   pending *inbox* (a later delivery replaces an earlier one): a client's
 //!   text goes to its service, a service's text to the client holding it.
@@ -63,7 +69,8 @@ use super::store::Store;
 use crate::config::Limits;
 use crate::net::Addr;
 use crate::protocol::{
-    ClientRecord, Key, Message, PartyId, RegToken, ServiceHandle, ServiceRecord, StoreOp, Stored,
+    ClientRecord, Key, MeshData, Message, PartyId, RESERVED_STORE_KEY_PREFIX, RegToken,
+    ServiceHandle, ServiceRecord, StoreKey, StoreOp, Stored,
 };
 use crate::{Error, Result};
 
@@ -543,33 +550,49 @@ impl Registry {
     /// that is an answer, not an error. Tokens are not checked here; the
     /// handler verifies them first.
     ///
+    /// Store keys starting with `nsm_` are the broker's (discovery plan,
+    /// decision L3) and never reach the [`Store`]: `get nsm_mesh_data`
+    /// answers [`mesh_data`](Registry::mesh_data) as an entry of version 0,
+    /// with the store's `client` and `revision` as for any read (so `client`
+    /// is `None` at a service nobody holds); a get of another reserved key
+    /// answers no entry; a put or a delete of one is refused.
+    ///
     /// # Errors
     ///
     /// [`Error::Rejected`] when `from` is not a registered party
-    /// (`"unknown party <id>"`), when a service nobody holds tries to write
-    /// (`"service <id> is not claimed"`, whatever the write's condition),
-    /// when a put does not fit
+    /// (`"unknown party <id>"`), when a put or a delete names a reserved
+    /// key (`"<key> is reserved: store keys starting with nsm_ are the
+    /// broker's"`, whatever the party and the condition), when a service
+    /// nobody holds tries to write (`"service <id> is not claimed"`,
+    /// whatever the write's condition), when a put does not fit
     /// [`Limits::max_store_bytes`] (`"store full: ..."`), and when the
     /// version counter is exhausted (`"store versions exhausted"`). A
     /// refused operation changes nothing.
     pub fn store(&mut self, from: PartyId, op: StoreOp) -> Result<Stored> {
-        let client = if let Some(service) = self.services.get(&from) {
-            match service.claimed_by {
-                Some(client) if self.clients.contains_key(&client) => client,
-                _ if op.is_write() => {
-                    return Err(Error::Rejected(format!("service {from} is not claimed")));
-                }
-                _ => {
-                    return Ok(Stored {
-                        client: None,
-                        revision: 0,
-                        applied: true,
-                        entries: Vec::new(),
-                    });
-                }
-            }
+        // Whose store: a client's own, the holder's for a service, none for
+        // a service nobody holds.
+        let owner = if let Some(service) = self.services.get(&from) {
+            service
+                .claimed_by
+                .filter(|client| self.clients.contains_key(client))
+        } else if self.clients.contains_key(&from) {
+            Some(from)
         } else {
-            from
+            return Err(Error::Rejected(format!("unknown party {from}")));
+        };
+        if let Some(key) = op.key().filter(|key| key.is_reserved()) {
+            return self.reserved(from, owner, key, op.is_write());
+        }
+        let Some(client) = owner else {
+            if op.is_write() {
+                return Err(Error::Rejected(format!("service {from} is not claimed")));
+            }
+            return Ok(Stored {
+                client: None,
+                revision: 0,
+                applied: true,
+                entries: Vec::new(),
+            });
         };
         let Some(entry) = self.clients.get_mut(&client) else {
             return Err(Error::Rejected(format!("unknown party {from}")));
@@ -583,6 +606,43 @@ impl Registry {
             revision: outcome.revision,
             applied: outcome.applied,
             entries: outcome.entries,
+        })
+    }
+
+    /// Answer an operation on a reserved key (one starting with `nsm_`) for
+    /// party `from`, whose store is `owner`'s (none at a service nobody
+    /// holds): a write is refused; a get of `nsm_mesh_data` is
+    /// [`mesh_data`](Registry::mesh_data) as an entry of version 0; a get of
+    /// any other reserved key is no entry. `client` and `revision` are the
+    /// store's, as for every read.
+    fn reserved(
+        &self,
+        from: PartyId,
+        owner: Option<PartyId>,
+        key: &StoreKey,
+        write: bool,
+    ) -> Result<Stored> {
+        if write {
+            return Err(Error::Rejected(format!(
+                "{key} is reserved: store keys starting with {RESERVED_STORE_KEY_PREFIX} are the broker's"
+            )));
+        }
+        let entries = if key.is_mesh_data() {
+            self.mesh_data(from)
+                .map(|data| data.entry())
+                .transpose()?
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(Stored {
+            client: owner,
+            revision: owner
+                .and_then(|client| self.clients.get(&client))
+                .map_or(0, |client| client.store.revision()),
+            applied: true,
+            entries,
         })
     }
 
@@ -658,6 +718,33 @@ impl Registry {
     /// dialled.
     pub fn is_ping(&self, id: PartyId) -> Option<bool> {
         self.get(id).map(Party::is_ping)
+    }
+
+    /// Where the parties of `from`'s claim listen, for the reserved store
+    /// entry `nsm_mesh_data` (discovery plan, decisions L2 to L4): for a
+    /// client, itself and the service it holds (none between losing its
+    /// service and being re-paired); for a service, itself and the client
+    /// holding it (none while it is unclaimed). Built from the records on
+    /// every call, so it is always current. `None` for an unknown id.
+    pub fn mesh_data(&self, from: PartyId) -> Option<MeshData> {
+        if let Some(service) = self.services.get(&from) {
+            let client = service.claimed_by.and_then(|id| self.clients.get(&id));
+            return Some(MeshData::new(
+                service.record.key,
+                Some(&service.record),
+                client.map(|c| &c.record),
+            ));
+        }
+        let client = self.clients.get(&from)?;
+        let service = self
+            .services
+            .get(&client.record.service)
+            .filter(|s| s.claimed_by == Some(from));
+        Some(MeshData::new(
+            client.record.key,
+            service.map(|s| &s.record),
+            Some(&client.record),
+        ))
     }
 
     /// Registered parties of both kinds, counted against
@@ -739,7 +826,7 @@ mod tests {
     use crate::broker::store::entry_cost;
     use crate::net::Transport;
     use crate::protocol::message::store_key as skey;
-    use crate::protocol::{StoreEntry, StoreKey};
+    use crate::protocol::{MESH_DATA_KEY, StoreEntry};
     use crate::testing::Rng;
 
     const KEY: Key = 42;
@@ -1877,6 +1964,152 @@ mod tests {
         assert_eq!(
             r.store(s, StoreOp::List).unwrap(),
             stored(c, u64::MAX - 1, vec![entry("k", "v", u64::MAX - 1)])
+        );
+    }
+
+    #[test]
+    fn mesh_data_names_both_sides_of_a_claim_from_either_party() {
+        let mut r = registry(8);
+        let t = now();
+        let s_bind = Addr::new(Transport::Https, "10.0.0.1", 9001);
+        let s = r
+            .publish(KEY, addr(9000), s_bind.clone(), false, tok(), t)
+            .unwrap();
+        // Unclaimed: the service alone, no client.
+        let alone = r.mesh_data(s).unwrap();
+        assert_eq!(
+            alone,
+            MeshData::new(KEY, Some(&r.service(s).unwrap().record), None)
+        );
+        assert_eq!(alone.nsm_mesh_service, Some(s_bind));
+        assert_eq!(alone.nsm_service_port, Some(9000));
+        assert_eq!(alone.nsm_service_address.as_deref(), Some("10.0.0.1"));
+        assert_eq!((alone.nsm_service_id, alone.nsm_client_id), (Some(s), None));
+        assert_eq!(alone.nsm_mesh_client, None);
+
+        let c_bind = Addr::new(Transport::Https, "10.0.0.2", 7000);
+        let (c, _) = r.claim(KEY, c_bind.clone(), true, tok(), t).unwrap();
+        let from_client = r.mesh_data(c).unwrap();
+        let from_service = r.mesh_data(s).unwrap();
+        assert_eq!(from_client, from_service, "one claim, one answer");
+        assert_eq!(
+            from_client,
+            MeshData::new(
+                KEY,
+                Some(&r.service(s).unwrap().record),
+                Some(&r.client(c).unwrap().record)
+            )
+        );
+        assert_eq!(from_client.nsm_mesh_client, Some(c_bind));
+        assert_eq!(from_client.nsm_mesh_client_port, Some(7000));
+        assert_eq!(
+            (from_client.nsm_service_id, from_client.nsm_client_id),
+            (Some(s), Some(c))
+        );
+        assert_eq!(r.mesh_data(PartyId(99)), None);
+    }
+
+    #[test]
+    fn mesh_data_follows_the_claim_through_a_re_pairing() {
+        let mut r = registry(8);
+        let t = now();
+        let s1 = publish(&mut r, KEY, false, t);
+        let s2 = r
+            .publish(KEY, addr(9002), addr(9003), false, tok(), t)
+            .unwrap();
+        let (c, _) = claim(&mut r, KEY, false, t);
+        assert_eq!(r.mesh_data(c).unwrap().nsm_service_id, Some(s1));
+        let _ = r.remove(s1);
+        // Orphaned: the client alone, no service.
+        let orphan = r.mesh_data(c).unwrap();
+        assert_eq!(
+            orphan,
+            MeshData::new(KEY, None, Some(&r.client(c).unwrap().record))
+        );
+        assert_eq!(orphan.nsm_mesh_client, Some(addr(7000)));
+        // The spare is still unclaimed and says so.
+        assert_eq!(r.mesh_data(s2).unwrap().nsm_client_id, None);
+        assert_eq!(r.reclaim(c).map(|h| h.id), Some(s2));
+        let repaired = r.mesh_data(c).unwrap();
+        assert_eq!(
+            (repaired.nsm_service_id, repaired.nsm_service_port),
+            (Some(s2), Some(9002))
+        );
+        assert_eq!(repaired.nsm_mesh_service, Some(addr(9003)));
+        assert_eq!(repaired, r.mesh_data(s2).unwrap());
+    }
+
+    #[test]
+    fn reserved_keys_are_answered_by_the_broker_and_never_stored() {
+        let mut r = registry(8);
+        let t = now();
+        let s = publish(&mut r, KEY, false, t);
+        let reserved =
+            |k: &str| format!("{k} is reserved: store keys starting with nsm_ are the broker's");
+        // At a service nobody holds: the service's side, no client,
+        // revision 0; a write is told the key is reserved, not that the
+        // service is unclaimed.
+        let reply = r.store(s, get(MESH_DATA_KEY)).unwrap();
+        assert_eq!(
+            (reply.client, reply.revision, reply.applied),
+            (None, 0, true)
+        );
+        assert_eq!(reply.entries.len(), 1);
+        assert_eq!(reply.entries[0].version, 0);
+        assert_eq!(reply.mesh_data().unwrap(), r.mesh_data(s));
+        assert_eq!(
+            store_refusal(&mut r, s, put(MESH_DATA_KEY, "x")),
+            reserved(MESH_DATA_KEY)
+        );
+
+        let (c, _) = claim(&mut r, KEY, false, t);
+        r.store(c, put("step", "5")).unwrap();
+        // Through either party: the claim's client and revision, one answer.
+        for from in [c, s] {
+            let reply = r.store(from, get(MESH_DATA_KEY)).unwrap();
+            assert_eq!((reply.client, reply.revision), (Some(c), 1), "{from}");
+            assert_eq!(reply.entries.len(), 1, "{from}");
+            assert_eq!(reply.mesh_data().unwrap(), r.mesh_data(c), "{from}");
+        }
+        // Another reserved key: not set, not an error.
+        assert_eq!(r.store(c, get("nsm_other")).unwrap(), stored(c, 1, vec![]));
+        // Writes of a reserved key are refused for everyone, with or
+        // without a condition, and take no number.
+        for from in [c, s] {
+            for if_version in [None, Some(0), Some(1)] {
+                for op in [
+                    StoreOp::Put {
+                        key: skey(MESH_DATA_KEY),
+                        value: "x".into(),
+                        if_version,
+                    },
+                    StoreOp::Delete {
+                        key: skey("nsm_other"),
+                        if_version,
+                    },
+                ] {
+                    let k = op.key().unwrap().to_string();
+                    assert_eq!(
+                        store_refusal(&mut r, from, op),
+                        reserved(&k),
+                        "{from} {if_version:?}"
+                    );
+                }
+            }
+        }
+        // Nothing reserved is in the store, and nothing took a number.
+        assert_eq!(
+            r.store(c, StoreOp::List).unwrap(),
+            stored(c, 1, vec![entry("step", "5", 1)])
+        );
+        assert_eq!(
+            r.store(c, put("next", "6")).unwrap(),
+            stored(c, 2, vec![entry("next", "6", 2)])
+        );
+        // An unknown party is unknown first, reserved key or not.
+        assert_eq!(
+            store_refusal(&mut r, PartyId(99), get(MESH_DATA_KEY)),
+            "unknown party 99"
         );
     }
 
