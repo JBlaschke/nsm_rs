@@ -15,7 +15,7 @@ use crate::broker::listen::{BrokerHandle, ListenOpts, listen as start_broker};
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, LocalAddr, Selector, Transport, interfaces};
 use crate::party::{ClaimOpts, PartyOpts, PublishOpts, Session};
-use crate::protocol::{Key, Message, Role, ServiceHandle};
+use crate::protocol::{Key, Message, PartyId, Role, ServiceHandle};
 use crate::transport::Client;
 use crate::{Error, Result};
 
@@ -256,6 +256,44 @@ pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
     }
 }
 
+/// Where a store operation goes (discovery plan, decisions L5 and L7): to
+/// a party, which relays it with its token, or to the broker by rendezvous
+/// key. [`StoreTarget::store`] applies an operation at either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreTarget {
+    /// A party's heartbeat address, of either role: the client's or its
+    /// service's, which share one store. The party relays the operation to
+    /// the broker with its token.
+    Party(Addr),
+    /// The broker, by rendezvous key. The broker resolves the key to the
+    /// one claim under it (a client, or the one service when no client is
+    /// under the key), or to `party` when it is given, and answers as if
+    /// that party had relayed the operation. No token travels: the key is
+    /// the capability.
+    Key {
+        /// The broker's address.
+        broker: Addr,
+        /// The rendezvous key of the claim.
+        key: Key,
+        /// One party of the key, a client or a service, when the key has
+        /// more than one claim.
+        party: Option<PartyId>,
+    },
+}
+
+impl StoreTarget {
+    /// Apply `op` here: [`store`] through a party, [`store_by_key`] at the
+    /// broker.
+    pub async fn store(&self, op: StoreOp, net: &NetOpts) -> Result<Stored> {
+        match self {
+            StoreTarget::Party(party) => store(party, op, net).await,
+            StoreTarget::Key { broker, key, party } => {
+                store_by_key(broker, *key, *party, op, net).await
+            }
+        }
+    }
+}
+
 /// Apply `op` to the store a party shares with its peer, through the party
 /// at `party` (its heartbeat address, of either role), which relays it to the
 /// broker with its token.
@@ -273,9 +311,42 @@ pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
 /// front-ends can then read `applied: false` as "the condition did not
 /// hold" without checking what was asked.
 pub async fn store(party: &Addr, op: StoreOp, net: &NetOpts) -> Result<Stored> {
-    let kind = op.kind();
-    let conditional = op.if_version().is_some();
-    match net.client().call(party, Message::Store { op }).await? {
+    let (kind, conditional) = (op.kind(), op.if_version().is_some());
+    let reply = net.client().call(party, Message::Store { op }).await?;
+    stored_reply(reply, kind, conditional)
+}
+
+/// Apply `op` to the store of the claim under rendezvous `key`, at the
+/// broker at `broker`, for a caller that knows the key but not where the
+/// parties listen (discovery plan, decision L5). The broker answers as if
+/// the key's one party had relayed the operation: the one client under the
+/// key, or the one service when no client is under it (which reads an empty
+/// store and may not write), or `party` when it is given, which must be a
+/// party of that key. The answer and the errors are those of [`store`],
+/// plus an [`Error::Rejected`] when nothing is under the key, when the key
+/// has more than one claim and `party` names none of them, or when `party`
+/// is not under the key.
+pub async fn store_by_key(
+    broker: &Addr,
+    key: Key,
+    party: Option<PartyId>,
+    op: StoreOp,
+    net: &NetOpts,
+) -> Result<Stored> {
+    let (kind, conditional) = (op.kind(), op.if_version().is_some());
+    let request = Message::StoreByKey {
+        rendezvous: key,
+        party_id: party,
+        op,
+    };
+    let reply = net.client().call(broker, request).await?;
+    stored_reply(reply, kind, conditional)
+}
+
+/// The reply to a store request, through a party or by key, as the
+/// operations return it: see [`store`].
+fn stored_reply(reply: Message, kind: &str, conditional: bool) -> Result<Stored> {
+    match reply {
         Message::Stored(stored) if !stored.applied && !conditional => Err(Error::protocol(
             format!("the {kind} was answered as not applied although it stated no condition"),
         )),
@@ -328,7 +399,6 @@ pub async fn status(admin: &Addr, token: Option<&str>, net: &NetOpts) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::PartyId;
 
     #[test]
     fn collected_serialises_with_the_role_as_the_tag() {
@@ -425,6 +495,33 @@ mod tests {
                 matches!(&err, Error::Protocol(text) if text == "store answered with store"),
                 "{err}"
             );
+            // By key, the same two ways to fail, and the target picks the
+            // message: a party target sends `store`, a key target
+            // `store_by_key`.
+            let by_key = StoreTarget::Key {
+                broker: server.bound(),
+                key: 7,
+                party: Some(PartyId(3)),
+            };
+            let err = by_key.store(StoreOp::List, &net).await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Protocol(text) if text == "store answered with store_by_key"),
+                "{err}"
+            );
+            let err = StoreTarget::Party(server.bound())
+                .store(StoreOp::List, &net)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Protocol(text) if text == "store answered with store"),
+                "{err}"
+            );
+            server.shutdown().await;
+            let (server, _, _) = start(Transport::Tcp, PeerReporter).await;
+            let err = store_by_key(&server.bound(), 7, None, StoreOp::List, &net)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, Error::Rejected(_)), "{err}");
             server.shutdown().await;
         })
         .await

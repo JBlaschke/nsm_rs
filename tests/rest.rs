@@ -555,6 +555,104 @@ async fn store_through_the_api() {
 }
 
 #[tokio::test]
+async fn store_by_key_through_the_api() {
+    with_deadline(async {
+        let cluster = Cluster::start(Transport::Http).await;
+        let api = Api::start(cluster.net().clone(), None).await;
+        let broker = cluster.broker_addr().to_string();
+        let service = cluster.publish(9, 9100).await;
+        let client = cluster.claim(9).await;
+        let client_hb = client.bound().to_string();
+        let owner = json!(client.id());
+
+        // By key: the claim's store, the same reply as through a party.
+        let (status, put) = api
+            .post(
+                "/v1/store",
+                &json!({ "broker": broker, "rendezvous": 9, "op": "put", "key": "step", "value": "5" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{put}");
+        assert_eq!(put["client"], owner, "{put}");
+        let (status, got) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": client_hb, "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{got}");
+        assert_eq!(got, put);
+        // party_id names a party of the key; the mesh data resolves alike.
+        let (status, got) = api
+            .post(
+                "/v1/store",
+                &json!({ "broker": broker, "rendezvous": 9, "party_id": service.id(), "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{got}");
+        assert_eq!(got, put);
+        let (status, mesh) = api
+            .post(
+                "/v1/store",
+                &json!({ "broker": broker, "rendezvous": 9, "op": "get", "key": "nsm_mesh_data" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{mesh}");
+        let text = mesh["entries"][0]["value"].as_str().expect("JSON text");
+        let data: Value = serde_json::from_str(text).expect("mesh data");
+        assert_eq!(data["nsm_mesh_client"], client_hb, "{data}");
+        assert_eq!(data["nsm_mesh_service"], service.bound().to_string(), "{data}");
+
+        // The broker's refusals are 400 with the reason.
+        for (body, needle) in [
+            (
+                json!({ "broker": broker, "rendezvous": 10, "op": "list" }),
+                "no party under key 10",
+            ),
+            (
+                json!({ "broker": broker, "rendezvous": 9, "party_id": 99, "op": "list" }),
+                "no party 99 under key 9",
+            ),
+        ] {
+            let (status, b) = api.post("/v1/store", &body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {b}");
+            assert!(
+                b["error"].as_str().unwrap_or("").contains(needle),
+                "{body}: {b}"
+            );
+        }
+        // A body names one form or the other, whole.
+        for bad in [
+            json!({ "party": client_hb, "broker": broker, "rendezvous": 9, "op": "list" }),
+            json!({ "party": client_hb, "rendezvous": 9, "op": "list" }),
+            json!({ "party": client_hb, "party_id": 1, "op": "list" }),
+            json!({ "broker": broker, "op": "list" }),
+            json!({ "rendezvous": 9, "op": "list" }),
+            json!({ "broker": broker, "rendezvous": "9", "op": "list" }),
+            json!({ "broker": broker, "rendezvous": 9, "party_id": -1, "op": "list" }),
+            json!({ "op": "list" }),
+        ] {
+            let (status, b) = api.post("/v1/store", &bad).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {b}");
+            assert!(b["error"].is_string(), "{bad}: {b}");
+        }
+        // A broker that cannot be reached is upstream trouble.
+        let dead = Addr::new(Transport::Http, "127.0.0.1", unused_port()).to_string();
+        let (status, b) = api
+            .post(
+                "/v1/store",
+                &json!({ "broker": dead, "rendezvous": 9, "op": "list" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{b}");
+
+        api.stop().await;
+        cluster.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn conditional_store_writes_through_the_api() {
     with_deadline(async {
         let cluster = Cluster::start(Transport::Http).await;

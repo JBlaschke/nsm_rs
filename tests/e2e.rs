@@ -806,6 +806,116 @@ async fn mesh_data_says_where_a_claims_parties_listen() {
 }
 
 #[tokio::test]
+async fn store_by_key_reaches_the_claim_without_a_party_address() {
+    for &t in TRANSPORTS {
+        with_deadline(async {
+            let c = Cluster::start(t).await;
+            let broker = c.broker_addr();
+            let by_key = |party: Option<PartyId>, op: StoreOp| {
+                let broker = broker.clone();
+                let net = c.net();
+                async move { ops::store_by_key(&broker, 21, party, op, net).await }
+            };
+            // Nothing under the key.
+            let err = by_key(None, StoreOp::List).await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Rejected(r) if r == "no party under key 21"),
+                "{t:?}: {err}"
+            );
+            // One service, nobody holding it: an empty store, no writes.
+            let service = c.publish(21, 9000).await;
+            let empty = by_key(None, StoreOp::List).await.unwrap();
+            assert_eq!((empty.client, empty.revision), (None, 0), "{t:?}");
+            let err = by_key(None, put("step", "5")).await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Rejected(r) if r.contains("not claimed")),
+                "{t:?}: {err}"
+            );
+            // One claim: the key alone, or either party by id, is that store,
+            // the same one the parties relay to.
+            let client = c.claim(21).await;
+            let written = by_key(None, put("step", "5")).await.unwrap();
+            assert_eq!(written.client, Some(client.id()), "{t:?}");
+            for party in [None, Some(client.id()), Some(service.id())] {
+                let read = by_key(party, get("step")).await.unwrap();
+                assert_eq!(read, written, "{t:?} {party:?}");
+            }
+            assert_eq!(store(&c, &service, get("step")).await, written, "{t:?}");
+            // The target enum is the front-ends' way in, and the mesh data
+            // resolves the same way.
+            let target = ops::StoreTarget::Key {
+                broker: broker.clone(),
+                key: 21,
+                party: None,
+            };
+            let mesh = target
+                .store(get("nsm_mesh_data"), c.net())
+                .await
+                .unwrap()
+                .mesh_data()
+                .unwrap()
+                .expect("mesh data");
+            assert_eq!(mesh.nsm_mesh_client, Some(client.bound()), "{t:?}");
+            assert_eq!(mesh.nsm_mesh_service, Some(service.bound()), "{t:?}");
+            // A spare service beside the claim changes nothing; a second
+            // client makes the key ambiguous until a party is named.
+            let spare = c.publish(21, 9001).await;
+            assert_eq!(by_key(None, get("step")).await.unwrap(), written, "{t:?}");
+            let second = c.claim(21).await;
+            let err = by_key(None, get("step")).await.unwrap_err();
+            let expected = format!(
+                "key 21 has 2 clients ({}, {}); name one with party_id",
+                client.id(),
+                second.id()
+            );
+            assert!(
+                matches!(&err, Error::Rejected(r) if *r == expected),
+                "{t:?}: {err}"
+            );
+            let own = by_key(Some(second.id()), get("step")).await.unwrap();
+            assert_eq!(
+                (own.client, own.entries.len()),
+                (Some(second.id()), 0),
+                "{t:?}"
+            );
+            assert_eq!(
+                by_key(Some(spare.id()), get("step")).await.unwrap(),
+                own,
+                "{t:?}: the second claim through its service"
+            );
+            // A party under another key is not under this one.
+            let err = ops::store_by_key(&broker, 22, Some(client.id()), get("step"), c.net())
+                .await
+                .unwrap_err();
+            let expected = format!("no party {} under key 22", client.id());
+            assert!(
+                matches!(&err, Error::Rejected(r) if *r == expected),
+                "{t:?}: {err}"
+            );
+            // The parties do not answer it: the broker does.
+            let reply = c
+                .raw_client()
+                .call(
+                    &client.bound(),
+                    Message::StoreByKey {
+                        rendezvous: 21,
+                        party_id: None,
+                        op: StoreOp::List,
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(&reply, Message::Nack { reason } if reason.contains("unexpected store_by_key")),
+                "{t:?}: {reply:?}"
+            );
+            c.stop().await;
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
 async fn mesh_data_follows_a_repairing() {
     with_deadline(async {
         let c = Cluster::start(Transport::Tcp).await;
