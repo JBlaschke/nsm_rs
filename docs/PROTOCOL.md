@@ -9,7 +9,9 @@ format. Version 3 also carries the shared store's messages (`store`,
 `store_relay`, `stored`), added compatibly: they are new variants, which by
 the compatibility rule in section 6 need no bump. The conditional writes that
 came after them (`if_version` on a put or a delete, `applied` on `stored`)
-are optional fields that decode when absent, so version 3 carries them too.
+are optional fields that decode when absent, so version 3 carries them too;
+so does `store_by_key`, one more variant, and the reserved store key
+`nsm_mesh_data`, which changes nothing in the format.
 
 ## 1. Transports and framing
 
@@ -75,6 +77,7 @@ as `null` when absent and may be omitted when decoding.
 | `collect` | operator → party | `collected` |
 | `store` | operator → party | `stored` or `nack` |
 | `store_relay` | party → broker (relay of a `store`) | `stored` or `nack` |
+| `store_by_key` | operator → broker, by rendezvous key | `stored` or `nack` |
 
 ### `publish` → `registered`
 
@@ -320,6 +323,45 @@ answers status 500 with a `nack`. A `store` sent to the broker is
 `client`). A malformed operation (an invalid store key, an unknown `op`, a
 put without a value) is a decode error like any other malformed message.
 
+### `store_by_key` → `stored`
+
+A store operation addressed to the broker by rendezvous key, for an
+operator who knows the key and the broker's address but not where the
+parties listen (`nsm store ... --key`). The broker resolves the key to one
+party and answers exactly as if that party had relayed the operation: the
+one client under the key, so its claim's store; when no client is under
+the key, its one service, which reads an empty store (`client: null`) and
+may not write; with `party_id`, that party, a client or a service, which
+must be under the key. The operation's fields sit next to `type`, as in
+`store`; the rendezvous key is `rendezvous`, since `key` is the store key.
+
+```json
+{"type":"store_by_key","rendezvous":1234,"party_id":null,"op":"get","key":"nsm_mesh_data"}
+{"type":"store_by_key","rendezvous":1234,"party_id":7,"op":"put","key":"step","value":"5","if_version":null}
+{"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"step","value":"5","version":3}]}
+```
+
+No token travels. The rendezvous key is the capability here, as it is for
+`publish` and `claim`: whoever knows it can publish a service under it and
+be paired with the key's clients, so reading and writing the key's store by
+it adds no power the key did not give; what it changes is where the store
+can be reached from, since the broker is reachable where a party's own
+listener may not be (ping mode, NAT). The reply, the store's refusals
+(`service <id> is not claimed`, `store full`, a reserved key) and the
+counting are those of `store_relay`; the resolution adds refusals of its
+own, each a `nack` that changes nothing:
+
+| Reason | When |
+|---|---|
+| `no party under key 1234` | nothing is registered under the key |
+| `key 1234 has 2 clients (4, 7); name one with party_id` | two or more clients hold claims under the key and `party_id` names none |
+| `key 1234 has 2 unclaimed services (1, 3); name one with party_id` | no client and two or more services under the key, and `party_id` names none |
+| `no party 7 under key 1234` | `party_id` names an id that is not registered or is under another key (one text for both; ids are not secrets) |
+
+A spare service beside one claim leaves the key unambiguous: the claim is
+meant, and the spare is reached only by its `party_id`. A `store_by_key`
+sent to a party is `unexpected store_by_key at a client` (or `service`).
+
 ### `nack`
 
 ```json
@@ -438,6 +480,25 @@ removed, so a stale A can no longer write. When the client itself is
 removed, its store goes with it, and the next claim of the freed service
 starts with an empty store under a new `client`.
 
+### Discovery by key
+
+```text
+script                        broker                       service (1)          client (2)
+   │   publish and claim chose no heartbeat port: the kernel did, bind_addr carries it   │
+   │── store_by_key(1234, ───────►│ one client under 1234: 2    │                     │
+   │     get nsm_mesh_data)       │ projected from the records  │                     │
+   │◄─ stored(client 2, ──────────│                             │                     │
+   │     nsm_mesh_client ...)     │                             │                     │
+   │── send("job 17") ─────────────────────────────────────────────────────────────►│
+   │── store_by_key(1234, ───────►│ claim 2's store: step=5     │                     │
+   │     put step=5)              │                             │                     │
+   │◄─ stored(client 2, rev 7) ───│                             │                     │
+```
+
+The script knew the key and the broker's address and nothing else: the
+mesh data told it where the client listens, and the store needed no party
+address at all.
+
 ## 5. Timing
 
 All values are configurable (`--heartbeat-interval` and friends); broker and
@@ -482,7 +543,9 @@ one interval; a re-paired client learns its new service within one interval.
   the registry, listed at version 0, never stored and never written.
 - **Tokens** are required on `ping`, `deliver`, `store_relay` and `heartbeat`; the broker's
   refusals do not reveal whether an id exists. Tokens are 16 random bytes from
-  the TLS crypto provider's secure random source.
+  the TLS crypto provider's secure random source. `store_by_key` carries
+  none: there the rendezvous key is the capability, as it is for `publish`
+  and `claim`.
 - **Sizes.** Every message is limited to the frame limit; text in `send`,
   `deliver`, `heartbeat` and `collected` is carried verbatim inside the JSON
   string and shares that limit. A store has a budget of its own
@@ -518,4 +581,6 @@ one interval; a re-paired client learns its new service within one interval.
   writes. Parties run for as long as their jobs do, so restart them on the
   new binary before relying on `if_version`. A broker that predates the
   reserved keys treats `nsm_mesh_data` as an ordinary key: a `get` answers
-  "not set" (or whatever a `put` wrote there), and nothing is refused.
+  "not set" (or whatever a `put` wrote there), and nothing is refused. A
+  broker that predates `store_by_key` answers it with `unexpected
+  store_by_key at the broker`.

@@ -77,9 +77,9 @@ cargo build --release --target x86_64-unknown-linux-musl --no-default-features -
   endpoint): a port chosen with `--bind-port`, or one the operating system
   picks when the flag is left out. The broker dials it every heartbeat
   interval (two-sided heartbeats); with `--ping` the party pings the broker
-  instead (one-sided, for parties behind NAT). A party that stops answering is removed after a
-  configurable number of failures; a party that stops hearing from its broker
-  exits with an error.
+  instead (one-sided, for parties behind NAT). A party that stops answering
+  is removed after a configurable number of failures; a party that stops
+  hearing from its broker exits with an error.
 - If a service disappears, its client is re-paired with another service that
   published under the same key, and learns the new address on its next
   heartbeat; if there is none, the client is removed and its process exits.
@@ -89,11 +89,14 @@ cargo build --release --target x86_64-unknown-linux-musl --no-default-features -
   text a party received; `nsm peer` reads the service a client is paired
   with.
 - `nsm store` reads and writes a small key-value **store** that a client and
-  the service it holds share, through either party's bind address. The
-  broker keeps the only copy, one store per claim: it starts empty when the
-  claim is granted, survives a re-pairing (the replacement service reads
-  everything written before) and is dropped when the client goes away.
-  A **store key** names an entry and is unrelated to the rendezvous key.
+  the service it holds share, through either party's bind address or, with
+  `--key`, at the broker by rendezvous key, for a script that knows the key
+  but not where the parties listen. The broker keeps the only copy, one
+  store per claim: it starts empty when the claim is granted, survives a
+  re-pairing (the replacement service reads everything written before) and
+  is dropped when the client goes away. A **store key** names an entry and
+  is unrelated to the rendezvous key. One entry, `nsm_mesh_data`, is the
+  broker's own: where the claim's parties listen.
 - Every registration reply carries a **registration token** (128 random bits)
   known only to the broker and that party. Pings, relayed messages and the
   broker's heartbeats must present it, so a peer that knows an id or the
@@ -146,6 +149,36 @@ the broker removes the party after the failure threshold. The same session
 over HTTP: start the broker with `--transport http` and give the parties
 `http://127.0.0.1:12000`.
 
+### Without choosing ports
+
+The same session without naming a heartbeat port anywhere: the operating
+system picks one for each party, and a script that knows the key and the
+broker's address asks the broker where the parties ended up.
+
+```bash
+nsm publish 127.0.0.1:12000 --service-port 9000 --key 1234 -i 127. --ip-version 4
+nsm claim 127.0.0.1:12000 --key 1234 -i 127. --ip-version 4
+```
+
+```bash
+nsm store get 127.0.0.1:12000 nsm_mesh_data --key 1234
+# prints one line of JSON, for example:
+# {"nsm_key":1234,"nsm_service_id":1,"nsm_service_address":"127.0.0.1","nsm_service_port":9000,"nsm_service":"127.0.0.1:9000","nsm_mesh_service_address":"127.0.0.1","nsm_mesh_service_port":54321,"nsm_mesh_service":"127.0.0.1:54321","nsm_client_id":2,"nsm_mesh_client_address":"127.0.0.1","nsm_mesh_client_port":54322,"nsm_mesh_client":"127.0.0.1:54322"}
+```
+
+```bash
+nsm store put 127.0.0.1:12000 step --value 5 --key 1234   # the claim's store, by key
+nsm store get 127.0.0.1:12000 step --key 1234             # prints: 5
+CLIENT_HB=$(nsm store get 127.0.0.1:12000 nsm_mesh_data --key 1234 | jq -r .nsm_mesh_client)
+nsm send "$CLIENT_HB" --msg "job 17"                      # send, collect and peer take a party's address
+```
+
+`--key` names the rendezvous key and makes the address the broker's; the
+operation then applies to the one claim under that key, or to its one
+service while nobody holds it. With several claims under one key the broker
+refuses and lists them, and `--party-id ID` picks one. Without `jq`, shell
+patterns take the JSON apart, as the [recipes](#shared-store) show.
+
 ## Command-line reference
 
 ```text
@@ -162,10 +195,10 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm collect PARTY [options]` | the last text a party received from its peer | the text |
 | `nsm peer PARTY [options]` | the service a client is paired with | the service's `host:port` |
 | `nsm send PARTY --msg TEXT [options]` | hand text to a party for delivery to its peer | nothing |
-| `nsm store get PARTY KEY [--json] [options]` | read one entry of the store a client shares with its service | the value (exit 3 when the key is not set) |
-| `nsm store put PARTY KEY --value TEXT [--if-version N] [--json] [options]` | set an entry, replacing what was there; with `--if-version`, only if the key is at version N (0: not set) | the write's version (exit 4 when the condition does not hold) |
-| `nsm store delete PARTY KEY [--if-version N] [--json] [options]` | remove an entry; succeeds whether or not it was set; with `--if-version`, only if the key is at version N | nothing (stderr says which; exit 4 when the condition does not hold) |
-| `nsm store list PARTY [--json] [options]` | every key in the store | one key per line, sorted |
+| `nsm store get ADDR STORE_KEY [--key RENDEZVOUS [--party-id ID]] [--json] [options]` | read one entry of the store a client shares with its service | the value (exit 3 when the key is not set) |
+| `nsm store put ADDR STORE_KEY --value TEXT [--if-version N] [--key RENDEZVOUS [--party-id ID]] [--json] [options]` | set an entry, replacing what was there; with `--if-version`, only if the key is at version N (0: not set) | the write's version (exit 4 when the condition does not hold) |
+| `nsm store delete ADDR STORE_KEY [--if-version N] [--key RENDEZVOUS [--party-id ID]] [--json] [options]` | remove an entry; succeeds whether or not it was set; with `--if-version`, only if the key is at version N | nothing (stderr says which; exit 4 when the condition does not hold) |
+| `nsm store list ADDR [--key RENDEZVOUS [--party-id ID]] [--json] [options]` | every key in the store | one key per line, sorted |
 | `nsm status ADMIN [--json] [--parties] [--watch SECS] [--admin-token TOKEN] [options]` | a broker's usage statistics, from its admin listener | a summary, or the status document as one JSON line |
 | `nsm serve [--bind ADDR] [--token TOKEN] [options]` | REST control plane | nothing |
 
@@ -174,15 +207,17 @@ spellings `list_interfaces` and `list_ips` are accepted as aliases. `collect`
 and `send` accept a hidden `--key` for compatibility with old scripts; it is
 ignored.
 
-**Addresses.** `BROKER` and `PARTY` are `host:port` (raw TCP),
+**Addresses.** `BROKER`, `PARTY` and `ADDR` are `host:port` (raw TCP),
 `tls://host:port`, `http://host:port` or `https://host:port`; the transport
 follows from the scheme, and a party's own listener uses the same family as
 its broker (TCP for `host:port` and `tls://`, HTTP for `http://` and
-`https://`). IPv6 literals are written in brackets: `[fe80::1]:12000`. `listen`
-has no peer, so it takes `--transport`. A party's `--bind-port` may be left
-out, or given as 0: the operating system then picks a free port for its
-heartbeat listener. The broker and the parties print the address they
-actually bound on stderr (`nsm: client registered as 2 (heartbeats on
+`https://`). `PARTY` is a party's heartbeat address; `ADDR`, for `nsm
+store`, is one too, or the broker's address when `--key` names the
+rendezvous key. IPv6 literals are written in brackets: `[fe80::1]:12000`.
+`listen` has no peer, so it takes `--transport`. A party's `--bind-port`
+may be left out, or given as 0: the operating system then picks a free port
+for its heartbeat listener. The broker and the parties print the address
+they actually bound on stderr (`nsm: client registered as 2 (heartbeats on
 127.0.0.1:54321)`).
 `ADMIN`, for `nsm status`, is a broker's admin listener (what `--admin-bind`
 named): `host:port` or `http://host:port`, plain HTTP only.
@@ -208,8 +243,10 @@ re-pairing lines, and the party keeps running.
 
 A client and the service it holds share one small key-value store, kept by
 the broker for as long as the claim lasts. `nsm store` reaches it through
-either party's bind address (`PARTY`, as for `send` and `collect`); both see
-every write at once, without waiting for a heartbeat. A **store key** is 1 to
+either party's bind address (`ADDR`, as `PARTY` for `send` and `collect`),
+or at the broker by rendezvous key (`ADDR` is then the broker's address and
+`--key` names the key); both parties see every write at once, without
+waiting for a heartbeat. A **store key** is 1 to
 128 characters from `A-Z a-z 0-9 . _ - : /` and does not start with `-`, so
 it never needs quoting; it has nothing to do with the rendezvous key that
 `--key` names. A value is any text, including empty text. How much a store
@@ -253,6 +290,15 @@ options](#limit-options)); a put that does not fit is refused.
   are missing until the re-pairing. `list` shows these keys with yours
   (their version is 0), `put` and `delete` refuse them (exit 1), and they
   count against no budget.
+- `--key RENDEZVOUS` addresses the store at the broker instead: `ADDR` is
+  then the broker's address, and the operation applies to the one claim
+  under that rendezvous key, or to its one service while nobody holds it
+  (which reads as empty and refuses writes, as through the party). A key
+  with several clients, or with no client and several services, is refused
+  with the ids listed (exit 1), and `--party-id ID` then names one party of
+  the claim meant, a client or a service. Whoever knows a rendezvous key
+  can already publish a service under it, so this gives the key no new
+  power; it does make the store reachable from wherever the broker is.
 - `--json` prints the broker's reply instead, as one line:
   `{"client":8,"revision":3,"applied":true,"entries":[{"key":"step","value":"5","version":3}]}`,
   the same body `POST /v1/store` returns. `client` is the id of the client
@@ -269,6 +315,18 @@ it is not a place for secrets.
 
 Some job-script recipes, with the service's bind address in `$SERVICE_HB` and
 the client's in `$CLIENT_HB`:
+
+```bash
+# Finding the parties from a script that knows only the key and the broker:
+# the service and the client chose no heartbeat port, and the broker tells
+# where they listen (a field is null until that side has registered).
+B=10.0.0.1:12000; K=1234
+mesh=$(nsm store get "$B" nsm_mesh_data --key "$K") || exit 1
+CLIENT_HB=${mesh#*\"nsm_mesh_client\":\"}; CLIENT_HB=${CLIENT_HB%%\"*}
+SERVICE_HB=${mesh#*\"nsm_mesh_service\":\"}; SERVICE_HB=${SERVICE_HB%%\"*}
+nsm send "$CLIENT_HB" --msg "job 17"
+nsm store put "$B" step --value 5 --key "$K" > /dev/null   # the store needs no party address at all
+```
 
 ```bash
 # A readiness flag: the service waits until the client has staged its input.
@@ -608,7 +666,10 @@ controller should start parties over HTTP.
   re-pairs the client, the new address follows as one more line, so a script
   that keeps reading (or takes the last line) always holds the current
   service. It exits 1 when the broker is lost or no replacement service
-  exists.
+  exists. A script that starts later, or on another node, finds both
+  parties' heartbeat addresses with `nsm store get BROKER nsm_mesh_data
+  --key KEY`, and reaches the store with `nsm store ... BROKER --key KEY`,
+  so nobody has to pass heartbeat ports around.
 
 ## Testing
 

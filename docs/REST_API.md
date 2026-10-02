@@ -27,7 +27,7 @@ nsm serve --bind 0.0.0.0:8080 --token "$NSM_TOKEN"   # any other address needs a
 
 | Status | When |
 |---|---|
-| 400 | malformed or incomplete body, bad address or query value, a refusal by the broker or a party (unknown key, admission, a store write at a service nobody holds, a full store), oversized frame |
+| 400 | malformed or incomplete body, bad address or query value, a refusal by the broker or a party (unknown key, admission, a store write at a service nobody holds, a full store, a reserved store key, a rendezvous key with no party or with several claims), oversized frame |
 | 401 | missing or wrong bearer token |
 | 404 | unknown job id, unknown route |
 | 405 | wrong method on a known route |
@@ -155,12 +155,15 @@ holds is a 400 with the reason.
 ### `POST /v1/store`
 
 One operation on the store a client shares with the service it holds,
-through either party. The operation's fields sit next to `party`, in the
-shape of the protocol's `store` message.
+through either party, or at the broker by rendezvous key. The operation's
+fields sit next to the target, in the shape of the protocol's `store` and
+`store_by_key` messages.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `party` | address string | yes | either party's heartbeat address (a job's `bind_addr`); the client and its service reach the same store |
+| `party` | address string | one form | either party's heartbeat address (a job's `bind_addr`); the client and its service reach the same store |
+| `broker`, `rendezvous` | address string, integer | the other form | the broker's address and the rendezvous key of the claim: the broker resolves the key to its one client (or to its one service while nobody holds it) and answers as if that party had relayed the operation |
+| `party_id` | integer | no | with `rendezvous`: one party of the key, a client or a service, when the key has more than one claim |
 | `op` | string | yes | `"get"`, `"put"`, `"delete"` or `"list"` |
 | `key` | string | for get, put, delete | store key: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-` (unrelated to the rendezvous `key` of publish and claim) |
 | `value` | string | for put | the new value: any text, including empty text and newlines |
@@ -172,7 +175,16 @@ shape of the protocol's `store` message.
 {"party":"http://10.128.0.7:41231","op":"get","key":"step"}
 {"party":"http://10.128.0.7:41231","op":"delete","key":"step"}
 {"party":"http://10.128.0.7:41231","op":"list"}
+{"broker":"http://10.0.0.1:12000","rendezvous":1234,"op":"get","key":"nsm_mesh_data"}
+{"broker":"http://10.0.0.1:12000","rendezvous":1234,"party_id":8,"op":"put","key":"step","value":"5"}
 ```
+
+A body names exactly one of the two forms: `party`, or `broker` with
+`rendezvous` (and `party_id`); both, neither, or a `party_id` beside
+`party` is a 400. By key, the broker's refusals are 400s with its reason:
+`no party under key 1234`, `key 1234 has 2 clients (4, 7); name one with
+party_id`, `no party 7 under key 1234`. No token is involved: whoever knows
+the key may publish under it anyway, so the key is the capability.
 
 Every operation answers 200 with the broker's reply, the same line
 `nsm store ... --json` prints, except a conditional write that did not match
@@ -278,5 +290,6 @@ curl -s -X POST $B/v1/store   -d '{"party":"<claim bind_addr>","op":"put","key":
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"get","key":"step"}'
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"list"}'
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"put","key":"step","value":"6","if_version":1}'   # 409 unless step is at version 1
+curl -s -X POST $B/v1/store   -d '{"broker":"http://127.0.0.1:12000","rendezvous":77,"op":"get","key":"nsm_mesh_data"}'   # where key 77's parties listen
 curl -s -X DELETE $B/v1/jobs/2
 ```

@@ -175,6 +175,24 @@ version: 3.
   400). In the library: `protocol::MeshData` with `entries`,
   `StoreKey::is_reserved`, `StoreKey::mesh_data`, `Stored::mesh_data` and
   `Registry::mesh_data`. Discovery plan, decisions L2 to L4.
+- `store_by_key`: a store operation addressed to the broker by rendezvous
+  key, for a script that knows the key and the broker's address but not
+  where the parties listen. The broker resolves the key to its one claim
+  (or to its one service while nobody holds it), or to the party
+  `party_id` names, and answers as for a relay; an unknown or ambiguous
+  key is refused with the candidates listed. On the command line
+  `nsm store get|put|delete|list ADDR [STORE_KEY] --key RENDEZVOUS
+  [--party-id ID]`, where `ADDR` is then the broker's address (the usage
+  lines now say `<ADDR>` and `<STORE_KEY>`); on the control plane
+  `POST /v1/store` with `broker` and `rendezvous` (and `party_id`) in place
+  of `party`. No token travels: the rendezvous key is the capability, as
+  for `publish` and `claim`. One more variant, so the wire protocol stays
+  version 3; `nsm_requests_total` gains `kind="store_by_key"`, and
+  operations by key count in `nsm_store_ops_total`. In the library:
+  `Message::StoreByKey`, `Registry::resolve_key` and
+  `Registry::store_by_key`, `ops::StoreTarget` and `ops::store_by_key`,
+  `cli::StoreWhere`, `rest::StoreBody::target`. Discovery plan, decisions
+  L5 to L9.
 - Graceful shutdown on Ctrl-C and SIGTERM.
 - Tests: 160+ unit tests, end-to-end tests over all four transports, control
   plane and binary tests, a stress test; CI on Linux and macOS with both

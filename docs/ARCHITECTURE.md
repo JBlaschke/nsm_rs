@@ -33,7 +33,9 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
 
 - The **broker** is the only fixed address. It admits registrations, pairs
   clients with services, monitors liveness, relays short texts and keeps the
-  one copy of the store each claim shares. It never sees the service's own
+  one copy of the store each claim shares; it also answers an operator who
+  knows only a rendezvous key (`store_by_key`, behind `nsm store --key`),
+  resolving the key to its one claim. It never sees the service's own
   traffic. With `--admin-bind` it also answers an operator, on a separate
   plain-HTTP socket parties never use: Prometheus metrics and a status
   document ([`MONITORING.md`](MONITORING.md)).
@@ -153,6 +155,10 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   `nsm_mesh_data` and one entry per field that is set, all at version 0),
   adds them to every `list`, refuses a write of any of them and never
   stores one.
+  `Registry::resolve_key` is the one party a rendezvous key means (its one
+  client, else its one service, or the party a request names, which must
+  be under the key; anything else is refused with the candidates), and
+  `Registry::store_by_key` applies an operation there.
 - `store.rs` is `Store`: a key-value map with a byte budget, pure like the
   registry. Each entry counts as its JSON-encoded key and value plus 64
   bytes, which bounds the largest `stored` reply as well as memory; write
@@ -181,7 +187,8 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   matching-host check, the per-host cap) and one `match` over the request
   variants, written once for every transport. A relayed request (`deliver`,
   `store_relay`) checks the sender's token and acts on the registry in one
-  critical section. Every request is counted once by kind and outcome, and
+  critical section; a `store_by_key` carries no token, and the registry
+  resolves its rendezvous key to one party in that same critical section. Every request is counted once by kind and outcome, and
   registrations, refusals (by reason) and store operations (by operation
   and outcome) where the decision is made.
 - `admin.rs` is the admin listener (decision D23): an axum
@@ -241,12 +248,17 @@ failed re-pairing line stops the printing but not the party.
 the binary adds no logic of its own. `ops::store` takes a `StoreOp` to either
 party and returns the broker's `Stored` as it is (a key that is not set is an
 answer with no entry, a write whose condition was not met an answer with
-`applied` false, a refusal is `Error::Rejected`), so the command line
-and the control plane need no store logic of their own either: `nsm store`
-gets the party and the `StoreOp` from `StoreCommand::into_parts` and only
-prints (the value, the new version, the keys, or with `--json` the reply as
-one line), and `POST /v1/store` returns the reply as its body, with status
-409 and an `error` field when `applied` is false. `rest` serves
+`applied` false, a refusal is `Error::Rejected`); `ops::store_by_key` does
+the same at the broker by rendezvous key, and `ops::StoreTarget` (a party's
+address, or the broker's with the key and an optional party id) is the one
+way in for both front-ends, so the command line and the control plane need
+no store logic of their own: `nsm store` gets the target and the `StoreOp`
+from `StoreCommand::into_parts` (`--key RENDEZVOUS` and `--party-id ID`
+make the address the broker's) and only prints (the value, the new version,
+the keys, or with `--json` the reply as one line), and `POST /v1/store`
+returns the reply as its body, with status 409 and an `error` field when
+`applied` is false, its body naming either `party` or `broker` and
+`rendezvous`. `rest` serves
 the same operations over HTTP: `publish` and `claim` become background jobs
 with a view the API reports, cancels and reaps; a bearer token guards every
 route when one is configured, and it is mandatory off loopback.
@@ -314,12 +326,23 @@ exist: about 80 MiB of accounted store bytes with the defaults, and at most
   (mutual TLS is a listed follow-up). The store is not a place for secrets. Store
   keys and values are never logged, and a `Store`'s `Debug` shows counts
   only.
+- **The rendezvous key is a capability too.** `store_by_key` lets whoever
+  knows a key read and write that key's claim's store at the broker, with
+  no party address and no token. The key already lets its holder publish a
+  service under it and be paired with the key's clients, so this adds no
+  power the key did not give; what it changes is where the store can be
+  reached from: the broker's address is fixed and reachable by every party,
+  while a party's own listener behind NAT or in ping mode may not be. A
+  refused resolution names party ids, which are not secrets.
 - **The control plane** binds loopback by default, requires a bearer token
   elsewhere, takes no file paths from requests and limits body sizes.
 - **The admin listener** is off by default and follows the same rule when
   on: loopback, or a bearer token on every request. It is read-only, but
   its status document lists every party with its key and bind address, an
-  operator's view that no party can obtain through the protocol listener.
+  operator's view of the whole mesh; through the protocol listener a party
+  learns only the addresses of its own claim (`nsm_mesh_data`), and
+  whoever knows a rendezvous key those of that key's claim
+  (`store_by_key`).
   It speaks plain HTTP; on a shared network it belongs on loopback behind an
   SSH tunnel, or behind a TLS-terminating proxy.
 - **Resource bounds** everywhere: frame sizes, connection counts, request

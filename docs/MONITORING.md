@@ -80,14 +80,14 @@ instead.
 | `nsm_store_entries` | gauge | | entries over every store |
 | `nsm_store_bytes` | gauge | | accounted bytes over every store (see `--max-store-bytes` for the accounting) |
 | `nsm_store_bytes_limit` | gauge | | `--max-store-bytes`, the budget of one store |
-| `nsm_requests_total` | counter | `kind` = `publish` \| `claim` \| `ping` \| `deliver` \| `store_relay` \| `other`, `outcome` = `ok` \| `nack` \| `error` | requests the broker answered |
+| `nsm_requests_total` | counter | `kind` = `publish` \| `claim` \| `ping` \| `deliver` \| `store_relay` \| `store_by_key` \| `other`, `outcome` = `ok` \| `nack` \| `error` | requests the broker answered |
 | `nsm_registrations_total` | counter | `role` | registrations granted |
 | `nsm_registrations_refused_total` | counter | `reason` = `full` \| `per_host` \| `host_mismatch` \| `bad_port` \| `no_service` | registrations refused |
 | `nsm_removals_total` | counter | `role`, `reason` = `heartbeats_failed` \| `no_ping` \| `no_replacement` | parties removed |
 | `nsm_repairings_total` | counter | | clients re-paired with another service after theirs vanished |
 | `nsm_heartbeats_total` | counter | `outcome` = `ack` \| `fail` | two-sided heartbeats the broker sent |
 | `nsm_heartbeat_duration_seconds` | histogram | `le` | round trip of those heartbeats, failures and timeouts included; buckets at 5, 10, 25, 50, 100, 250 and 500 ms, 1, 2.5 and 5 s |
-| `nsm_store_ops_total` | counter | `op` = `get` \| `put` \| `delete` \| `list`, `outcome` = `applied` \| `not_applied` \| `refused` | store operations relayed to the broker |
+| `nsm_store_ops_total` | counter | `op` = `get` \| `put` \| `delete` \| `list`, `outcome` = `applied` \| `not_applied` \| `refused` | store operations the broker answered, relayed by a party or addressed by rendezvous key |
 
 Some readings:
 
