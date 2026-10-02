@@ -198,8 +198,10 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
 ### Party (`party`)
 
 `Session::publish` and `Session::claim` bind the party's own listener first
-(so the broker can dial it the moment registration succeeds), then register
-with retries, then return a `Session` whose `run()` keeps the party alive:
+(so the broker can dial it the moment registration succeeds; on the port
+`--bind-port` names, or on one the operating system picks when the flag is
+left out, which the registration then carries), then register with retries,
+then return a `Session` whose `run()` keeps the party alive:
 in two-sided mode a watchdog that fails with `Error::BrokerLost` when the
 broker's heartbeats stop for `broker_watchdog`; in ping mode a loop that
 pings every `heartbeat_interval`, applies what the broker returns, and gives

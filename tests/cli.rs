@@ -589,14 +589,14 @@ fn full_session(transport: &str) {
     };
     assert!(broker_addr.starts_with(prefix), "{broker_addr}");
 
+    // Neither party names a heartbeat port: the operating system picks
+    // one, and the party says which on stderr.
     let mut service = Proc::spawn(
         "publish",
         &argv(&[
             &[
                 "publish",
                 &broker_addr,
-                "--bind-port",
-                "0",
                 "--service-port",
                 "9000",
                 "--key",
@@ -608,6 +608,10 @@ fn full_session(transport: &str) {
     );
     let service_hb = heartbeat_addr(&service.stderr_line_containing("service registered as "));
     assert!(service_hb.starts_with(prefix), "{service_hb}");
+    assert!(
+        !service_hb.ends_with(":0"),
+        "the party reports the port it got: {service_hb}"
+    );
 
     // Nobody holds the service yet: its store reads as empty ("not yet",
     // exit 3, and an empty list) and refuses writes (exit 1), so a service
@@ -657,15 +661,12 @@ fn full_session(transport: &str) {
 
     let mut client = Proc::spawn(
         "claim",
-        &argv(&[
-            &["claim", &broker_addr, "--bind-port", "0", "--key", "1234"],
-            IFACE,
-            FAST,
-        ]),
+        &argv(&[&["claim", &broker_addr, "--key", "1234"], IFACE, FAST]),
     );
     assert_eq!(client.stdout_line(), "127.0.0.1:9000");
     let client_hb = heartbeat_addr(&client.stderr_line_containing("client registered as "));
     assert!(client_hb.starts_with(prefix), "{client_hb}");
+    assert_ne!(client_hb, service_hb, "two parties, two ports");
 
     // Reached, but nothing delivered yet: exit 3, so a polling script can
     // tell "not yet" from "failed".

@@ -152,7 +152,11 @@ version: 3.
   `--broker-watchdog`, `--request-timeout`, `--connect-timeout`,
   `--max-frame-bytes`, `--max-connections`, `--max-registrations`,
   `--max-store-bytes`.
-- `--bind-port 0` picks a free port; the bound address is printed on stderr.
+- `--bind-port` is optional on `publish` and `claim`: left out, or given
+  as 0, the operating system picks a free port for the party's heartbeat
+  listener, and the party prints the address it bound on stderr. `listen`
+  still requires it: the broker is the one fixed address. Discovery plan,
+  decision L1.
 - Graceful shutdown on Ctrl-C and SIGTERM.
 - Tests: 160+ unit tests, end-to-end tests over all four transports, control
   plane and binary tests, a stress test; CI on Linux and macOS with both

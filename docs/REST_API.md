@@ -78,7 +78,7 @@ Start a service party.
 | `broker` | address string | yes | the broker (`host:port`, `tls://`, `http://`, `https://`) |
 | `key` | integer | yes | rendezvous key |
 | `service_port` | integer | yes | port the real service listens on |
-| `bind_port` | integer | no (0) | heartbeat port; 0 picks a free one |
+| `bind_port` | integer | no (0) | heartbeat port; 0 or omitted lets the operating system pick a free one, as leaving `--bind-port` out does on the command line |
 | `interface`, `ip_start`, `ip_version` | strings | no | local address selection, as `-n`, `-i`, `--ip-version` |
 | `tls` | boolean | no (false) | serve TLS on the heartbeat listener, using the server's certificate |
 | `ping` | boolean | no (false) | one-sided liveness |

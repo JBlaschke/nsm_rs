@@ -11,6 +11,12 @@
 //! The transport is taken from the peer address: `host:port` is raw TCP,
 //! `http://host:port` and `https://host:port` are HTTP. `listen` and `serve`
 //! have no peer address and take `--transport` instead.
+//!
+//! A party's heartbeat port (`--bind-port` on `publish` and `claim`) may be
+//! left out: the operating system then picks a free one when the listener
+//! is bound, and the party prints the address it got (discovery plan,
+//! decision L1). The broker's port is the one fixed address of the mesh and
+//! stays required on `listen`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -342,8 +348,9 @@ pub enum Command {
     Publish {
         /// Broker address (`host:port`, `http://host:port` or `https://host:port`).
         broker: Addr,
-        /// Port this party listens on for the broker's heartbeats.
-        #[arg(long, value_name = "PORT")]
+        /// Port this party listens on for the broker's heartbeats; 0, or
+        /// omitting the flag, lets the operating system pick a free one.
+        #[arg(long, value_name = "PORT", default_value_t = 0)]
         bind_port: u16,
         /// Port the actual service accepts connections on.
         #[arg(long, value_name = "PORT")]
@@ -369,8 +376,9 @@ pub enum Command {
     Claim {
         /// Broker address.
         broker: Addr,
-        /// Port this party listens on for the broker's heartbeats.
-        #[arg(long, value_name = "PORT")]
+        /// Port this party listens on for the broker's heartbeats; 0, or
+        /// omitting the flag, lets the operating system pick a free one.
+        #[arg(long, value_name = "PORT", default_value_t = 0)]
         bind_port: u16,
         /// Rendezvous key of the wanted service.
         #[arg(long)]
@@ -697,6 +705,38 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn bind_port_is_optional_for_parties_and_required_for_the_broker() {
+        match parse(&[
+            "publish",
+            "broker:12000",
+            "--service-port",
+            "9000",
+            "--key",
+            "1",
+        ])
+        .command
+        {
+            Command::Publish { bind_port, .. } => assert_eq!(bind_port, 0),
+            other => panic!("{other:?}"),
+        }
+        match parse(&["claim", "broker:12000", "--key", "1"]).command {
+            Command::Claim { bind_port, .. } => assert_eq!(bind_port, 0),
+            other => panic!("{other:?}"),
+        }
+        // Given, the flag still chooses the port; 0 is the same as leaving
+        // it out.
+        for (given, expected) in [("12020", 12020u16), ("0", 0)] {
+            match parse(&["claim", "broker:12000", "--key", "1", "--bind-port", given]).command {
+                Command::Claim { bind_port, .. } => assert_eq!(bind_port, expected, "{given}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        let err = Cli::try_parse_from(["nsm", "listen"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert!(err.to_string().contains("--bind-port"), "{err}");
     }
 
     #[test]

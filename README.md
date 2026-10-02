@@ -74,9 +74,10 @@ cargo build --release --target x86_64-unknown-linux-musl --no-default-features -
   for a service under the same key and gets one service's `host:port`,
   exclusively, until the client goes away.
 - Every party runs a small listener on its **bind port** (the heartbeat
-  endpoint). The broker dials it every heartbeat interval (two-sided
-  heartbeats); with `--ping` the party pings the broker instead (one-sided,
-  for parties behind NAT). A party that stops answering is removed after a
+  endpoint): a port chosen with `--bind-port`, or one the operating system
+  picks when the flag is left out. The broker dials it every heartbeat
+  interval (two-sided heartbeats); with `--ping` the party pings the broker
+  instead (one-sided, for parties behind NAT). A party that stops answering is removed after a
   configurable number of failures; a party that stops hearing from its broker
   exits with an error.
 - If a service disappears, its client is re-paired with another service that
@@ -156,8 +157,8 @@ nsm [--log-level FILTER] <COMMAND>
 | `nsm list-interfaces [--ip-version 4\|6] [-v]` | interfaces on this host | one name per line |
 | `nsm list-ips [-n IFACE] [-i PREFIX] [--ip-version 4\|6] [-v]` | addresses on this host | one address per line |
 | `nsm listen --bind-port PORT [--transport tcp\|tls\|http\|https] [--admin-bind ADDR] [options]` | run the broker | nothing |
-| `nsm publish BROKER --bind-port PORT --service-port PORT --key KEY [--ping] [options]` | register a service and keep it registered | nothing |
-| `nsm claim BROKER --bind-port PORT --key KEY [--ping] [options]` | pair with a service and stay paired | the service's `host:port`, one line per pairing |
+| `nsm publish BROKER --service-port PORT --key KEY [--bind-port PORT] [--ping] [options]` | register a service and keep it registered | nothing |
+| `nsm claim BROKER --key KEY [--bind-port PORT] [--ping] [options]` | pair with a service and stay paired | the service's `host:port`, one line per pairing |
 | `nsm collect PARTY [options]` | the last text a party received from its peer | the text |
 | `nsm peer PARTY [options]` | the service a client is paired with | the service's `host:port` |
 | `nsm send PARTY --msg TEXT [options]` | hand text to a party for delivery to its peer | nothing |
@@ -178,8 +179,11 @@ ignored.
 follows from the scheme, and a party's own listener uses the same family as
 its broker (TCP for `host:port` and `tls://`, HTTP for `http://` and
 `https://`). IPv6 literals are written in brackets: `[fe80::1]:12000`. `listen`
-has no peer, so it takes `--transport`. `--bind-port 0` picks a free port; the
-broker and the parties print the address they actually bound on stderr.
+has no peer, so it takes `--transport`. A party's `--bind-port` may be left
+out, or given as 0: the operating system then picks a free port for its
+heartbeat listener. The broker and the parties print the address they
+actually bound on stderr (`nsm: client registered as 2 (heartbeats on
+127.0.0.1:54321)`).
 `ADMIN`, for `nsm status`, is a broker's admin listener (what `--admin-bind`
 named): `host:port` or `http://host:port`, plain HTTP only.
 
@@ -573,7 +577,10 @@ controller should start parties over HTTP.
   party. Two-sided heartbeats additionally need the parties' bind ports
   reachable from the broker; when they are not (parties behind NAT, or a
   broker outside the cluster), run the parties with `--ping` so all traffic
-  flows from the party to the broker.
+  flows from the party to the broker. A party that leaves `--bind-port` out
+  gets a port from the kernel's ephemeral range (32768 to 60999 on Linux by
+  default); a site whose firewall opens only a fixed range to compute nodes
+  should name a port in that range with `--bind-port`.
 - **Timing.** The defaults detect a dead party in about 25 seconds. Batch
   jobs with long scheduler pauses may need a larger `--fail-threshold` or
   `--heartbeat-timeout`; use the same values on the broker and its parties.
