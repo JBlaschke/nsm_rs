@@ -1,8 +1,7 @@
 //! The broker's admin listener: `GET /metrics`, `GET /v1/status` and
 //! `GET /healthz` over plain HTTP, started by `nsm listen --admin-bind`.
 //!
-//! It is a second socket next to the protocol listener (monitoring plan,
-//! decision M6): Prometheus scrapes HTTP, and the protocol listener may be
+//! It is a second socket next to the protocol listener (decision D23): Prometheus scrapes HTTP, and the protocol listener may be
 //! raw TCP or TLS, so a separate listener is the one way that works for
 //! every transport. Parties never see it, and nothing here changes the
 //! broker's state. It is off unless asked for, because a fixed default port

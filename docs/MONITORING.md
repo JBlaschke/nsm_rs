@@ -7,7 +7,7 @@ are. Two front-ends read the same numbers: `GET /metrics` for Prometheus and
 Grafana (the time series) and `GET /v1/status` for a shell (the moment).
 Both are served by an **admin listener** that `nsm listen` starts only when
 asked, so a broker started as before behaves as before. The design is
-recorded in the [monitoring plan](PLAN.md).
+recorded in the [monitoring plan](history/2026-monitoring/PLAN.md).
 
 ## The admin listener
 

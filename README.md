@@ -613,12 +613,12 @@ cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | wire format, every message, sequence diagrams, timing and re-pairing rules |
 | [`docs/REST_API.md`](docs/REST_API.md) | the control plane's routes, bodies and status codes |
 | [`docs/MONITORING.md`](docs/MONITORING.md) | the admin listener: every metric, the status document, scraping |
-| [`docs/PLAN.md`](docs/PLAN.md) | the monitoring plan in progress: decisions M1 to M10 and the state of each branch |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | building, testing, dependency and protocol changes |
 | [`CHANGELOG.md`](./CHANGELOG.md) | what changed, including every breaking change |
 | [`docs/history/2026-refactor/`](docs/history/2026-refactor/PLAN.md) | the 2026 refactor: its plan, its audit of the previous code, and the decisions D1 to D12 the code cites |
 | [`docs/history/2026-peer-text/`](docs/history/2026-peer-text/PLAN.md) | the 2026 peer-address and two-way text work: its plan and the decisions P1 to P10 (D13 to D16 in the architecture guide) |
 | [`docs/history/2026-shared-store/`](docs/history/2026-shared-store/PLAN.md) | the 2026 shared-store work: its plan and the decisions S1 to S12 (D17 to D20 in the architecture guide) |
+| [`docs/history/2026-monitoring/`](docs/history/2026-monitoring/PLAN.md) | the 2026 monitoring work: its plan and the decisions M1 to M10 (D21 to D24 in the architecture guide) |
 
 API documentation (`cargo doc`) and these pages are published by CI to
 <https://jblaschke.github.io/nsm_rs/> (the repository's Pages source must be

@@ -228,7 +228,7 @@ impl LimitsOpts {
     }
 }
 
-/// The broker's admin listener (monitoring plan, decision M6); becomes a
+/// The broker's admin listener (decision D23); becomes a
 /// [`broker::admin::AdminOpts`](crate::broker::admin::AdminOpts).
 #[derive(Debug, Clone, Default, Args)]
 pub struct AdminListenerOpts {

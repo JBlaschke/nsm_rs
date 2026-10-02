@@ -39,7 +39,7 @@ pub struct ListenOpts {
     pub limits: Limits,
     /// Admission policy.
     pub policy: BrokerPolicy,
-    /// The admin listener, when wanted (monitoring plan, decision M6).
+    /// The admin listener, when wanted (decision D23).
     pub admin: Option<AdminOpts>,
 }
 

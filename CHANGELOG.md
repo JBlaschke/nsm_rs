@@ -164,7 +164,7 @@ version: 3.
   Pages workflow publishing all of it.
 - Crypto provider features that work: `aws-lc-rs` (default) and `ring` (pure
   Rust, for static musl builds and the Docker image). Decision D11.
-- The broker counts what it does (monitoring plan, decisions M1 to M5):
+- The broker counts what it does (decisions D21 and D22):
   requests by kind and outcome, registrations granted and refused by
   reason, removals by role and reason, re-pairings, heartbeats by outcome
   with a round-trip histogram, and store operations by operation and
@@ -187,8 +187,7 @@ version: 3.
   `docs/MONITORING.md`. In the library: `broker::admin` (`AdminOpts`,
   `serve`, `router`), `ListenOpts::admin`, `ListenRequest::admin`,
   `BrokerHandle::admin_addr` and `BrokerHandle::status`;
-  `cli::AdminListenerOpts`.
-  Monitoring plan, decision M6.
+  `cli::AdminListenerOpts`. Decision D23.
 - `nsm status ADMIN [--json] [--parties] [--watch SECS] [--admin-token
   TOKEN]`: a broker's usage statistics from its admin listener, as one
   block (the broker and its uptime, parties by role, key and host, stores,
@@ -196,8 +195,7 @@ version: 3.
   the status document as one JSON line on `--json`, and repeated with a
   timestamp header on `--watch`. Exit 1 when the listener cannot be reached
   or refuses the token, 2 for a `tls://` or `https://` address. In the
-  library: `ops::status` and `Status::summary`. Monitoring plan, decision
-  M7.
+  library: `ops::status` and `Status::summary`. Decision D22.
 - A local monitoring stack: `deploy/monitoring/compose.yaml` runs
   Prometheus and Grafana on loopback with the datasource and the `NSM
   broker` dashboard provisioned (`grafana/dashboards/nsm.json`), scraping a
@@ -207,7 +205,7 @@ version: 3.
   fetch|start|status|stop` runs the same two servers without containers,
   as the current user, from one work directory, for interactive HPC nodes:
   `fetch` downloads the release tarballs and checks their SHA-256 sums.
-  Monitoring plan, decisions M8 and M9.
+  Decision D24.
 
 ### Changed
 

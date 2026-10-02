@@ -162,8 +162,8 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   the `Metrics` too: the monitor counts heartbeats with their round trip,
   removals and re-pairings. `snapshot()` exposes the state for tests;
   `gauges()`, `render_metrics()` and `status()` expose it for monitoring.
-- `metrics.rs` is what the broker counts and how it reports it (monitoring
-  plan, decisions M1 to M5). `Metrics` holds atomic counters, bumped where
+- `metrics.rs` is what the broker counts and how it reports it (decisions
+  D21 and D22). `Metrics` holds atomic counters, bumped where
   the event happens, and one histogram of heartbeat round trips; `Gauges::of`
   reads the current counts (parties by role and mode, unclaimed services,
   failing parties, stores and their bytes, with a per-key and a per-host
@@ -179,7 +179,7 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   critical section. Every request is counted once by kind and outcome, and
   registrations, refusals (by reason) and store operations (by operation
   and outcome) where the decision is made.
-- `admin.rs` is the admin listener (monitoring plan, decision M6): an axum
+- `admin.rs` is the admin listener (decision D23): an axum
   router with `GET /metrics` (the exposition, as
   `text/plain; version=0.0.4`), `GET /v1/status` (`Status` as JSON) and
   `GET /healthz`, on its own `TcpListener` under the broker's shutdown
@@ -388,7 +388,9 @@ to D16 come from the peer-address and two-way text plan of September 2026
 ([`history/2026-peer-text/`](history/2026-peer-text/PLAN.md)), where they
 are decisions P1 to P10; D17 to D20 from the shared-store plan of the same
 month ([`history/2026-shared-store/`](history/2026-shared-store/PLAN.md)),
-where they are decisions S1 to S12.
+where they are decisions S1 to S12; D21 to D24 from the monitoring plan of
+October 2026 ([`history/2026-monitoring/`](history/2026-monitoring/PLAN.md)),
+where they are decisions M1 to M10.
 
 | # | Decision |
 |---|---|
@@ -412,6 +414,10 @@ where they are decisions S1 to S12.
 | D18 | Four operations: get, put, delete (idempotent) and list (one atomic snapshot of every entry). Versions come from one broker-wide counter, like party ids, so a version names one write for the broker's whole life and never repeats across claims; the `stored` reply names the store (`client`, `revision`). |
 | D19 | Store keys are one shell word (1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`), checked by `StoreKey` on parse and on decode; values are any text. One limit, `--max-store-bytes` per store (default 16384, 256 to 32768), counted in JSON-encoded bytes so that a full store's reply is bounded too; `listen` refuses a budget whose reply would not fit its frame limit. The store messages were new variants, so the protocol stays at version 3. |
 | D20 | One command group, `nsm store get\|put\|delete\|list` (with `--json`), and one route, `POST /v1/store`. A put or delete may carry `if_version` (0: the key must be absent); a mismatch is an answer, not a failure: `applied: false` with the current entry, exit status 4, HTTP 409. Nothing is pushed or persisted: heartbeats carry no store data, and the store lives in broker memory for the claim's lifetime. |
+| D21 | The broker counts what it does and reports it itself. A `Metrics` value owned by the `Broker`: counters are atomics bumped where the event happens (requests by kind and outcome, registrations granted and refused by reason, removals by role and reason, re-pairings, heartbeats by outcome with a round-trip histogram, store operations by operation and outcome), and gauges are read from the registry under its lock when asked (parties by role and mode, unclaimed services, failing parties, heartbeat tasks, stores with their entries and bytes, the limits), so they cannot drift. The Prometheus text exposition is written by hand, with no metrics crate; every metric is `nsm_*`, counters end in `_total`, units are in the name, and every label comes from a closed set, so no rendezvous key, host or party id ever becomes a time series. |
+| D22 | One status document. `Status` (version, start time and uptime, the bound address, the limits and timing in force, the counts, a per-key and a per-host breakdown, the counters since start, every party) is the body of `GET /v1/status` and the input of `nsm status`, which prints `Status::summary`, or the document as one JSON line with `--json`; `--parties` adds a row per party, and `--watch SECS` repeats with a timestamp header and never clears the screen. The per-key and per-host breakdowns live here and not as metric labels. |
+| D23 | A separate admin listener, off by default. `nsm listen --admin-bind ADDR` serves `GET /metrics`, `GET /v1/status` and `GET /healthz` over plain HTTP on a second socket parties never use, checked and bound before anything else starts. D9 applies: loopback, or `--admin-token` (`NSM_ADMIN_TOKEN`) on every request, compared in constant time. Nothing changes on the wire (`PROTOCOL_VERSION` stays 3); counters reset with the broker, and `nsm_start_time_seconds` says when. |
+| D24 | A local stack, with and without containers. `deploy/monitoring/` runs Prometheus and Grafana on loopback by compose with the datasource and the `NSM broker` dashboard provisioned, scraping a broker on the host (token from a file) or one inside the stack (`--profile broker`); `scripts/monitoring-local.sh fetch\|start\|status\|stop` runs the same two servers as the current user from one work directory on hosts without containers, `fetch` checking the published SHA-256 sums of what it downloads. |
 
 ## 12. History
 
@@ -432,3 +438,9 @@ The shared store of the same month, recorded under
 client and the service holding it a key-value store at the broker (`nsm
 store`, `POST /v1/store`), with conditional writes; its decisions are D17 to
 D20.
+
+The monitoring work of October 2026, recorded under
+[`history/2026-monitoring/`](history/2026-monitoring/PLAN.md), gave the
+broker an admin listener with Prometheus metrics and a status document,
+`nsm status` for a shell, and a Prometheus and Grafana stack for a laptop or
+an interactive node; its decisions are D21 to D24.

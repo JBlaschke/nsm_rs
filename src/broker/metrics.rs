@@ -6,14 +6,14 @@
 //! removals and re-pairings), so the hot path takes no lock for them.
 //! Gauges are never stored: [`Gauges::of`] reads them from the registry when
 //! someone asks, under the lock every operation takes, so a gauge cannot
-//! drift from the truth (monitoring plan, decision M1).
+//! drift from the truth (decision D21).
 //!
 //! Two views exist over the same numbers: [`Metrics::render`] writes the
-//! Prometheus text exposition (format 0.0.4, by hand, decision M2) and
+//! Prometheus text exposition (format 0.0.4, by hand, D21) and
 //! [`Status`] is the JSON the admin route and `nsm status` share (decision
-//! M5). Every metric is `nsm_*`, counters end in `_total`, units are in the
+//! D22). Every metric is `nsm_*`, counters end in `_total`, units are in the
 //! name, and every label comes from a closed set; no label carries a
-//! rendezvous key, a host or a party id (decision M3). The per-key and
+//! rendezvous key, a host or a party id (D21). The per-key and
 //! per-host breakdowns are in [`Status`] only.
 
 use std::collections::BTreeMap;
@@ -956,8 +956,8 @@ impl Gauges {
 
 // ----- the JSON view -----------------------------------------------------------
 
-/// The counters as JSON: maps keyed by the labels of section 2.1 of the
-/// monitoring plan.
+/// The counters as JSON: maps keyed by the label values of the metric
+/// table in `docs/MONITORING.md`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Totals {
     /// `nsm_requests_total`: kind, then outcome.
@@ -1931,7 +1931,7 @@ mod tests {
         assert!(text.ends_with('\n'));
         assert!(
             !text.contains("key=\"") && !text.contains("host=\"") && !text.contains("id=\""),
-            "no per-key, per-host or per-party label (decision M3)"
+            "no per-key, per-host or per-party label (decision D21)"
         );
     }
 

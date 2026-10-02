@@ -1,12 +1,18 @@
-# Monitoring: plan
+# Monitoring: plan and record
 
-> Written on 2026-10-01 against `main` at `d11cfbd7` (after the shared-store
-> work, [#12](https://github.com/JBlaschke/nsm_rs/pull/12)). Executed on the
-> stacked branches `metrics/01` to `metrics/04`. Section 0 tracks the state of
-> each branch; section 2 lists the decisions with what was taken and what to
-> change if you disagree; section 3 says what each branch contains; section 4
-> what is left out on purpose. The plan before this one is the
-> [shared store](history/2026-shared-store/PLAN.md).
+> This is the plan that drove the October 2026 monitoring work, kept as a
+> record. It was written on 2026-10-01 against `main` at `d11cfbd7` (after
+> the shared-store work, [#12](https://github.com/JBlaschke/nsm_rs/pull/12)),
+> executed on the stacked branches `metrics/01` to `metrics/04`, and merged
+> through [#13](https://github.com/JBlaschke/nsm_rs/pull/13). The status
+> table in section 0 is final. The decisions in section 2 live on in
+> [`ARCHITECTURE.md`](../../ARCHITECTURE.md) under "Design decisions" as D21
+> to D24; the follow-ups in section 4 are still open. The plan before this
+> one is the [shared store](../2026-shared-store/PLAN.md).
+>
+> Section 2 lists the decisions with what was taken and what to change if
+> you disagree; section 3 says what each branch contains; section 4 what was
+> left out on purpose.
 
 ## 0. Status
 
@@ -18,7 +24,7 @@
 | `metrics/04-local-stack` | done | `deploy/monitoring/`: Prometheus and Grafana by compose with a provisioned dashboard; `scripts/monitoring-local.sh` for a laptop or an interactive HPC node without containers |
 
 Each branch builds on the previous one and passes the checks in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.
+[`CONTRIBUTING.md`](../../../CONTRIBUTING.md) at its tip.
 
 ## 1. The request
 
