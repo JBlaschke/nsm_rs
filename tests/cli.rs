@@ -908,9 +908,23 @@ fn lazy_session(transport: &str) {
     ]));
     assert_eq!(out.code, 0, "{}", out.stderr);
     let out = at_broker(&["list", &broker_addr]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let stored_keys: Vec<&str> = out
+        .stdout
+        .lines()
+        .filter(|k| !k.starts_with("nsm_"))
+        .collect();
+    assert_eq!(stored_keys, ["input", "step"], "{}", out.stdout);
+    assert!(
+        out.stdout.contains("nsm_mesh_client\n") && out.stdout.contains("nsm_mesh_service\n"),
+        "both sides are listed: {}",
+        out.stdout
+    );
+    // Each field of the mesh data is a key by itself, by key too.
+    let out = at_broker(&["get", &broker_addr, "nsm_mesh_client"]);
     assert_eq!(
         (out.code, out.stdout.as_str()),
-        (0, "input\nstep\n"),
+        (0, format!("{client_hb}\n").as_str()),
         "{}",
         out.stderr
     );

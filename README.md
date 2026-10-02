@@ -169,15 +169,17 @@ nsm store get 127.0.0.1:12000 nsm_mesh_data --key 1234
 ```bash
 nsm store put 127.0.0.1:12000 step --value 5 --key 1234   # the claim's store, by key
 nsm store get 127.0.0.1:12000 step --key 1234             # prints: 5
-CLIENT_HB=$(nsm store get 127.0.0.1:12000 nsm_mesh_data --key 1234 | jq -r .nsm_mesh_client)
-nsm send "$CLIENT_HB" --msg "job 17"                      # send, collect and peer take a party's address
+nsm store list 127.0.0.1:12000 --key 1234                 # your keys and the broker's nsm_ keys
+nsm store get 127.0.0.1:12000 nsm_mesh_client --key 1234  # prints: 127.0.0.1:54322 (every field is a key too)
+nsm send "$(nsm store get 127.0.0.1:12000 nsm_mesh_client --key 1234)" --msg "job 17"
 ```
 
 `--key` names the rendezvous key and makes the address the broker's; the
 operation then applies to the one claim under that key, or to its one
 service while nobody holds it. With several claims under one key the broker
-refuses and lists them, and `--party-id ID` picks one. Without `jq`, shell
-patterns take the JSON apart, as the [recipes](#shared-store) show.
+refuses and lists them, and `--party-id ID` picks one. `send`, `collect`
+and `peer` still take a party's address, which is what the broker's keys
+hand out.
 
 ## Command-line reference
 
@@ -319,11 +321,14 @@ the client's in `$CLIENT_HB`:
 ```bash
 # Finding the parties from a script that knows only the key and the broker:
 # the service and the client chose no heartbeat port, and the broker tells
-# where they listen (a field is null until that side has registered).
+# where they listen. A side that has not registered yet reads as "not set"
+# (exit 3), so the script waits for the client the way it waits for any key.
 B=10.0.0.1:12000; K=1234
-mesh=$(nsm store get "$B" nsm_mesh_data --key "$K") || exit 1
-CLIENT_HB=${mesh#*\"nsm_mesh_client\":\"}; CLIENT_HB=${CLIENT_HB%%\"*}
-SERVICE_HB=${mesh#*\"nsm_mesh_service\":\"}; SERVICE_HB=${SERVICE_HB%%\"*}
+until CLIENT_HB=$(nsm store get "$B" nsm_mesh_client --key "$K"); do
+  [ $? -eq 3 ] || exit 1
+  sleep 2
+done
+SERVICE_HB=$(nsm store get "$B" nsm_mesh_service --key "$K") || exit 1
 nsm send "$CLIENT_HB" --msg "job 17"
 nsm store put "$B" step --value 5 --key "$K" > /dev/null   # the store needs no party address at all
 ```
