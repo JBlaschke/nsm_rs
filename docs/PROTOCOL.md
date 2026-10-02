@@ -60,7 +60,7 @@ as `null` when absent and may be omitted when decoding.
 | `StoreKey` | string | the name of one entry in a shared store: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`; anything else is a decode error. A store key is unrelated to the rendezvous key (`Key`) |
 | store operation | `{"op":"get","key":"step"}`, `{"op":"put","key":"step","value":"5","if_version":null}`, `{"op":"delete","key":"step","if_version":null}`, `{"op":"list"}` | carried inside `store` and `store_relay`, its fields next to `type`; a value is any UTF-8 text, empty text included; `if_version` (an unsigned integer or `null`, which is also what a missing field means) makes a put or a delete conditional |
 | `StoreEntry` | `{"key":"step","value":"5","version":3}` | one entry of a store; `version` is the number of its last write |
-| `MeshData` | `{"nsm_key":1234,"nsm_service_id":1,"nsm_service_address":"10.0.0.5","nsm_service_port":9000,"nsm_service":"10.0.0.5:9000","nsm_mesh_service_address":"10.0.0.5","nsm_mesh_service_port":12010,"nsm_mesh_service":"10.0.0.5:12010","nsm_client_id":2,"nsm_mesh_client_address":"10.0.0.6","nsm_mesh_client_port":12020,"nsm_mesh_client":"10.0.0.6:12020"}` | where the parties of a claim listen: the value of the reserved store entry `nsm_mesh_data`, as JSON text, built by the broker from its registry when the entry is read; the `*_address` fields are hosts (IPv6 without brackets), the `*_port` fields ports, and `nsm_service`, `nsm_mesh_service` and `nsm_mesh_client` the same three endpoints as one string each (the data-plane endpoint as `host:port`, the heartbeat addresses with their transport); a side that is not there is `null` |
+| `MeshData` | `{"nsm_key":1234,"nsm_service_id":1,"nsm_service_address":"10.0.0.5","nsm_service_port":9000,"nsm_service":"10.0.0.5:9000","nsm_mesh_service_address":"10.0.0.5","nsm_mesh_service_port":12010,"nsm_mesh_service":"10.0.0.5:12010","nsm_client_id":2,"nsm_mesh_client_address":"10.0.0.6","nsm_mesh_client_port":12020,"nsm_mesh_client":"10.0.0.6:12020"}` | where the parties of a claim listen: the value of the reserved store entry `nsm_mesh_data`, as JSON text, built by the broker from its registry when the entry is read; the `*_address` fields are hosts (IPv6 without brackets), the `*_port` fields ports, and `nsm_service`, `nsm_mesh_service` and `nsm_mesh_client` the same three endpoints as one string each (the data-plane endpoint as `host:port`, the heartbeat addresses with their transport); a side that is not there is `null`; every field that is set is also a reserved entry of its own under the field's name, carrying the field's text |
 
 ## 3. Messages
 
@@ -216,7 +216,7 @@ operation returns.
 | `get` | the entry, or none when the key is not set |
 | `put` | the entry as written, with its new version |
 | `delete` | the removed entry, with the version of its last write, or none when the key was not set (which is not an error) |
-| `list` | every entry, in ascending byte order of key: one consistent snapshot |
+| `list` | every entry, in ascending byte order of key: one consistent snapshot of the stored entries, with the broker's reserved entries (below) among them at version 0 |
 
 `store_relay` names no store: the broker finds it from `from`, as it finds
 the peer for `deliver`. A client uses its own claim's store, also between
@@ -231,26 +231,36 @@ and the operation run in one critical section, so each operation is atomic
 against every other operation and against re-pairings; the last writer wins
 per key, unless the writer states a condition.
 
-**Reserved keys.** Store keys starting with `nsm_` are the broker's. One
-exists: `get nsm_mesh_data` answers an entry whose value is a `MeshData`
-(see the types table), where the parties of the claim listen, built from the
-broker's registry at the moment of the read and never stored: the service's
-data-plane endpoint (`nsm_service_address`, `nsm_service_port`,
-`nsm_service`), the service's heartbeat address (`nsm_mesh_service_address`,
-`nsm_mesh_service_port`, `nsm_mesh_service`) and the client's
-(`nsm_mesh_client_address`, `nsm_mesh_client_port`, `nsm_mesh_client`), with
-the rendezvous key and both ids. Its `version` is 0, since nothing was
-written; `client` and `revision` are the store's, as for any read. A client
-whose service died and that is not re-paired yet answers with the service's
-fields `null`; a service nobody holds answers with the client's fields
-`null` (and `client: null`). A `put` or a `delete` of any `nsm_` key is
-refused with `<key> is reserved: store keys starting with nsm_ are the
-broker's`, whatever its condition and whoever asks; a `get` of another
-`nsm_` key answers no entry; and `list` never shows a reserved key: nothing
-reserved is ever in a store or counted against its budget. The reply fits
-the smallest frame a broker may run with (1280 bytes) on its own.
+**Reserved keys.** Store keys starting with `nsm_` are the broker's: never
+stored, never written, counted against no budget, but projected from the
+broker's registry at the moment they are read, so they are always current,
+across re-pairings too. They say where the parties of the claim listen.
+`nsm_mesh_data` is the whole picture as one JSON value, a `MeshData` (see
+the types table); every field of it that is set is also an entry of its own
+under the field's name, carrying the field's text, so a shell script needs
+no JSON parser: `nsm_service_address` and `nsm_service_port` (the service's
+data-plane endpoint, also as `nsm_service`), `nsm_mesh_service_address` and
+`nsm_mesh_service_port` (where the service listens for heartbeats, also as
+`nsm_mesh_service`, with its transport), `nsm_mesh_client_address` and
+`nsm_mesh_client_port` (where the client does, also as `nsm_mesh_client`),
+`nsm_key`, `nsm_service_id` and `nsm_client_id`. A field that is `null` has
+no entry: at a service nobody holds, a `get` of `nsm_mesh_client` answers no
+entry, like a key that is not set, until a client claims; at a client whose
+service died, the service's keys are missing until the re-pairing. Every
+reserved entry has `version` 0, since nothing was written; `client` and
+`revision` are the store's, as for any read (`client: null` at a service
+nobody holds). A `list` carries them all beside the stored entries, in one
+key order, so a store never lists as empty: `nsm_key` and `nsm_mesh_data`
+are always there. A `put` or a `delete` of any `nsm_` key is refused with
+`<key> is reserved: store keys starting with nsm_ are the broker's`,
+whatever its condition and whoever asks, and a `get` of an `nsm_` key the
+broker does not know answers no entry. The reserved entries at their
+largest fit within the 4096 bytes `listen` adds to the budget when it
+checks the frame limit (see the sizes rule).
 
 ```json
+{"type":"store","op":"get","key":"nsm_service_port"}
+{"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"nsm_service_port","value":"9000","version":0}]}
 {"type":"store","op":"get","key":"nsm_mesh_data"}
 {"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"nsm_mesh_data","value":"{\"nsm_key\":1234,\"nsm_service_id\":1,...}","version":0}]}
 ```
@@ -468,8 +478,8 @@ one interval; a re-paired client learns its new service within one interval.
   reaches the store only while it holds the claim. Nothing store-related
   rides on heartbeats or ping replies, a store relay does not count as proof
   of life, and nothing survives a broker restart. Store keys starting with
-  `nsm_` are the broker's: `nsm_mesh_data` is answered from the registry,
-  never stored, and never written.
+  `nsm_` are the broker's: the entries of `nsm_mesh_data` are answered from
+  the registry, listed at version 0, never stored and never written.
 - **Tokens** are required on `ping`, `deliver`, `store_relay` and `heartbeat`; the broker's
   refusals do not reveal whether an id exists. Tokens are 16 random bytes from
   the TLS crypto provider's secure random source.
@@ -479,11 +489,12 @@ one interval; a re-paired client learns its new service within one interval.
   (`--max-store-bytes` on `listen`, default 16384, allowed 256 to 32768):
   each entry counts as its key and value encoded as JSON strings, quotes and
   escapes included, plus 64 bytes, and a put that would exceed the budget is
-  refused. A `stored` reply carrying every entry of a full store is then at
-  most the budget plus 1024 bytes, and `listen` refuses to start unless that
-  fits its own `--max-frame-bytes`, which a broker therefore needs at 1280
-  or more (17408 with the default budget). Parties use the default frame
-  limit of 65536, which every allowed budget fits. `nsm serve` uses its
+  refused. A `stored` reply carrying every entry of a full store, the
+  broker's reserved entries included, is then at most the budget plus 4096
+  bytes, and `listen` refuses to start unless that fits its own
+  `--max-frame-bytes`, which a broker therefore needs at 4352 or more
+  (20480 with the default budget). Parties use the default frame limit of
+  65536, which every allowed budget fits. `nsm serve` uses its
   `--max-frame-bytes` for the parties it starts and for every reply it reads
   itself, whichever way the party was started, so lowering it below a
   store's reply size breaks large replies there: at those parties, and as a

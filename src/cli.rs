@@ -196,8 +196,8 @@ impl TimingOpts {
 #[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
 pub struct LimitsOpts {
     /// Largest message accepted on any transport, in bytes (at least 1024;
-    /// `listen` needs at least `--max-store-bytes` plus 1024, which is 17408
-    /// with the default store budget and never less than 1280).
+    /// `listen` needs at least `--max-store-bytes` plus 4096, which is 20480
+    /// with the default store budget and never less than 4352).
     #[arg(long, value_name = "BYTES", value_parser = clap::value_parser!(u64).range(1024..))]
     pub max_frame_bytes: Option<u64>,
     /// Connections a listener serves concurrently.
@@ -579,7 +579,8 @@ pub enum StoreCommand {
         timing: TimingOpts,
     },
 
-    /// Print every key in the store, one per line.
+    /// Print every key in the store, one per line: the stored ones and the
+    /// broker's own `nsm_` keys.
     List {
         /// Either party's heartbeat address.
         party: Addr,

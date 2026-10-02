@@ -530,6 +530,12 @@ fn value_of(stored: &Stored, key: &str) -> Option<(String, u64)> {
         .map(|e| (e.value.clone(), e.version))
 }
 
+/// A list reply without the broker's own `nsm_` entries: the stored ones.
+fn stored_only(mut reply: Stored) -> Stored {
+    reply.entries.retain(|e| !e.key.is_reserved());
+    reply
+}
+
 #[tokio::test]
 async fn store_is_shared_by_a_client_and_its_service() {
     for &t in TRANSPORTS {
@@ -557,7 +563,7 @@ async fn store_is_shared_by_a_client_and_its_service() {
             let third = store(&c, &service, put("ready", "")).await;
             let (_, v3) = value_of(&third, "ready").unwrap();
             assert!(v1 < v2 && v2 < v3, "{t:?}: {v1} {v2} {v3}");
-            let listed = store(&c, &client, StoreOp::List).await;
+            let listed = stored_only(store(&c, &client, StoreOp::List).await);
             assert_eq!(listed.client, owner, "{t:?}");
             assert_eq!(listed.revision, v3, "{t:?}");
             assert_eq!(
@@ -618,7 +624,7 @@ async fn store_survives_a_repairing() {
 
         // The replacement reads every earlier write, the dead service's
         // included, under the same client.
-        let listed = store(&c, &s2, StoreOp::List).await;
+        let listed = stored_only(store(&c, &s2, StoreOp::List).await);
         assert_eq!(listed.client, Some(client.id()));
         assert_eq!(listed.revision, earlier);
         assert_eq!(listed.entries, {
@@ -664,7 +670,7 @@ async fn store_is_dropped_with_its_client_and_the_next_claim_starts_empty() {
                     .any(|p| p.id == service.id() && p.paired_with.is_none())
         })
         .await;
-        let orphaned = store(&c, &service, StoreOp::List).await;
+        let orphaned = stored_only(store(&c, &service, StoreOp::List).await);
         assert_eq!(orphaned.client, None, "{orphaned:?}");
         assert!(orphaned.entries.is_empty(), "{orphaned:?}");
 
@@ -676,7 +682,7 @@ async fn store_is_dropped_with_its_client_and_the_next_claim_starts_empty() {
         assert!(fresh.entries.is_empty(), "{fresh:?}");
         assert_eq!(fresh.client, Some(second.id()));
         assert_eq!(fresh.revision, 0, "a store never written");
-        let listed = store(&c, &service, StoreOp::List).await;
+        let listed = stored_only(store(&c, &service, StoreOp::List).await);
         assert_eq!(listed.client, Some(second.id()));
         assert!(listed.entries.is_empty(), "{listed:?}");
         c.stop().await;
@@ -696,7 +702,7 @@ async fn unclaimed_service_reads_an_empty_store_and_may_not_write() {
             entries: vec![],
         };
         assert_eq!(store(&c, &service, get("step")).await, empty);
-        assert_eq!(store(&c, &service, StoreOp::List).await, empty);
+        assert_eq!(stored_only(store(&c, &service, StoreOp::List).await), empty);
         for op in [put("step", "5"), delete("step")] {
             let kind = op.kind();
             let err = ops::store(&service.bound(), op, c.net()).await.unwrap_err();
@@ -732,6 +738,19 @@ async fn mesh_data_says_where_a_claims_parties_listen() {
             assert_eq!(data.nsm_service_address.as_deref(), Some("127.0.0.1"));
             assert_eq!(data.nsm_client_id, None, "{t:?}");
             assert_eq!(data.nsm_mesh_client, None, "{t:?}");
+            // The client's keys are not set yet, the service's are, each
+            // with the field's text.
+            let missing = store(&c, &service, get("nsm_mesh_client")).await;
+            assert!(missing.entries.is_empty(), "{t:?}: {missing:?}");
+            let port = store(&c, &service, get("nsm_service_port")).await;
+            assert_eq!(
+                port.entries
+                    .iter()
+                    .map(|e| (e.value.as_str(), e.version))
+                    .collect::<Vec<_>>(),
+                [("9000", 0)],
+                "{t:?}"
+            );
 
             // Paired: the same answer through either party, naming both.
             let client = c.claim(12).await;
@@ -750,10 +769,26 @@ async fn mesh_data_says_where_a_claims_parties_listen() {
                 "{t:?}"
             );
 
-            // It is not an entry: list shows none, a put of it is refused,
-            // and the store is as it was.
+            // A list shows every one of the broker's entries, at version 0,
+            // beside no stored entry at all; a put of one is refused, and
+            // the store is as it was.
             let listed = store(&c, &client, StoreOp::List).await;
-            assert!(listed.entries.is_empty(), "{t:?}: {listed:?}");
+            assert!(
+                stored_only(listed.clone()).entries.is_empty(),
+                "{t:?}: {listed:?}"
+            );
+            assert_eq!(
+                listed.entries,
+                via_client
+                    .mesh_data()
+                    .unwrap()
+                    .expect("mesh data")
+                    .entries()
+                    .unwrap(),
+                "{t:?}"
+            );
+            let found = store(&c, &client, get("nsm_mesh_client")).await;
+            assert_eq!(found.entries[0].value, client.bound().to_string(), "{t:?}");
             let err = ops::store(&client.bound(), put("nsm_mesh_data", "mine"), c.net())
                 .await
                 .unwrap_err();
@@ -835,7 +870,7 @@ async fn store_works_in_ping_mode() {
         assert_eq!(written.client, Some(client.id()));
         assert_eq!(store(&c, &service, get("step")).await, written);
         store(&c, &service, put("done", "yes")).await;
-        let listed = store(&c, &client, StoreOp::List).await;
+        let listed = stored_only(store(&c, &client, StoreOp::List).await);
         assert_eq!(
             listed.keys().map(|k| k.as_str()).collect::<Vec<_>>(),
             ["done", "step"]
@@ -845,7 +880,10 @@ async fn store_works_in_ping_mode() {
         // sign of life is pinned in the broker handler's tests.)
         tokio::time::sleep(c.timing().ping_staleness * 2).await;
         assert_eq!(c.broker().snapshot().len(), 2);
-        assert_eq!(store(&c, &service, StoreOp::List).await, listed);
+        assert_eq!(
+            stored_only(store(&c, &service, StoreOp::List).await),
+            listed
+        );
         c.stop().await;
         service_run.abort();
         client_run.abort();
@@ -888,7 +926,7 @@ async fn store_relay_requires_the_registration_token() {
             .unwrap();
         assert_eq!(bare, Message::nack("unexpected store at the broker"));
         // Nothing was written by any of that.
-        let listed = store(&c, &client, StoreOp::List).await;
+        let listed = stored_only(store(&c, &client, StoreOp::List).await);
         assert!(listed.entries.is_empty(), "{listed:?}");
 
         // With its own token each party reaches the store.
@@ -1130,7 +1168,7 @@ async fn a_full_store_refuses_a_write_and_keeps_its_contents() {
                 matches!(&err, Error::Rejected(reason) if reason.starts_with("store full: ")),
                 "{t:?}: {err}"
             );
-            let listed = store(&c, &service, StoreOp::List).await;
+            let listed = stored_only(store(&c, &service, StoreOp::List).await);
             assert_eq!(listed.entries, written.entries, "{t:?}");
             assert_eq!(listed.revision, written.revision, "{t:?}");
             // A smaller value in the same entry always fits.

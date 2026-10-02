@@ -131,10 +131,11 @@ version: 3.
 - `--max-store-bytes` on `listen` (default 16384, allowed 256 to 32768): the
   budget of each store, counting every entry as its JSON-encoded key and
   value plus 64 bytes. `listen` refuses to start when a full store's reply
-  (the budget plus 1024 bytes) would not fit `--max-frame-bytes`, so a
-  broker's frame limit below 17408 bytes now needs a smaller store budget
-  too, and one below 1280 bytes (the smallest budget plus 1024) can no
-  longer start a broker at all.
+  (the budget plus 4096 bytes, which cover the reply's own fields and the
+  broker's reserved entries a `list` carries) would not fit
+  `--max-frame-bytes`, so a broker's frame limit below 20480 bytes now needs
+  a smaller store budget too, and one below 4352 bytes (the smallest budget
+  plus 4096) can no longer start a broker at all.
 - Exit code 3: the party answered but has nothing to report yet (`collect`
   before the first text, `peer` before the pairing, `store get` of a key
   that is not set), distinct from a failed operation (1) and a usage error
@@ -157,20 +158,23 @@ version: 3.
   listener, and the party prints the address it bound on stderr. `listen`
   still requires it: the broker is the one fixed address. Discovery plan,
   decision L1.
-- `nsm store get PARTY nsm_mesh_data`, and the same read over
-  `POST /v1/store`: where the parties of the claim listen, as one JSON value
-  the broker builds from its registry when asked and never stores:
-  `nsm_service_address` and `nsm_service_port` (the service's data-plane
-  endpoint), `nsm_mesh_service_address` and `nsm_mesh_service_port` (its
-  heartbeat address), `nsm_mesh_client_address` and `nsm_mesh_client_port`
-  (the client's), each endpoint also as one string (`nsm_service`,
-  `nsm_mesh_service`, `nsm_mesh_client`), with `nsm_key` and both ids;
-  `null` for a side that is not there. It is an entry of version 0 that
-  `list` never shows. Store keys starting with `nsm_` are reserved from now
-  on: a put or a delete of one is refused (exit 1, HTTP 400). In the
-  library: `protocol::MeshData`, `StoreKey::is_reserved`,
-  `StoreKey::mesh_data`, `Stored::mesh_data` and `Registry::mesh_data`.
-  Discovery plan, decisions L2 to L4.
+- The broker's own store keys, through `nsm store` and `POST /v1/store`:
+  where the parties of the claim listen, built from the broker's registry
+  when asked and never stored. `nsm_mesh_data` is all of it as one JSON
+  value: `nsm_service_address` and `nsm_service_port` (the service's
+  data-plane endpoint), `nsm_mesh_service_address` and
+  `nsm_mesh_service_port` (its heartbeat address), `nsm_mesh_client_address`
+  and `nsm_mesh_client_port` (the client's), each endpoint also as one
+  string (`nsm_service`, `nsm_mesh_service`, `nsm_mesh_client`), with
+  `nsm_key` and both ids, `null` for a side that is not there; and every
+  one of those fields is a key of its own, so `nsm store get PARTY
+  nsm_mesh_client_port` prints the port, and a field that is `null` is a
+  key that is not set (exit 3). They are entries of version 0 that `list`
+  shows beside the stored ones. Store keys starting with `nsm_` are
+  reserved from now on: a put or a delete of one is refused (exit 1, HTTP
+  400). In the library: `protocol::MeshData` with `entries`,
+  `StoreKey::is_reserved`, `StoreKey::mesh_data`, `Stored::mesh_data` and
+  `Registry::mesh_data`. Discovery plan, decisions L2 to L4.
 - Graceful shutdown on Ctrl-C and SIGTERM.
 - Tests: 160+ unit tests, end-to-end tests over all four transports, control
   plane and binary tests, a stress test; CI on Linux and macOS with both

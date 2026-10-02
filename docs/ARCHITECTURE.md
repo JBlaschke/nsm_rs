@@ -148,9 +148,11 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   client uses its own, also while orphaned; a service uses the store of the
   client holding it, and a service nobody holds reads an empty store and may
   not write. Store keys starting with `nsm_` are reserved for the broker:
-  `Registry::store` answers `get nsm_mesh_data` from `Registry::mesh_data`
-  (where the claim's parties listen, projected from the records as an entry
-  of version 0), refuses a write of any reserved key and never stores one.
+  `Registry::store` answers them from `Registry::mesh_data` (where the
+  claim's parties listen, projected from the records: one JSON value under
+  `nsm_mesh_data` and one entry per field that is set, all at version 0),
+  adds them to every `list`, refuses a write of any of them and never
+  stores one.
 - `store.rs` is `Store`: a key-value map with a byte budget, pure like the
   registry. Each entry counts as its JSON-encoded key and value plus 64
   bytes, which bounds the largest `stored` reply as well as memory; write
@@ -273,10 +275,11 @@ Two limits only matter at a broker: `max_registrations` and
 `max_store_bytes` (`--max-store-bytes`, default 16384, allowed 256 to
 32768). `serve` accepts both with the other limits and ignores them.
 `listen` refuses to start, with a configuration error naming both flags,
-when a full store's reply (the budget plus 1024 bytes) would not fit its own
-`--max-frame-bytes`, so a broker needs a frame limit of at least 1280 bytes
-(17408 with the default budget). Parties use the default 64 KiB frame, which every
-allowed budget fits. `nsm serve` uses its `--max-frame-bytes` for the parties
+when a full store's reply (the budget plus 4096 bytes, which cover the
+reply's own fields and the broker's reserved entries a `list` carries)
+would not fit its own `--max-frame-bytes`, so a broker needs a frame limit
+of at least 4352 bytes (20480 with the default budget). Parties use the
+default 64 KiB frame, which every allowed budget fits. `nsm serve` uses its `--max-frame-bytes` for the parties
 it starts and for every reply it reads itself, so lowering it below a store's
 reply size breaks large replies there: at those parties, and as a 400 from
 `POST /v1/store`. There is at most one store per client, and every

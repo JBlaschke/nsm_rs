@@ -234,21 +234,25 @@ options](#limit-options)); a put that does not fit is refused.
   conditional writes: one that predates them drops the condition, applies
   the write anyway and answers as if it held, so restart long-running
   parties on the new binary before relying on `--if-version`.
-- `list` prints the keys, one per line, in sorted order, and nothing for an
-  empty store (exit 0).
-- `get nsm_mesh_data` prints where the claim's parties listen, as one line
-  of JSON the broker builds from its registry when asked:
-  `nsm_service_address` and `nsm_service_port` (the service's data-plane
-  endpoint, what `claim` printed, also as `nsm_service`),
-  `nsm_mesh_service_address` and `nsm_mesh_service_port` (the service's
-  heartbeat address, also as `nsm_mesh_service`, the form `send`, `collect`
-  and `store` take) and `nsm_mesh_client_address` and
-  `nsm_mesh_client_port` (the client's, also as `nsm_mesh_client`), with
-  `nsm_key` and the two party ids. A side that is not there is `null`: the
-  client's fields at a service nobody holds, the service's at a client
-  whose service died and that is not re-paired yet. Store keys starting
-  with `nsm_` are reserved: `put` and `delete` refuse them (exit 1) and
-  `list` never shows them.
+- `list` prints the keys, one per line, in sorted order: yours and the
+  broker's own `nsm_` keys (next), so a store never lists as empty.
+- The broker's own keys say where the claim's parties listen.
+  `get nsm_mesh_data` prints all of it as one line of JSON, built from the
+  broker's registry when asked: `nsm_service_address` and
+  `nsm_service_port` (the service's data-plane endpoint, what `claim`
+  printed), `nsm_mesh_service_address` and `nsm_mesh_service_port` (the
+  service's heartbeat address), `nsm_mesh_client_address` and
+  `nsm_mesh_client_port` (the client's), each endpoint also as one string
+  (`nsm_service`, `nsm_mesh_service`, `nsm_mesh_client`, the form `send`,
+  `collect` and `store` take), and `nsm_key` with the two party ids. Every
+  one of those fields is a key of its own too, so
+  `get nsm_mesh_client_port` prints the port and nothing else. A side that
+  is not there is `null` in the JSON and "not set" (exit 3) as a key: at a
+  service nobody holds yet, `get nsm_mesh_client` waits the way `get ready`
+  does, and at a client whose service died it is the service's keys that
+  are missing until the re-pairing. `list` shows these keys with yours
+  (their version is 0), `put` and `delete` refuse them (exit 1), and they
+  count against no budget.
 - `--json` prints the broker's reply instead, as one line:
   `{"client":8,"revision":3,"applied":true,"entries":[{"key":"step","value":"5","version":3}]}`,
   the same body `POST /v1/store` returns. `client` is the id of the client
@@ -257,8 +261,9 @@ options](#limit-options)); a put that does not fit is refused.
   then the key's current one), and `list` carries every value. Stderr and
   the exit status stay the same.
 
-A service nobody holds yet reads an empty store (so `get` exits 3) and is
-refused writes (exit 1, `not claimed`). The store is readable and writable by
+A service nobody holds yet reads an empty store (so `get` of your keys
+exits 3, and `list` shows the broker's keys alone) and is refused writes
+(exit 1, `not claimed`). The store is readable and writable by
 anyone who can reach a party's bind address, as `send` and `collect` are:
 it is not a place for secrets.
 
@@ -399,7 +404,7 @@ On `listen` and `serve`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--max-frame-bytes BYTES` | 65536 | largest message accepted on any transport (at least 1024); `listen` needs at least `--max-store-bytes` plus 1024, so 17408 with the default store budget and never less than 1280 |
+| `--max-frame-bytes BYTES` | 65536 | largest message accepted on any transport (at least 1024); `listen` needs at least `--max-store-bytes` plus 4096, so 20480 with the default store budget and never less than 4352 |
 | `--max-connections N` | 1024 | connections a listener serves at once; more wait in the accept queue |
 | `--max-registrations N` | 10000 | services plus clients a broker holds at once (broker only) |
 | `--max-store-bytes BYTES` | 16384 | budget of each claim's shared store, 256 to 32768, counting every entry as its JSON-encoded key and value plus 64 bytes (broker only) |

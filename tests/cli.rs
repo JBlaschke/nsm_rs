@@ -619,15 +619,30 @@ fn full_session(transport: &str) {
     let out = run(argv(&[&["store", "get", &service_hb, "input"], FAST]));
     assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
     assert_eq!(out.stderr, "nsm: input is not set\n");
+    // A list shows the broker's own keys for the service's side and no
+    // stored key; the client's keys are not there yet.
     let out = run(argv(&[&["store", "list", &service_hb], FAST]));
-    assert_eq!((out.code, out.stdout.as_str()), (0, ""), "{}", out.stderr);
+    assert_eq!(out.code, 0, "{}", out.stderr);
     assert!(out.stderr.is_empty(), "{}", out.stderr);
+    assert!(
+        !out.stdout.is_empty() && out.stdout.lines().all(|k| k.starts_with("nsm_")),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("nsm_mesh_data\n") && out.stdout.contains("nsm_service_port\n"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("nsm_mesh_client"), "{}", out.stdout);
     // The README's failover recipe waits for exactly this text to go away.
     let out = run(argv(&[&["store", "list", &service_hb, "--json"], FAST]));
     assert_eq!(out.code, 0, "{}", out.stderr);
-    assert_eq!(
-        out.stdout,
-        "{\"client\":null,\"revision\":0,\"applied\":true,\"entries\":[]}\n"
+    assert!(
+        out.stdout
+            .starts_with("{\"client\":null,\"revision\":0,\"applied\":true,\"entries\":["),
+        "{}",
+        out.stdout
     );
     // A condition changes nothing about that: still a refusal, exit 1,
     // not a missed condition.
@@ -812,21 +827,38 @@ fn store_session(client_hb: &str, service_hb: &str) {
         assert_eq!(out.stdout, format!("{value}\n"), "{key}");
     }
 
-    // Either party lists the same keys, sorted, one per line.
+    // Either party lists the same keys, sorted, one per line: the stored
+    // ones and the broker's own nsm_ keys, in one order.
     for party in [client_hb, service_hb] {
         let out = store(&["list", party]);
         assert_eq!(out.code, 0, "{}", out.stderr);
-        assert_eq!(out.stdout, "input/path\noffset\nstep\n", "{party}");
+        let lines: Vec<&str> = out.stdout.lines().collect();
+        let stored_keys: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|k| !k.starts_with("nsm_"))
+            .collect();
+        assert_eq!(stored_keys, ["input/path", "offset", "step"], "{party}");
+        assert!(lines.contains(&"nsm_mesh_data"), "{party}: {}", out.stdout);
+        assert!(
+            lines.contains(&"nsm_mesh_client_port"),
+            "{party}: {}",
+            out.stdout
+        );
+        let mut sorted = lines.clone();
+        sorted.sort_unstable();
+        assert_eq!(lines, sorted, "{party}");
         assert!(out.stderr.is_empty(), "{}", out.stderr);
     }
 
     // The reserved entry nsm_mesh_data: where the claim's parties listen,
     // as one line of JSON the broker builds, the same through either party
-    // and never in the list above.
+    // and listed above at version 0; each of its fields is a key too.
     let out = store(&["get", client_hb, "nsm_mesh_data"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert!(out.stderr.is_empty(), "{}", out.stderr);
     assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let mesh_json = out.stdout.clone();
     let data: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
     assert_eq!(data["nsm_key"], 1234, "{data}");
     assert_eq!(data["nsm_service"], "127.0.0.1:9000", "{data}");
@@ -837,13 +869,19 @@ fn store_session(client_hb: &str, service_hb: &str) {
     let client_port: u64 = client_hb.rsplit(':').next().unwrap().parse().unwrap();
     assert_eq!(data["nsm_mesh_client_port"], client_port, "{data}");
     assert_eq!(data["nsm_mesh_client_address"], "127.0.0.1", "{data}");
+    let out = store(&["get", service_hb, "nsm_mesh_client_port"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{client_port}\n"));
+    let out = store(&["get", client_hb, "nsm_mesh_service"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{service_hb}\n"));
     assert!(
         data["nsm_service_id"].is_u64() && data["nsm_client_id"].is_u64(),
         "{data}"
     );
     let via_service = store(&["get", service_hb, "nsm_mesh_data"]);
     assert_eq!(via_service.code, 0, "{}", via_service.stderr);
-    assert_eq!(via_service.stdout, out.stdout);
+    assert_eq!(via_service.stdout, mesh_json);
     // With --json it is an entry of version 0 in the usual reply.
     let out = store(&["get", client_hb, "nsm_mesh_data", "--json"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
@@ -882,9 +920,17 @@ fn store_session(client_hb: &str, service_hb: &str) {
     let out = store(&["list", service_hb, "--json"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
     let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    let entries = reply["entries"].as_array().expect("entries");
     assert_eq!(
-        reply["entries"].as_array().map(Vec::len),
-        Some(3),
+        entries.iter().filter(|e| e["version"] != 0).count(),
+        3,
+        "three stored entries: {reply}"
+    );
+    assert!(
+        entries
+            .iter()
+            .filter(|e| e["version"] == 0)
+            .all(|e| e["key"].as_str().is_some_and(|k| k.starts_with("nsm_"))),
         "{reply}"
     );
 

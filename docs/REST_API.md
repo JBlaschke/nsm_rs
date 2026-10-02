@@ -194,19 +194,23 @@ operation:
 | `get` | the entry, or `[]` when the key is not set (still 200, as `collect` answers `text: null`) |
 | `put` | the entry as written, with its new version |
 | `delete` | the removed entry, or `[]` when the key was not set (still 200) |
-| `list` | every entry, sorted by key: one consistent snapshot |
+| `list` | every entry, sorted by key: one consistent snapshot, the broker's reserved entries (below) among them at version 0 |
 
-Store keys starting with `nsm_` are reserved for the broker. A `get` of
-`nsm_mesh_data` answers an entry at version 0 whose `value` is JSON text
-saying where the claim's parties listen, built by the broker when asked and
-never stored: `nsm_service_address` and `nsm_service_port` (the service's
-data-plane endpoint, also as `nsm_service`), `nsm_mesh_service_address` and
-`nsm_mesh_service_port` (the service's heartbeat address, also as
-`nsm_mesh_service`, the form `party` takes), `nsm_mesh_client_address` and
-`nsm_mesh_client_port` (the client's, also as `nsm_mesh_client`), with
-`nsm_key`, `nsm_service_id` and `nsm_client_id`; a side that is not there
-is `null`. `list` never shows it, and a `put` or a `delete` of any `nsm_`
-key is a 400 (`... is reserved`).
+Store keys starting with `nsm_` are reserved for the broker: entries it
+builds when asked and never stores, saying where the claim's parties
+listen. A `get` of `nsm_mesh_data` answers one entry at version 0 whose
+`value` is JSON text with `nsm_service_address` and `nsm_service_port` (the
+service's data-plane endpoint, also as `nsm_service`),
+`nsm_mesh_service_address` and `nsm_mesh_service_port` (the service's
+heartbeat address, also as `nsm_mesh_service`, the form `party` takes),
+`nsm_mesh_client_address` and `nsm_mesh_client_port` (the client's, also as
+`nsm_mesh_client`), `nsm_key`, `nsm_service_id` and `nsm_client_id`; a side
+that is not there is `null`. Each of those fields is also an entry of its
+own under the field's name: a `get` of `nsm_service_port` answers
+`{"key":"nsm_service_port","value":"9000","version":0}`, and a field that
+is `null` has no entry (200 with `entries: []`, as for a key that is not
+set). A `list` carries them beside the stored entries at version 0, and a
+`put` or a `delete` of any `nsm_` key is a 400 (`... is reserved`).
 
 ```json
 {"client":8,"revision":3,"applied":true,"entries":[{"key":"nsm_mesh_data","value":"{\"nsm_key\":1234,\"nsm_service_id\":7,\"nsm_service_address\":\"10.128.0.7\",\"nsm_service_port\":9000,\"nsm_service\":\"10.128.0.7:9000\",\"nsm_mesh_service_address\":\"10.128.0.7\",\"nsm_mesh_service_port\":41231,\"nsm_mesh_service\":\"http://10.128.0.7:41231\",\"nsm_client_id\":8,\"nsm_mesh_client_address\":\"10.128.0.9\",\"nsm_mesh_client_port\":41232,\"nsm_mesh_client\":\"http://10.128.0.9:41232\"}","version":0}]}

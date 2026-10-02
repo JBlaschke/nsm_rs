@@ -262,13 +262,15 @@ pub struct ClientRecord {
 pub const MAX_STORE_KEY_BYTES: usize = 128;
 
 /// The prefix of the store keys the broker keeps for itself (discovery
-/// plan, decision L3). A put or a delete of such a key is refused, a get of
-/// one the broker does not know answers no entry, and `list` never shows
-/// one: nothing reserved is ever in a store.
+/// plan, decision L3). They are projected from the registry when read, so a
+/// `list` shows them beside the stored entries at version 0, a `get` of one
+/// the broker does not know answers no entry, and a put or a delete of one
+/// is refused: nothing reserved is ever stored or counted against a budget.
 pub const RESERVED_STORE_KEY_PREFIX: &str = "nsm_";
 
-/// The reserved store key whose `get` answers a [`MeshData`]: where the
-/// parties of the claim listen.
+/// The reserved store key whose `get` answers a whole [`MeshData`] as JSON
+/// text; each of its fields is a reserved key of its own as well
+/// ([`MeshData::entries`]).
 pub const MESH_DATA_KEY: &str = "nsm_mesh_data";
 
 /// The name of one entry in a shared store.
@@ -581,6 +583,13 @@ impl Stored {
 /// which is what `claim` prints, and a party's heartbeat address with its
 /// transport (`http://10.0.0.6:12020`) for the other two, as `send`,
 /// `collect` and `store` take them.
+///
+/// Every field that is set is also a reserved entry of its own, named like
+/// the field and carrying its text ([`MeshData::entries`]): `get
+/// nsm_service_port` answers `9000`, so a shell script needs no JSON
+/// parser. A field that is `null` has no entry, so a `get` of it answers
+/// "not set" until that side of the claim is there. A `list` carries them
+/// all beside the stored entries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeshData {
     /// The rendezvous key of the claim.
@@ -642,6 +651,82 @@ impl MeshData {
             value: serde_json::to_string(self)?,
             version: 0,
         })
+    }
+
+    /// Every entry the broker answers for this claim, in ascending key
+    /// order: the whole value as JSON text under `nsm_mesh_data`
+    /// ([`MeshData::entry`]) and one entry per field that is set, named
+    /// like the field and carrying its text (`9000`, `10.0.0.6`,
+    /// `http://10.0.0.6:12020`), all at version 0. A field that is `null`
+    /// has no entry. This is what a `list` adds to the stored entries and
+    /// where a `get` of a reserved key looks.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`MeshData::entry`].
+    pub fn entries(&self) -> crate::Result<Vec<StoreEntry>> {
+        fn text<T: fmt::Display>(field: &Option<T>) -> Option<String> {
+            field.as_ref().map(ToString::to_string)
+        }
+        let fields = [
+            ("nsm_key", Some(self.nsm_key.to_string())),
+            ("nsm_service_id", text(&self.nsm_service_id)),
+            ("nsm_service_address", self.nsm_service_address.clone()),
+            ("nsm_service_port", text(&self.nsm_service_port)),
+            ("nsm_service", text(&self.nsm_service)),
+            (
+                "nsm_mesh_service_address",
+                self.nsm_mesh_service_address.clone(),
+            ),
+            ("nsm_mesh_service_port", text(&self.nsm_mesh_service_port)),
+            ("nsm_mesh_service", text(&self.nsm_mesh_service)),
+            ("nsm_client_id", text(&self.nsm_client_id)),
+            (
+                "nsm_mesh_client_address",
+                self.nsm_mesh_client_address.clone(),
+            ),
+            ("nsm_mesh_client_port", text(&self.nsm_mesh_client_port)),
+            ("nsm_mesh_client", text(&self.nsm_mesh_client)),
+        ];
+        let mut entries: Vec<StoreEntry> = fields
+            .into_iter()
+            .filter_map(|(name, value)| {
+                value.map(|value| StoreEntry {
+                    key: StoreKey(name.to_owned()),
+                    value,
+                    version: 0,
+                })
+            })
+            .collect();
+        entries.push(self.entry()?);
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(entries)
+    }
+}
+
+#[cfg(test)]
+impl MeshData {
+    /// The largest value a mesh can produce: IPv6 hosts at their longest
+    /// text (nsm's parties advertise IP literals), the highest ports, ids
+    /// and key, and the longest scheme.
+    pub(crate) fn largest() -> MeshData {
+        let host = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+        let heartbeat = Addr::new(crate::net::Transport::Https, host, u16::MAX);
+        let service = ServiceRecord {
+            id: PartyId(u64::MAX),
+            key: u64::MAX,
+            service_addr: Addr::tcp(host, u16::MAX),
+            bind_addr: heartbeat.clone(),
+            ping: false,
+        };
+        let client = ClientRecord {
+            id: PartyId(u64::MAX),
+            key: u64::MAX,
+            bind_addr: heartbeat,
+            service: PartyId(u64::MAX),
+            ping: false,
+        };
+        MeshData::new(u64::MAX, Some(&service), Some(&client))
     }
 }
 
@@ -1224,42 +1309,112 @@ mod tests {
     }
 
     #[test]
-    fn the_largest_mesh_data_reply_fits_the_smallest_broker_frame() {
-        // A broker may run with --max-store-bytes 256 and --max-frame-bytes
-        // 1280 (the budget plus REPLY_OVERHEAD, which `listen` checks). The
-        // mesh data entry is not counted against the budget, so its reply
-        // must fit that frame on its own. nsm's parties advertise IP
-        // literals, of which an IPv6 text is the longest (39 characters).
-        let host = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
-        let service = ServiceRecord {
-            id: PartyId(u64::MAX),
-            key: u64::MAX,
-            service_addr: Addr::tcp(host, u16::MAX),
-            bind_addr: Addr::new(Transport::Https, host, u16::MAX),
-            ping: false,
+    fn every_field_is_an_entry_of_its_own_and_a_null_field_has_none() {
+        let both = MeshData::new(42, Some(&service()), Some(&client()));
+        let entries = both.entries().unwrap();
+        let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "nsm_client_id",
+                "nsm_key",
+                "nsm_mesh_client",
+                "nsm_mesh_client_address",
+                "nsm_mesh_client_port",
+                "nsm_mesh_data",
+                "nsm_mesh_service",
+                "nsm_mesh_service_address",
+                "nsm_mesh_service_port",
+                "nsm_service",
+                "nsm_service_address",
+                "nsm_service_id",
+                "nsm_service_port",
+            ],
+            "every field, in key order"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.version == 0 && e.key.is_reserved()),
+            "{entries:?}"
+        );
+        // Values are the fields' text: numbers as digits, addresses as the
+        // command line takes them.
+        let value = |k: &str| {
+            entries
+                .iter()
+                .find(|e| e.key.as_str() == k)
+                .map(|e| e.value.as_str())
         };
-        let client = ClientRecord {
-            id: PartyId(u64::MAX),
-            key: u64::MAX,
-            bind_addr: Addr::new(Transport::Https, host, u16::MAX),
-            service: PartyId(u64::MAX),
-            ping: false,
+        assert_eq!(value("nsm_key"), Some("42"));
+        assert_eq!(value("nsm_service_id"), Some("3"));
+        assert_eq!(value("nsm_client_id"), Some("4"));
+        assert_eq!(value("nsm_service_port"), Some("9000"));
+        assert_eq!(value("nsm_service_address"), Some("10.0.0.5"));
+        assert_eq!(value("nsm_service"), Some("10.0.0.5:9000"));
+        assert_eq!(value("nsm_mesh_service_port"), Some("9001"));
+        assert_eq!(value("nsm_mesh_service"), Some("https://10.0.0.5:9001"));
+        assert_eq!(value("nsm_mesh_client_address"), Some("10.0.0.6"));
+        assert_eq!(value("nsm_mesh_client"), Some("https://10.0.0.6:7000"));
+        assert_eq!(
+            value("nsm_mesh_data").map(|v| serde_json::from_str::<MeshData>(v).unwrap()),
+            Some(both.clone())
+        );
+        // Every key is a valid store key, as the wire and the command line
+        // check them.
+        for e in &entries {
+            assert_eq!(e.key.as_str().parse::<StoreKey>().as_ref(), Ok(&e.key));
+        }
+        // A side that is not there: null in the aggregate, no entry of its
+        // own.
+        let alone = MeshData::new(42, Some(&service()), None).entries().unwrap();
+        let keys: Vec<&str> = alone.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "nsm_key",
+                "nsm_mesh_data",
+                "nsm_mesh_service",
+                "nsm_mesh_service_address",
+                "nsm_mesh_service_port",
+                "nsm_service",
+                "nsm_service_address",
+                "nsm_service_id",
+                "nsm_service_port",
+            ]
+        );
+        assert_eq!(
+            MeshData::new(1, None, None).entries().unwrap().len(),
+            2,
+            "the key and the aggregate"
+        );
+        // A list reply carrying them all still yields the aggregate.
+        let listed = Stored {
+            client: Some(PartyId(4)),
+            revision: 7,
+            applied: true,
+            entries,
         };
+        assert_eq!(listed.mesh_data().unwrap(), Some(both));
+    }
+
+    #[test]
+    fn the_brokers_entries_at_their_largest_fit_the_reply_overhead() {
+        // A `list` carries the broker's entries beside the stored ones, so
+        // REPLY_OVERHEAD, which `listen` adds to the budget when it checks
+        // the frame limit, must cover them all at their largest together
+        // with the reply's own fields.
         let reply = crate::protocol::Message::Stored(Stored {
             client: Some(PartyId(u64::MAX)),
             revision: u64::MAX,
-            applied: true,
-            entries: vec![
-                MeshData::new(u64::MAX, Some(&service), Some(&client))
-                    .entry()
-                    .unwrap(),
-            ],
+            applied: false,
+            entries: MeshData::largest().entries().unwrap(),
         });
         let wire = serde_json::to_vec(&reply).unwrap().len();
-        let smallest_frame = 256 + crate::broker::store::REPLY_OVERHEAD;
         assert!(
-            wire <= smallest_frame,
-            "{wire} bytes do not fit the smallest frame of {smallest_frame}"
+            wire <= crate::broker::store::REPLY_OVERHEAD,
+            "{wire} bytes exceed the reply overhead of {}",
+            crate::broker::store::REPLY_OVERHEAD
         );
     }
 }

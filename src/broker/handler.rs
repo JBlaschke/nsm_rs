@@ -651,18 +651,25 @@ mod tests {
             assert_eq!(unknown, wrong_token);
 
             // Right token, but nobody holds the service: it reads an empty
-            // store and may not write.
-            assert_eq!(
-                h.handle(relay(service, service_token, StoreOp::List), peer())
-                    .await
-                    .unwrap(),
-                Message::Stored(Stored {
-                    client: None,
-                    revision: 0,
-                    applied: true,
-                    entries: vec![],
-                })
-            );
+            // store (a list shows the broker's own entries alone) and may
+            // not write.
+            match h
+                .handle(relay(service, service_token, StoreOp::List), peer())
+                .await
+                .unwrap()
+            {
+                Message::Stored(empty) => {
+                    assert_eq!(
+                        (empty.client, empty.revision, empty.applied),
+                        (None, 0, true)
+                    );
+                    assert!(
+                        empty.entries.iter().all(|e| e.key.is_reserved()),
+                        "{empty:?}"
+                    );
+                }
+                other => panic!("{other:?}"),
+            }
             assert_eq!(
                 h.handle(relay(service, service_token, put("5")), peer())
                     .await

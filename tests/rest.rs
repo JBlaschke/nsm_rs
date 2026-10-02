@@ -436,13 +436,24 @@ async fn store_through_the_api() {
             assert_eq!(status, StatusCode::OK, "{listed}");
             assert_eq!(listed["client"], owner, "{party}: {listed}");
             assert_eq!(listed["revision"], second["revision"], "{party}: {listed}");
+            // The stored keys, with the broker's own nsm_ keys among them
+            // at version 0.
             let keys: Vec<&str> = listed["entries"]
                 .as_array()
                 .expect("entries")
                 .iter()
+                .filter(|e| e["version"] != 0)
                 .filter_map(|e| e["key"].as_str())
                 .collect();
             assert_eq!(keys, ["input/path", "step"], "{party}: {listed}");
+            assert!(
+                listed["entries"]
+                    .as_array()
+                    .expect("entries")
+                    .iter()
+                    .any(|e| e["key"] == "nsm_mesh_data" && e["version"] == 0),
+                "{party}: {listed}"
+            );
             assert_eq!(listed["entries"][0]["value"], json!("/scratch/in 1.h5"));
         }
 
@@ -467,21 +478,38 @@ async fn store_through_the_api() {
         assert_eq!(unset["client"], owner, "{unset}");
 
         // A service nobody holds reads an empty store and may not write:
-        // get and list answer with no client, put and delete are refused.
+        // a get answers with no client and no entry, a list with no client
+        // and the broker's own entries alone, put and delete are refused.
         let lonely = cluster.publish(8, 9101).await;
         let lonely_hb = lonely.bound().to_string();
-        for read in [
-            json!({ "party": lonely_hb, "op": "get", "key": "step" }),
-            json!({ "party": lonely_hb, "op": "list" }),
-        ] {
-            let (status, empty) = api.post("/v1/store", &read).await;
-            assert_eq!(status, StatusCode::OK, "{read}: {empty}");
-            assert_eq!(
-                empty,
-                json!({ "client": null, "revision": 0, "applied": true, "entries": [] }),
-                "{read}"
-            );
-        }
+        let (status, empty) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": lonely_hb, "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(
+            empty,
+            json!({ "client": null, "revision": 0, "applied": true, "entries": [] })
+        );
+        let (status, listed) = api
+            .post("/v1/store", &json!({ "party": lonely_hb, "op": "list" }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        assert_eq!((&listed["client"], &listed["revision"]), (&Value::Null, &json!(0)));
+        let entries = listed["entries"].as_array().expect("entries");
+        assert!(
+            !entries.is_empty()
+                && entries.iter().all(|e| {
+                    e["version"] == 0 && e["key"].as_str().is_some_and(|k| k.starts_with("nsm_"))
+                }),
+            "{listed}"
+        );
+        assert!(
+            entries.iter().all(|e| e["key"] != "nsm_mesh_client"),
+            "no client yet: {listed}"
+        );
         for write in [
             json!({ "party": lonely_hb, "op": "put", "key": "step", "value": "5" }),
             json!({ "party": lonely_hb, "op": "delete", "key": "step" }),
