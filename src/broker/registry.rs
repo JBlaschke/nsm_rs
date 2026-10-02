@@ -45,6 +45,11 @@
 //!   (`nsm_mesh_data` as one JSON value, and one entry per field that is
 //!   set). `store` answers a get of one from there, adds them all to a
 //!   list, and refuses a put or a delete of any of them.
+//! - [`store_by_key`](Registry::store_by_key) is `store` for the party
+//!   [`resolve_key`](Registry::resolve_key) finds under a rendezvous key
+//!   (discovery plan, decision L5): the one client under the key, or the
+//!   one service when no client is, or the named `party_id`; an ambiguous
+//!   key is refused with the candidates listed.
 //! - [`deliver`](Registry::deliver) parks text as the sender's peer's
 //!   pending *inbox* (a later delivery replaces an earlier one): a client's
 //!   text goes to its service, a service's text to the client holding it.
@@ -669,6 +674,70 @@ impl Registry {
         })
     }
 
+    /// The party a store operation addressed by rendezvous key means
+    /// (discovery plan, decision L5): with `party_id`, that party, which
+    /// must be under `key`; otherwise the one client under `key` (so its
+    /// claim's store), or, when no client is under it, the one service
+    /// (which reads an empty store and may not write). Ids are not secrets,
+    /// so the refusals name them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Rejected`] when nothing is under the key (`"no party under
+    /// key 1234"`), when the named party is not under it or does not exist
+    /// (`"no party 7 under key 1234"`, one text for both), and when the
+    /// key is ambiguous (`"key 1234 has 2 clients (4, 7); name one with
+    /// party_id"`, or `"key 1234 has 2 unclaimed services (1, 3); name one
+    /// with party_id"`).
+    pub fn resolve_key(&self, key: Key, party_id: Option<PartyId>) -> Result<PartyId> {
+        if let Some(id) = party_id {
+            return match self.get(id) {
+                Some(party) if party.key() == key => Ok(id),
+                _ => Err(Error::Rejected(format!("no party {id} under key {key}"))),
+            };
+        }
+        let clients: Vec<PartyId> = self
+            .clients
+            .values()
+            .filter(|c| c.record.key == key)
+            .map(|c| c.record.id)
+            .collect();
+        match clients.as_slice() {
+            [one] => return Ok(*one),
+            [] => {}
+            many => return Err(ambiguous_key(key, "clients", many)),
+        }
+        let services: Vec<PartyId> = self
+            .services
+            .values()
+            .filter(|s| s.record.key == key)
+            .map(|s| s.record.id)
+            .collect();
+        match services.as_slice() {
+            [one] => Ok(*one),
+            [] => Err(Error::Rejected(format!("no party under key {key}"))),
+            many => Err(ambiguous_key(key, "unclaimed services", many)),
+        }
+    }
+
+    /// [`store`](Registry::store) for the party
+    /// [`resolve_key`](Registry::resolve_key) finds under `key`: what a
+    /// `store_by_key` from an operator asks for.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`resolve_key`](Registry::resolve_key), then those of
+    /// [`store`](Registry::store).
+    pub fn store_by_key(
+        &mut self,
+        key: Key,
+        party_id: Option<PartyId>,
+        op: StoreOp,
+    ) -> Result<Stored> {
+        let from = self.resolve_key(key, party_id)?;
+        self.store(from, op)
+    }
+
     // ----- liveness ---------------------------------------------------------
 
     /// Record that the party answered (a heartbeat succeeded or a ping
@@ -841,6 +910,17 @@ impl Registry {
             .get_mut(&id)
             .map(|client| (&mut client.failures, &mut client.last_seen))
     }
+}
+
+/// The refusal of a key with more than one candidate: `key 1234 has 2
+/// clients (4, 7); name one with party_id`.
+fn ambiguous_key(key: Key, what: &str, ids: &[PartyId]) -> Error {
+    let ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
+    Error::Rejected(format!(
+        "key {key} has {} {what} ({}); name one with party_id",
+        ids.len(),
+        ids.join(", ")
+    ))
 }
 
 #[cfg(test)]
@@ -2244,6 +2324,112 @@ mod tests {
     fn stored_only(mut reply: Stored) -> Stored {
         reply.entries.retain(|e| !e.key.is_reserved());
         reply
+    }
+
+    #[test]
+    fn a_key_resolves_to_its_one_claim_or_its_one_service() {
+        let mut r = registry(8);
+        let t = now();
+        let refused =
+            |r: &Registry, key: Key, party: Option<PartyId>| match r.resolve_key(key, party) {
+                Err(Error::Rejected(reason)) => reason,
+                other => panic!("resolve {key} {party:?}: {other:?}"),
+            };
+        assert_eq!(refused(&r, KEY, None), "no party under key 42");
+        assert_eq!(
+            refused(&r, KEY, Some(PartyId(1))),
+            "no party 1 under key 42"
+        );
+
+        // One service, nobody holding it: the service.
+        let s1 = publish(&mut r, KEY, false, t);
+        assert_eq!(r.resolve_key(KEY, None).unwrap(), s1);
+        assert_eq!(
+            stored_only(r.store_by_key(KEY, None, StoreOp::List).unwrap()),
+            empty_unclaimed()
+        );
+        assert_eq!(
+            store_refusal_by_key(&mut r, KEY, None, put("step", "5")),
+            format!("service {s1} is not claimed")
+        );
+        // Two unclaimed services: ambiguous, unless one is named.
+        let s2 = publish(&mut r, KEY, false, t);
+        assert_eq!(
+            refused(&r, KEY, None),
+            "key 42 has 2 unclaimed services (1, 2); name one with party_id"
+        );
+        assert_eq!(r.resolve_key(KEY, Some(s2)).unwrap(), s2);
+        // One client: its claim, whichever service is spare.
+        let (c1, h1) = claim(&mut r, KEY, false, t);
+        assert_eq!(h1.id, s1);
+        assert_eq!(r.resolve_key(KEY, None).unwrap(), c1);
+        assert_eq!(
+            r.store_by_key(KEY, None, put("step", "5")).unwrap(),
+            stored(c1, 1, vec![entry("step", "5", 1)])
+        );
+        // Either side of the claim names the same store; the spare its own
+        // empty view.
+        assert_eq!(
+            r.store_by_key(KEY, Some(s1), get("step")).unwrap(),
+            stored(c1, 1, vec![entry("step", "5", 1)])
+        );
+        assert_eq!(
+            r.store_by_key(KEY, Some(s2), get("step")).unwrap(),
+            empty_unclaimed()
+        );
+        // The reserved entry resolves the same way.
+        assert_eq!(
+            r.store_by_key(KEY, None, get(MESH_DATA_KEY))
+                .unwrap()
+                .mesh_data()
+                .unwrap(),
+            r.mesh_data(c1)
+        );
+        // Two clients: ambiguous, unless one party of a claim is named.
+        let (c2, h2) = claim(&mut r, KEY, false, t);
+        assert_eq!(h2.id, s2);
+        assert_eq!(
+            refused(&r, KEY, None),
+            format!("key 42 has 2 clients ({c1}, {c2}); name one with party_id")
+        );
+        assert_eq!(r.resolve_key(KEY, Some(c2)).unwrap(), c2);
+        assert_eq!(
+            r.store_by_key(KEY, Some(s2), get("step")).unwrap(),
+            stored(c2, 0, vec![]),
+            "the second claim's own, empty store, through its service"
+        );
+        // A party under another key, or none at all, is not under this one.
+        let other = publish(&mut r, KEY + 1, false, t);
+        assert_eq!(
+            refused(&r, KEY, Some(other)),
+            format!("no party {other} under key 42")
+        );
+        assert_eq!(
+            refused(&r, KEY, Some(PartyId(99))),
+            "no party 99 under key 42"
+        );
+        assert_eq!(r.resolve_key(KEY + 1, None).unwrap(), other);
+        // An orphan is still the key's one client.
+        let _ = r.remove(s1);
+        let _ = r.remove(c2);
+        let _ = r.remove(s2);
+        assert_eq!(r.resolve_key(KEY, None).unwrap(), c1);
+        assert_eq!(
+            r.store_by_key(KEY, None, get("step")).unwrap(),
+            stored(c1, 1, vec![entry("step", "5", 1)])
+        );
+    }
+
+    fn store_refusal_by_key(
+        r: &mut Registry,
+        key: Key,
+        party: Option<PartyId>,
+        op: StoreOp,
+    ) -> String {
+        match r.store_by_key(key, party, op) {
+            Err(Error::Rejected(reason)) => reason,
+            other => panic!("store by key {key}: expected a refusal, got {other:?}"),
+        }
     }
 
     /// What the churn test expects of one claim's store.

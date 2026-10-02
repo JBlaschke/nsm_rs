@@ -26,6 +26,7 @@
 //! | [`Collect`](Message::Collect) | `collect` → party | [`Collected`](Message::Collected) |
 //! | [`Store`](Message::Store) | `store` → party | [`Stored`](Message::Stored) or [`Nack`](Message::Nack) |
 //! | [`StoreRelay`](Message::StoreRelay) | party → broker (relay of a `Store`), with its token | [`Stored`](Message::Stored) or [`Nack`](Message::Nack) |
+//! | [`StoreByKey`](Message::StoreByKey) | `store --key` → broker, by rendezvous key | [`Stored`](Message::Stored) or [`Nack`](Message::Nack) |
 //!
 //! "Party" means a service or a client; each runs a small server on its
 //! `bind_addr` that the broker (and the `send`, `collect` and `store`
@@ -37,7 +38,9 @@
 //! and that the broker quotes in every [`Heartbeat`](Message::Heartbeat) it
 //! sends. Party ids are small sequential integers and are not secrets; the
 //! token is what stops a third party from acting on another party's behalf
-//! or from spoofing its broker.
+//! or from spoofing its broker. [`StoreByKey`](Message::StoreByKey) carries
+//! no token: the rendezvous key is the capability there, as it is for
+//! [`Claim`](Message::Claim) and [`Publish`](Message::Publish).
 
 use serde::{Deserialize, Serialize};
 
@@ -58,9 +61,10 @@ use crate::net::Addr;
 ///
 /// Version 3 also carries [`Store`](Message::Store),
 /// [`StoreRelay`](Message::StoreRelay) and [`Stored`](Message::Stored), added
-/// later as new variants, and the optional `if_version` of a put or a delete
+/// later as new variants, the optional `if_version` of a put or a delete
 /// with `applied` on `stored`, added later still as fields that decode when
-/// absent; neither needs a bump.
+/// absent, and [`StoreByKey`](Message::StoreByKey), one more variant; none
+/// needs a bump.
 pub const PROTOCOL_VERSION: u16 = 3;
 
 /// One wire message: a request to the broker or to a party, or a reply.
@@ -197,6 +201,36 @@ pub enum Message {
         from: PartyId,
         /// The relaying party's registration token.
         token: RegToken,
+        /// The operation, its fields next to `type` on the wire.
+        #[serde(flatten)]
+        op: StoreOp,
+    },
+
+    /// Apply `op` to the store of the claim under a rendezvous key.
+    ///
+    /// Sent by the `store` operation to the broker when the operator knows
+    /// the key and the broker's address but not where the parties listen
+    /// (discovery plan, decisions L5 and L6). The broker resolves the key
+    /// to one party and answers as if that party had relayed the operation:
+    /// the one client under the key, so its claim's store; when no client
+    /// is under it, the one service, which reads an empty store and may not
+    /// write; with `party_id`, that party, which must be under the key. A
+    /// key with two or more clients, or with no client and two or more
+    /// services, is refused with the candidates listed. No token travels:
+    /// the rendezvous key is the capability, as it is for
+    /// [`Message::Claim`] and [`Message::Publish`].
+    ///
+    /// Reply: [`Message::Stored`] or [`Message::Nack`], as for
+    /// [`Message::StoreRelay`], plus the refusals of the resolution (`no
+    /// party under key 1234`, `key 1234 has 2 clients (4, 7); name one with
+    /// party_id`, `no party 7 under key 1234`).
+    StoreByKey {
+        /// The rendezvous key of the claim.
+        rendezvous: Key,
+        /// One party of the key, a client or a service, when the key has
+        /// more than one claim.
+        #[serde(default)]
+        party_id: Option<PartyId>,
         /// The operation, its fields next to `type` on the wire.
         #[serde(flatten)]
         op: StoreOp,
@@ -353,6 +387,7 @@ impl Message {
             Message::Deliver { .. } => "deliver",
             Message::Heartbeat { .. } => "heartbeat",
             Message::StoreRelay { .. } => "store_relay",
+            Message::StoreByKey { .. } => "store_by_key",
             Message::Collect => "collect",
             Message::Store { .. } => "store",
             Message::Registered { .. } => "registered",
@@ -453,6 +488,13 @@ pub(crate) fn all_variants() -> Vec<Message> {
                 if_version: Some(0),
             },
         },
+        Message::StoreByKey {
+            rendezvous: 42,
+            party_id: Some(PartyId(4)),
+            op: StoreOp::Get {
+                key: store_key("nsm_mesh_data"),
+            },
+        },
         Message::Stored(Stored {
             client: Some(PartyId(4)),
             revision: 9,
@@ -494,7 +536,7 @@ mod tests {
             kinds.len(),
             "duplicate variant in all_variants"
         );
-        assert_eq!(kinds.len(), 16, "a variant was added; extend all_variants");
+        assert_eq!(kinds.len(), 17, "a variant was added; extend all_variants");
     }
 
     #[test]
@@ -891,6 +933,55 @@ mod tests {
             serde_json::to_string(&list).unwrap(),
             format!(r#"{{"type":"store_relay","from":2,"token":"{hex}","op":"list"}}"#)
         );
+    }
+
+    #[test]
+    fn store_by_key_json_shape_keeps_the_two_keys_apart() {
+        // The rendezvous key is `rendezvous`; the store key stays `key`,
+        // next to `type` with the rest of the operation.
+        let msg = Message::StoreByKey {
+            rendezvous: 1234,
+            party_id: Some(PartyId(7)),
+            op: StoreOp::Get {
+                key: store_key("step"),
+            },
+        };
+        let json =
+            r#"{"type":"store_by_key","rendezvous":1234,"party_id":7,"op":"get","key":"step"}"#;
+        assert_eq!(serde_json::to_string(&msg).unwrap(), json);
+        assert_eq!(decode(json).unwrap(), msg);
+        let any = Message::StoreByKey {
+            rendezvous: 1234,
+            party_id: None,
+            op: StoreOp::Put {
+                key: store_key("step"),
+                value: "5".into(),
+                if_version: Some(0),
+            },
+        };
+        let json = r#"{"type":"store_by_key","rendezvous":1234,"party_id":null,"op":"put","key":"step","value":"5","if_version":0}"#;
+        assert_eq!(serde_json::to_string(&any).unwrap(), json);
+        assert_eq!(decode(json).unwrap(), any);
+        // Like every Option, a missing party_id is none; the rendezvous
+        // key and the operation are required, and it carries no token.
+        assert_eq!(
+            decode(r#"{"type":"store_by_key","rendezvous":1234,"op":"list"}"#).unwrap(),
+            Message::StoreByKey {
+                rendezvous: 1234,
+                party_id: None,
+                op: StoreOp::List,
+            }
+        );
+        for bad in [
+            r#"{"type":"store_by_key","op":"list"}"#,
+            r#"{"type":"store_by_key","rendezvous":"1234","op":"list"}"#,
+            r#"{"type":"store_by_key","rendezvous":1234}"#,
+            r#"{"type":"store_by_key","rendezvous":1234,"party_id":-1,"op":"list"}"#,
+            r#"{"type":"store_by_key","rendezvous":1234,"op":"get"}"#,
+        ] {
+            assert!(decode(bad).is_err(), "{bad} should not decode");
+        }
+        assert!(!serde_json::to_string(&any).unwrap().contains("token"));
     }
 
     #[test]
