@@ -246,7 +246,7 @@ impl BrokerHandler {
                 );
                 let kind = StoreOpKind::from(&op);
                 // The registry resolves the key to one party; no token, the
-                // key is the capability (discovery plan, decision L6).
+                // key is the capability (decision D27).
                 let outcome = self
                     .broker
                     .with_registry(|r| r.store_by_key(rendezvous, party_id, op));

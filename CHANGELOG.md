@@ -156,8 +156,7 @@ version: 3.
 - `--bind-port` is optional on `publish` and `claim`: left out, or given
   as 0, the operating system picks a free port for the party's heartbeat
   listener, and the party prints the address it bound on stderr. `listen`
-  still requires it: the broker is the one fixed address. Discovery plan,
-  decision L1.
+  still requires it: the broker is the one fixed address. Decision D25.
 - The broker's own store keys, through `nsm store` and `POST /v1/store`:
   where the parties of the claim listen, built from the broker's registry
   when asked and never stored. `nsm_mesh_data` is all of it as one JSON
@@ -174,7 +173,7 @@ version: 3.
   reserved from now on: a put or a delete of one is refused (exit 1, HTTP
   400). In the library: `protocol::MeshData` with `entries`,
   `StoreKey::is_reserved`, `StoreKey::mesh_data`, `Stored::mesh_data` and
-  `Registry::mesh_data`. Discovery plan, decisions L2 to L4.
+  `Registry::mesh_data`. Decisions D25 and D26.
 - `store_by_key`: a store operation addressed to the broker by rendezvous
   key, for a script that knows the key and the broker's address but not
   where the parties listen. The broker resolves the key to its one claim
@@ -191,8 +190,7 @@ version: 3.
   operations by key count in `nsm_store_ops_total`. In the library:
   `Message::StoreByKey`, `Registry::resolve_key` and
   `Registry::store_by_key`, `ops::StoreTarget` and `ops::store_by_key`,
-  `cli::StoreWhere`, `rest::StoreBody::target`. Discovery plan, decisions
-  L5 to L9.
+  `cli::StoreWhere`, `rest::StoreBody::target`. Decisions D27 and D28.
 - Graceful shutdown on Ctrl-C and SIGTERM.
 - Tests: 160+ unit tests, end-to-end tests over all four transports, control
   plane and binary tests, a stress test; CI on Linux and macOS with both

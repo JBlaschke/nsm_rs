@@ -38,8 +38,8 @@
 //!   a service nobody holds reads an empty store and may not write (D17).
 //!   Every write takes the next number from one version counter for the
 //!   broker's whole life, starting at 1 (decision D18).
-//! - Store keys starting with `nsm_` are the broker's (discovery plan,
-//!   decision L3) and never reach a [`Store`]: they are the entries of
+//! - Store keys starting with `nsm_` are the broker's (decision D26) and
+//!   never reach a [`Store`]: they are the entries of
 //!   [`mesh_data`](Registry::mesh_data), where the parties of the asking
 //!   party's claim listen, projected from the records at version 0
 //!   (`nsm_mesh_data` as one JSON value, and one entry per field that is
@@ -47,7 +47,7 @@
 //!   list, and refuses a put or a delete of any of them.
 //! - [`store_by_key`](Registry::store_by_key) is `store` for the party
 //!   [`resolve_key`](Registry::resolve_key) finds under a rendezvous key
-//!   (discovery plan, decision L5): the one client under the key, or the
+//!   (decision D27): the one client under the key, or the
 //!   one service when no client is, or the named `party_id`; an ambiguous
 //!   key is refused with the candidates listed.
 //! - [`deliver`](Registry::deliver) parks text as the sender's peer's
@@ -556,8 +556,8 @@ impl Registry {
     /// that is an answer, not an error. Tokens are not checked here; the
     /// handler verifies them first.
     ///
-    /// Store keys starting with `nsm_` are the broker's (discovery plan,
-    /// decision L3) and never reach the [`Store`]: they are the entries of
+    /// Store keys starting with `nsm_` are the broker's (decision D26) and
+    /// never reach the [`Store`]: they are the entries of
     /// [`mesh_data`](Registry::mesh_data), at version 0. A get of one
     /// answers it (no entry when that side of the claim is not there, or
     /// when the key is one the broker does not know), a list carries them
@@ -675,7 +675,7 @@ impl Registry {
     }
 
     /// The party a store operation addressed by rendezvous key means
-    /// (discovery plan, decision L5): with `party_id`, that party, which
+    /// (decision D27): with `party_id`, that party, which
     /// must be under `key`; otherwise the one client under `key` (so its
     /// claim's store), or, when no client is under it, the one service
     /// (which reads an empty store and may not write). Ids are not secrets,
@@ -813,7 +813,7 @@ impl Registry {
     }
 
     /// Where the parties of `from`'s claim listen, for the reserved store
-    /// entry `nsm_mesh_data` (discovery plan, decisions L2 to L4): for a
+    /// entry `nsm_mesh_data` (decisions D25 and D26): for a
     /// client, itself and the service it holds (none between losing its
     /// service and being re-paired); for a service, itself and the client
     /// holding it (none while it is unclaimed). Built from the records on

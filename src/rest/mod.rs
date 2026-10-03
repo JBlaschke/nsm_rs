@@ -36,7 +36,7 @@
 //! is. A store body names either a party (`party`) or the broker with a
 //! rendezvous key (`broker` and `rendezvous`, and `party_id` when the key
 //! has several claims); the one `ops::StoreTarget` behind the route is the
-//! command line's too (discovery plan, decision L8).
+//! command line's too (decision D28).
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;

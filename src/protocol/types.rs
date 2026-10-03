@@ -19,7 +19,7 @@
 //!   entries the operation returns;
 //! - [`MeshData`] is where the parties of a claim listen: the value of the
 //!   reserved store entry `nsm_mesh_data`, which the broker builds from its
-//!   registry when it is read (discovery plan, decisions L3 and L4).
+//!   registry when it is read (decision D26).
 //!
 //! All of them serialise as plain JSON and travel inside
 //! [`Message`](super::Message) variants; none of them is ever sent bare
@@ -261,8 +261,8 @@ pub struct ClientRecord {
 /// Longest [`StoreKey`], in bytes.
 pub const MAX_STORE_KEY_BYTES: usize = 128;
 
-/// The prefix of the store keys the broker keeps for itself (discovery
-/// plan, decision L3). They are projected from the registry when read, so a
+/// The prefix of the store keys the broker keeps for itself (decision
+/// D26). They are projected from the registry when read, so a
 /// `list` shows them beside the stored entries at version 0, a `get` of one
 /// the broker does not know answers no entry, and a put or a delete of one
 /// is refused: nothing reserved is ever stored or counted against a budget.
@@ -559,7 +559,7 @@ impl Stored {
 }
 
 /// Where the parties of a claim listen: the value of the reserved store
-/// entry `nsm_mesh_data` (discovery plan, decisions L3 and L4).
+/// entry `nsm_mesh_data` (decision D26).
 ///
 /// The broker builds it from its registry when the entry is read, for the
 /// claim of whichever party the read concerns: a client and the service it

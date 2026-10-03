@@ -256,7 +256,7 @@ pub async fn send(party: &Addr, text: String, net: &NetOpts) -> Result<()> {
     }
 }
 
-/// Where a store operation goes (discovery plan, decisions L5 and L7): to
+/// Where a store operation goes (decisions D27 and D28): to
 /// a party, which relays it with its token, or to the broker by rendezvous
 /// key. [`StoreTarget::store`] applies an operation at either.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,7 +318,7 @@ pub async fn store(party: &Addr, op: StoreOp, net: &NetOpts) -> Result<Stored> {
 
 /// Apply `op` to the store of the claim under rendezvous `key`, at the
 /// broker at `broker`, for a caller that knows the key but not where the
-/// parties listen (discovery plan, decision L5). The broker answers as if
+/// parties listen (decision D27). The broker answers as if
 /// the key's one party had relayed the operation: the one client under the
 /// key, or the one service when no client is under it (which reads an empty
 /// store and may not write), or `party` when it is given, which must be a

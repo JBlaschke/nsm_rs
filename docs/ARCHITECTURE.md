@@ -422,7 +422,9 @@ are decisions P1 to P10; D17 to D20 from the shared-store plan of the same
 month ([`history/2026-shared-store/`](history/2026-shared-store/PLAN.md)),
 where they are decisions S1 to S12; D21 to D24 from the monitoring plan of
 October 2026 ([`history/2026-monitoring/`](history/2026-monitoring/PLAN.md)),
-where they are decisions M1 to M10.
+where they are decisions M1 to M10; and D25 to D28 from the discovery plan
+of the same month ([`history/2026-discovery/`](history/2026-discovery/PLAN.md)),
+where they are decisions L1 to L10.
 
 | # | Decision |
 |---|---|
@@ -450,6 +452,10 @@ where they are decisions M1 to M10.
 | D22 | One status document. `Status` (version, start time and uptime, the bound address, the limits and timing in force, the counts, a per-key and a per-host breakdown, the counters since start, every party) is the body of `GET /v1/status` and the input of `nsm status`, which prints `Status::summary`, or the document as one JSON line with `--json`; `--parties` adds a row per party, and `--watch SECS` repeats with a timestamp header and never clears the screen. The per-key and per-host breakdowns live here and not as metric labels. |
 | D23 | A separate admin listener, off by default. `nsm listen --admin-bind ADDR` serves `GET /metrics`, `GET /v1/status` and `GET /healthz` over plain HTTP on a second socket parties never use, checked and bound before anything else starts. D9 applies: loopback, or `--admin-token` (`NSM_ADMIN_TOKEN`) on every request, compared in constant time. Nothing changes on the wire (`PROTOCOL_VERSION` stays 3); counters reset with the broker, and `nsm_start_time_seconds` says when. |
 | D24 | A local stack, with and without containers. `deploy/monitoring/` runs Prometheus and Grafana on loopback by compose with the datasource and the `NSM broker` dashboard provisioned, scraping a broker on the host (token from a file) or one inside the stack (`--profile broker`); `scripts/monitoring-local.sh fetch\|start\|status\|stop` runs the same two servers as the current user from one work directory on hosts without containers, `fetch` checking the published SHA-256 sums of what it downloads. |
+| D25 | `--bind-port` is optional on `publish` and `claim`: left out, or given as 0, the operating system picks a free port for the party's heartbeat listener when it is bound, with no scan (binding port 0 is atomic and race-free, and the kernel's ephemeral range is the site's to set). The party prints the address it got, the registration carries it and the registry keeps it, so the broker already holds every discovered address and nothing is written into a store for it. `listen` keeps a required `--bind-port`: the broker is the one fixed address. |
+| D26 | Store keys starting with `nsm_` are the broker's: projected from its registry when read, never stored, never written, counted against no budget, so they are always current across re-pairings. They say where the parties of the asking party's claim listen. `nsm_mesh_data` is the whole picture as one JSON value (`MeshData`: `nsm_service_address` and `nsm_service_port`, `nsm_mesh_service_address` and `nsm_mesh_service_port`, `nsm_mesh_client_address` and `nsm_mesh_client_port`, each endpoint also as one string, `nsm_key` and both party ids; `null` for a side that is not there), and every field that is set is also a key of its own under the field's name, so a shell script reads one value without a JSON parser; a field that is `null` has no entry (exit 3), the polling idiom of any key. All are at version 0; `list` carries them beside the stored entries in one key order; a put or a delete of any `nsm_` key is refused. The reply overhead `listen` adds to the store budget is 4096 bytes, which covers them at their largest. |
+| D27 | A store operation may be addressed to the broker by rendezvous key: `store_by_key { rendezvous, party_id, op }`, answered exactly as if the key's party had relayed it. The broker resolves the key to the one client under it (its claim's store), or to the one service when no client is under it (an empty view, writes refused), or to `party_id`, which must be under the key; two or more clients, or no client and two or more services, are refused with the candidates listed. No token travels: the rendezvous key is the capability, as it is for `publish` and `claim` (whoever knows it can publish under it and be paired with its clients), so this adds no power the key did not give; it changes where the store can be reached from, since the broker is reachable where a party's listener behind NAT or in ping mode may not be. One new variant, so the protocol stays at version 3; `nsm_requests_total` gains `kind="store_by_key"`, and operations by key count in `nsm_store_ops_total`. |
+| D28 | One command and one route, as for the store: `nsm store get\|put\|delete\|list ADDR [STORE_KEY] [--key RENDEZVOUS [--party-id ID]]`, where `ADDR` is a party's heartbeat address or, with `--key`, the broker's (the usage lines say `<ADDR>` and `<STORE_KEY>` to keep the two keys apart), and `POST /v1/store` with `party`, or `broker` and `rendezvous` (and `party_id`), exactly one of the two forms; `ops::StoreTarget` is the one way in for both front-ends. `send`, `collect` and `peer` keep taking a party's address, which the broker's keys hand out. |
 
 ## 12. History
 
@@ -476,3 +482,10 @@ The monitoring work of October 2026, recorded under
 broker an admin listener with Prometheus metrics and a status document,
 `nsm status` for a shell, and a Prometheus and Grafana stack for a laptop or
 an interactive node; its decisions are D21 to D24.
+
+The discovery-by-key work of the same month, recorded under
+[`history/2026-discovery/`](history/2026-discovery/PLAN.md), let parties
+leave their heartbeat port to the operating system, gave every store the
+broker's own `nsm_` keys that say where a claim's parties listen, and let
+`nsm store` reach a claim's store at the broker by rendezvous key; its
+decisions are D25 to D28.

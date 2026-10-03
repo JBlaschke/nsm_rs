@@ -210,7 +210,7 @@ pub enum Message {
     ///
     /// Sent by the `store` operation to the broker when the operator knows
     /// the key and the broker's address but not where the parties listen
-    /// (discovery plan, decisions L5 and L6). The broker resolves the key
+    /// (decision D27). The broker resolves the key
     /// to one party and answers as if that party had relayed the operation:
     /// the one client under the key, so its claim's store; when no client
     /// is under it, the one service, which reads an empty store and may not

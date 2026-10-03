@@ -1,22 +1,30 @@
-# Discovery by key: plan
+# Discovery by key: plan and record
 
-> Written on 2026-10-02 against `main` at `4f895335` (after the monitoring
-> work, [#13](https://github.com/JBlaschke/nsm_rs/pull/13)), to be executed
-> on the stacked branches `discover/01` to `discover/03`. Section 2 lists the
-> decisions with what was taken and what to change if you disagree; section 3
-> says what each branch contains; section 4 what is left out on purpose. The
-> plan before this one is the [monitoring work](history/2026-monitoring/PLAN.md).
+> This is the plan that drove the October 2026 discovery-by-key work, kept
+> as a record. It was written on 2026-10-02 against `main` at `4f895335`
+> (after the monitoring work, [#13](https://github.com/JBlaschke/nsm_rs/pull/13)),
+> executed on the stacked branches `discover/01` to `discover/03`, and merged
+> through [#14](https://github.com/JBlaschke/nsm_rs/pull/14). The status
+> table in section 0 is final. The decisions in section 2 live on in
+> [`ARCHITECTURE.md`](../../ARCHITECTURE.md) under "Design decisions" as D25
+> to D28; the follow-ups in section 4 are still open. The plan before this
+> one is the [monitoring work](../2026-monitoring/PLAN.md).
+>
+> Section 2 lists the decisions with what was taken and what to change if
+> you disagree; section 3 says what each branch contains; section 4 what was
+> left out on purpose. Decisions L3 and L4 were revised after review, as
+> their "Taken" column says.
 
 ## 0. Status
 
 | Branch | State | Notes |
 |---|---|---|
-| `discover/01-optional-bind-port` | planned | `--bind-port` is optional on `publish` and `claim`: omitted, the operating system picks a free port when the heartbeat listener is bound |
-| `discover/02-mesh-data` | planned | the reserved `nsm_` store keys: where the parties of a claim listen, answered by the broker from its registry to whichever party relays the read, as one JSON value under `nsm_mesh_data` and one entry per field; `list` shows them |
-| `discover/03-store-by-key` | planned | `store_by_key`: a store operation addressed to the broker by rendezvous key; `nsm store ... ADDR --key RENDEZVOUS [--party-id ID]`; `POST /v1/store` with `broker` and `rendezvous` |
+| `discover/01-optional-bind-port` | done | `--bind-port` is optional on `publish` and `claim`: omitted, the operating system picks a free port when the heartbeat listener is bound |
+| `discover/02-mesh-data` | done | the reserved `nsm_` store keys: where the parties of a claim listen, answered by the broker from its registry to whichever party relays the read, as one JSON value under `nsm_mesh_data` and one entry per field; `list` shows them |
+| `discover/03-store-by-key` | done | `store_by_key`: a store operation addressed to the broker by rendezvous key; `nsm store ... ADDR --key RENDEZVOUS [--party-id ID]`; `POST /v1/store` with `broker` and `rendezvous` |
 
 Each branch builds on the previous one and passes the checks in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) at its tip.
+[`CONTRIBUTING.md`](../../../CONTRIBUTING.md) at its tip.
 
 ## 1. The request
 

@@ -7,7 +7,7 @@
 //! `store` is a group of four subcommands ([`StoreCommand`]), one per
 //! operation on the store a client shares with its service, reached through
 //! either party's heartbeat address or, with `--key RENDEZVOUS`, at the
-//! broker by rendezvous key (discovery plan, decision L7). `status` is the
+//! broker by rendezvous key (decision D28). `status` is the
 //! one command that talks to a broker's admin listener instead of a party.
 //!
 //! The transport is taken from the peer address: `host:port` is raw TCP,
@@ -16,9 +16,9 @@
 //!
 //! A party's heartbeat port (`--bind-port` on `publish` and `claim`) may be
 //! left out: the operating system then picks a free one when the listener
-//! is bound, and the party prints the address it got (discovery plan,
-//! decision L1). The broker's port is the one fixed address of the mesh and
-//! stays required on `listen`.
+//! is bound, and the party prints the address it got (decision D25). The
+//! broker's port is the one fixed address of the mesh and stays required on
+//! `listen`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
