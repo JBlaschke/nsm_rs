@@ -308,7 +308,9 @@ fn version_and_help_for_every_command() {
         assert_eq!(sub.code, 0, "store {op} --help");
         for text in [
             "Usage:",
-            "<PARTY>",
+            "<ADDR>",
+            "--key <RENDEZVOUS>",
+            "--party-id <ID>",
             "--json",
             "--root-ca",
             "--request-timeout",
@@ -319,6 +321,12 @@ fn version_and_help_for_every_command() {
                 sub.stdout
             );
         }
+        assert_eq!(
+            sub.stdout.contains("<STORE_KEY>"),
+            op != "list",
+            "store {op}: {}",
+            sub.stdout
+        );
         assert!(
             !sub.stdout.contains("--ip-start"),
             "store {op} takes no interface options"
@@ -435,7 +443,12 @@ fn usage_errors_exit_2_and_explain() {
             &["store", "get", "127.0.0.1:1", "step", "--if-version", "1"],
             "--if-version",
         ),
-        (&["store", "list"], "<PARTY>"),
+        (&["store", "list"], "<ADDR>"),
+        (
+            &["store", "get", "127.0.0.1:1", "step", "--party-id", "3"],
+            "--key",
+        ),
+        (&["store", "list", "127.0.0.1:1", "--key", "abc"], "abc"),
         (&["store", "frobnicate"], "unrecognized subcommand"),
         (&["serve", "--bind", "not-an-address"], "not-an-address"),
     ];
@@ -523,6 +536,7 @@ fn runtime_failures_exit_1_with_a_prefixed_message() {
         argv(&[&["send", &dead, "--msg", "x"], FAST]),
         argv(&[&["store", "get", &dead, "step"], FAST]),
         argv(&[&["store", "put", &dead, "step", "--value", "5"], FAST]),
+        argv(&[&["store", "get", &dead, "step", "--key", "1"], FAST]),
         argv(&[&["collect", &format!("http://{dead}")], FAST]),
     ] {
         let out = run(&args);
@@ -589,14 +603,14 @@ fn full_session(transport: &str) {
     };
     assert!(broker_addr.starts_with(prefix), "{broker_addr}");
 
+    // Neither party names a heartbeat port: the operating system picks
+    // one, and the party says which on stderr.
     let mut service = Proc::spawn(
         "publish",
         &argv(&[
             &[
                 "publish",
                 &broker_addr,
-                "--bind-port",
-                "0",
                 "--service-port",
                 "9000",
                 "--key",
@@ -608,6 +622,10 @@ fn full_session(transport: &str) {
     );
     let service_hb = heartbeat_addr(&service.stderr_line_containing("service registered as "));
     assert!(service_hb.starts_with(prefix), "{service_hb}");
+    assert!(
+        !service_hb.ends_with(":0"),
+        "the party reports the port it got: {service_hb}"
+    );
 
     // Nobody holds the service yet: its store reads as empty ("not yet",
     // exit 3, and an empty list) and refuses writes (exit 1), so a service
@@ -615,15 +633,30 @@ fn full_session(transport: &str) {
     let out = run(argv(&[&["store", "get", &service_hb, "input"], FAST]));
     assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
     assert_eq!(out.stderr, "nsm: input is not set\n");
+    // A list shows the broker's own keys for the service's side and no
+    // stored key; the client's keys are not there yet.
     let out = run(argv(&[&["store", "list", &service_hb], FAST]));
-    assert_eq!((out.code, out.stdout.as_str()), (0, ""), "{}", out.stderr);
+    assert_eq!(out.code, 0, "{}", out.stderr);
     assert!(out.stderr.is_empty(), "{}", out.stderr);
+    assert!(
+        !out.stdout.is_empty() && out.stdout.lines().all(|k| k.starts_with("nsm_")),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("nsm_mesh_data\n") && out.stdout.contains("nsm_service_port\n"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("nsm_mesh_client"), "{}", out.stdout);
     // The README's failover recipe waits for exactly this text to go away.
     let out = run(argv(&[&["store", "list", &service_hb, "--json"], FAST]));
     assert_eq!(out.code, 0, "{}", out.stderr);
-    assert_eq!(
-        out.stdout,
-        "{\"client\":null,\"revision\":0,\"applied\":true,\"entries\":[]}\n"
+    assert!(
+        out.stdout
+            .starts_with("{\"client\":null,\"revision\":0,\"applied\":true,\"entries\":["),
+        "{}",
+        out.stdout
     );
     // A condition changes nothing about that: still a refusal, exit 1,
     // not a missed condition.
@@ -657,15 +690,12 @@ fn full_session(transport: &str) {
 
     let mut client = Proc::spawn(
         "claim",
-        &argv(&[
-            &["claim", &broker_addr, "--bind-port", "0", "--key", "1234"],
-            IFACE,
-            FAST,
-        ]),
+        &argv(&[&["claim", &broker_addr, "--key", "1234"], IFACE, FAST]),
     );
     assert_eq!(client.stdout_line(), "127.0.0.1:9000");
     let client_hb = heartbeat_addr(&client.stderr_line_containing("client registered as "));
     assert!(client_hb.starts_with(prefix), "{client_hb}");
+    assert_ne!(client_hb, service_hb, "two parties, two ports");
 
     // Reached, but nothing delivered yet: exit 3, so a polling script can
     // tell "not yet" from "failed".
@@ -774,6 +804,278 @@ fn full_session(transport: &str) {
     }
 }
 
+/// `... registered as N (...)` → `N`.
+fn party_id(line: &str) -> u64 {
+    let marker = "registered as ";
+    let start = line.find(marker).expect("registration marker") + marker.len();
+    line[start..]
+        .split(' ')
+        .next()
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| panic!("no party id in {line:?}"))
+}
+
+/// The lazy flow: nobody chooses a heartbeat port, and a script that knows
+/// only the rendezvous key and the broker's address finds everything
+/// through the broker.
+fn lazy_session(transport: &str) {
+    let mut broker = Proc::spawn(
+        "listen",
+        &argv(&[
+            &["listen", "--bind-port", "0", "--transport", transport],
+            IFACE,
+            FAST,
+        ]),
+    );
+    let line = broker.stderr_line_containing("broker listening on ");
+    let broker_addr = line.rsplit(' ').next().unwrap().to_owned();
+    let at_broker = |args: &[&str]| run(argv(&[&["store"], args, &["--key", "1234"], FAST]));
+
+    // Nothing under the key yet: exit 1 with the broker's reason.
+    let out = at_broker(&["get", &broker_addr, "step"]);
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("no party under key 1234"),
+        "{}",
+        out.stderr
+    );
+
+    let mut service = Proc::spawn(
+        "publish",
+        &argv(&[
+            &[
+                "publish",
+                &broker_addr,
+                "--service-port",
+                "9000",
+                "--key",
+                "1234",
+            ],
+            IFACE,
+            FAST,
+        ]),
+    );
+    let service_hb = heartbeat_addr(&service.stderr_line_containing("service registered as "));
+    // A service nobody holds: the key resolves to it, its store reads as
+    // empty (exit 3), writes are refused, and the mesh data names no client.
+    let out = at_broker(&["get", &broker_addr, "step"]);
+    assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+    let out = at_broker(&["put", &broker_addr, "step", "--value", "5"]);
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(out.stderr.contains("not claimed"), "{}", out.stderr);
+    let out = at_broker(&["get", &broker_addr, "nsm_mesh_data"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let data: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(data["nsm_mesh_service"], service_hb, "{data}");
+    assert_eq!(data["nsm_mesh_client"], serde_json::Value::Null, "{data}");
+    assert_eq!(data["nsm_service"], "127.0.0.1:9000", "{data}");
+
+    let mut client = Proc::spawn(
+        "claim",
+        &argv(&[&["claim", &broker_addr, "--key", "1234"], IFACE, FAST]),
+    );
+    assert_eq!(client.stdout_line(), "127.0.0.1:9000");
+    let line = client.stderr_line_containing("client registered as ");
+    let client_hb = heartbeat_addr(&line);
+    let client_id = party_id(&line);
+
+    // Discovery: the broker says where both parties listen, and the
+    // addresses are what the parties reported.
+    let out = at_broker(&["get", &broker_addr, "nsm_mesh_data"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let data: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(data["nsm_mesh_service"], service_hb, "{data}");
+    assert_eq!(data["nsm_mesh_client"], client_hb, "{data}");
+    assert_eq!(data["nsm_client_id"], client_id, "{data}");
+    let found_client = data["nsm_mesh_client"].as_str().unwrap().to_owned();
+    let found_service = data["nsm_mesh_service"].as_str().unwrap().to_owned();
+
+    // The store by key is the claim's store: a put by key is read through
+    // a party, and the other way round; --json names the claim's client.
+    let out = at_broker(&["put", &broker_addr, "step", "--value", "5"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stdout.trim().parse::<u64>().is_ok(), "{}", out.stdout);
+    let out = run(argv(&[&["store", "get", &found_service, "step"], FAST]));
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "5\n"),
+        "{}",
+        out.stderr
+    );
+    let out = run(argv(&[
+        &["store", "put", &found_client, "input", "--value", "x"],
+        FAST,
+    ]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let out = at_broker(&["list", &broker_addr]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let stored_keys: Vec<&str> = out
+        .stdout
+        .lines()
+        .filter(|k| !k.starts_with("nsm_"))
+        .collect();
+    assert_eq!(stored_keys, ["input", "step"], "{}", out.stdout);
+    assert!(
+        out.stdout.contains("nsm_mesh_client\n") && out.stdout.contains("nsm_mesh_service\n"),
+        "both sides are listed: {}",
+        out.stdout
+    );
+    // Each field of the mesh data is a key by itself, by key too.
+    let out = at_broker(&["get", &broker_addr, "nsm_mesh_client"]);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, format!("{client_hb}\n").as_str()),
+        "{}",
+        out.stderr
+    );
+    let out = at_broker(&["get", &broker_addr, "step", "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(reply["client"], client_id, "{reply}");
+    assert_eq!(reply["entries"][0]["value"], "5", "{reply}");
+    let out = at_broker(&["delete", &broker_addr, "input"]);
+    assert_eq!((out.code, out.stdout.as_str()), (0, ""), "{}", out.stderr);
+    assert_eq!(out.stderr, "nsm: deleted input\n");
+
+    // The discovered addresses serve the verbs that need a party: send to
+    // the client, collect at the service.
+    let out = run(argv(&[
+        &["send", &found_client, "--msg", "found you"],
+        FAST,
+    ]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let out = run(argv(&[&["collect", &found_service], FAST]));
+        if out.code == 0 {
+            assert_eq!(out.stdout.trim(), "found you", "{}", out.stderr);
+            break;
+        }
+        assert_eq!((out.code, out.stdout.as_str()), (3, ""), "{}", out.stderr);
+        assert!(
+            Instant::now() < deadline,
+            "the text never arrived; last output {:?} / {:?}",
+            out.stdout,
+            out.stderr
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    // A spare service beside the claim changes nothing; a second client
+    // makes the key ambiguous until a party of the claim meant is named.
+    let mut spare = Proc::spawn(
+        "publish",
+        &argv(&[
+            &[
+                "publish",
+                &broker_addr,
+                "--service-port",
+                "9001",
+                "--key",
+                "1234",
+            ],
+            IFACE,
+            FAST,
+        ]),
+    );
+    spare.stderr_line_containing("service registered as ");
+    let out = at_broker(&["get", &broker_addr, "step"]);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "5\n"),
+        "{}",
+        out.stderr
+    );
+    let mut second = Proc::spawn(
+        "claim",
+        &argv(&[&["claim", &broker_addr, "--key", "1234"], IFACE, FAST]),
+    );
+    assert_eq!(second.stdout_line(), "127.0.0.1:9001");
+    let second_id = party_id(&second.stderr_line_containing("client registered as "));
+    let out = at_broker(&["get", &broker_addr, "step"]);
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(
+        out.stderr.contains(&format!(
+            "key 1234 has 2 clients ({client_id}, {second_id}); name one with party_id"
+        )),
+        "{}",
+        out.stderr
+    );
+    let named = |id: u64, store_key: &str| {
+        run(argv(&[
+            &[
+                "store",
+                "get",
+                &broker_addr,
+                store_key,
+                "--key",
+                "1234",
+                "--party-id",
+                &id.to_string(),
+            ],
+            FAST,
+        ]))
+    };
+    let out = named(client_id, "step");
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "5\n"),
+        "{}",
+        out.stderr
+    );
+    let out = named(second_id, "step");
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (3, ""),
+        "the second claim has its own, empty store: {}",
+        out.stderr
+    );
+    // A party not under the key, and --key at a party instead of the
+    // broker, are both refused.
+    let out = run(argv(&[
+        &[
+            "store",
+            "get",
+            &broker_addr,
+            "step",
+            "--key",
+            "77",
+            "--party-id",
+            &client_id.to_string(),
+        ],
+        FAST,
+    ]));
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(
+        out.stderr
+            .contains(&format!("no party {client_id} under key 77")),
+        "{}",
+        out.stderr
+    );
+    let out = run(argv(&[
+        &["store", "list", &client_hb, "--key", "1234"],
+        FAST,
+    ]));
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("unexpected store_by_key"),
+        "{}",
+        out.stderr
+    );
+    drop((service, client, spare, second));
+    broker.kill();
+}
+
+#[test]
+fn lazy_session_over_tcp() {
+    lazy_session("tcp");
+}
+
+#[test]
+fn lazy_session_over_http() {
+    lazy_session("http");
+}
+
 /// `nsm store` between a client and the service it holds: what each
 /// subcommand prints on stdout and stderr, and its exit status.
 fn store_session(client_hb: &str, service_hb: &str) {
@@ -811,13 +1113,75 @@ fn store_session(client_hb: &str, service_hb: &str) {
         assert_eq!(out.stdout, format!("{value}\n"), "{key}");
     }
 
-    // Either party lists the same keys, sorted, one per line.
+    // Either party lists the same keys, sorted, one per line: the stored
+    // ones and the broker's own nsm_ keys, in one order.
     for party in [client_hb, service_hb] {
         let out = store(&["list", party]);
         assert_eq!(out.code, 0, "{}", out.stderr);
-        assert_eq!(out.stdout, "input/path\noffset\nstep\n", "{party}");
+        let lines: Vec<&str> = out.stdout.lines().collect();
+        let stored_keys: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|k| !k.starts_with("nsm_"))
+            .collect();
+        assert_eq!(stored_keys, ["input/path", "offset", "step"], "{party}");
+        assert!(lines.contains(&"nsm_mesh_data"), "{party}: {}", out.stdout);
+        assert!(
+            lines.contains(&"nsm_mesh_client_port"),
+            "{party}: {}",
+            out.stdout
+        );
+        let mut sorted = lines.clone();
+        sorted.sort_unstable();
+        assert_eq!(lines, sorted, "{party}");
         assert!(out.stderr.is_empty(), "{}", out.stderr);
     }
+
+    // The reserved entry nsm_mesh_data: where the claim's parties listen,
+    // as one line of JSON the broker builds, the same through either party
+    // and listed above at version 0; each of its fields is a key too.
+    let out = store(&["get", client_hb, "nsm_mesh_data"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
+    let mesh_json = out.stdout.clone();
+    let data: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(data["nsm_key"], 1234, "{data}");
+    assert_eq!(data["nsm_service"], "127.0.0.1:9000", "{data}");
+    assert_eq!(data["nsm_service_address"], "127.0.0.1", "{data}");
+    assert_eq!(data["nsm_service_port"], 9000, "{data}");
+    assert_eq!(data["nsm_mesh_service"], service_hb, "{data}");
+    assert_eq!(data["nsm_mesh_client"], client_hb, "{data}");
+    let client_port: u64 = client_hb.rsplit(':').next().unwrap().parse().unwrap();
+    assert_eq!(data["nsm_mesh_client_port"], client_port, "{data}");
+    assert_eq!(data["nsm_mesh_client_address"], "127.0.0.1", "{data}");
+    let out = store(&["get", service_hb, "nsm_mesh_client_port"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{client_port}\n"));
+    let out = store(&["get", client_hb, "nsm_mesh_service"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{service_hb}\n"));
+    assert!(
+        data["nsm_service_id"].is_u64() && data["nsm_client_id"].is_u64(),
+        "{data}"
+    );
+    let via_service = store(&["get", service_hb, "nsm_mesh_data"]);
+    assert_eq!(via_service.code, 0, "{}", via_service.stderr);
+    assert_eq!(via_service.stdout, mesh_json);
+    // With --json it is an entry of version 0 in the usual reply.
+    let out = store(&["get", client_hb, "nsm_mesh_data", "--json"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    assert_eq!(reply["entries"][0]["key"], "nsm_mesh_data", "{reply}");
+    assert_eq!(reply["entries"][0]["version"], 0, "{reply}");
+    assert!(reply["client"].is_u64(), "{reply}");
+    // Reserved: a put is refused, exit 1, and nothing changed.
+    let out = store(&["put", client_hb, "nsm_mesh_data", "--value", "x"]);
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(out.stderr.contains("reserved"), "{}", out.stderr);
+    let out = store(&["delete", service_hb, "nsm_other"]);
+    assert_eq!((out.code, out.stdout.as_str()), (1, ""), "{}", out.stderr);
+    assert!(out.stderr.contains("reserved"), "{}", out.stderr);
 
     // An unset key is "not yet": exit 3, nothing on stdout.
     let out = store(&["get", service_hb, "missing"]);
@@ -842,9 +1206,17 @@ fn store_session(client_hb: &str, service_hb: &str) {
     let out = store(&["list", service_hb, "--json"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
     let reply: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
+    let entries = reply["entries"].as_array().expect("entries");
     assert_eq!(
-        reply["entries"].as_array().map(Vec::len),
-        Some(3),
+        entries.iter().filter(|e| e["version"] != 0).count(),
+        3,
+        "three stored entries: {reply}"
+    );
+    assert!(
+        entries
+            .iter()
+            .filter(|e| e["version"] == 0)
+            .all(|e| e["key"].as_str().is_some_and(|k| k.starts_with("nsm_"))),
         "{reply}"
     );
 

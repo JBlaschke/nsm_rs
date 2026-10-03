@@ -53,7 +53,7 @@ jobs:
             <li><a href="guide/docs/MONITORING.html">Monitoring: the admin listener, metrics, the status document</a></li>
             <li><a href="guide/CONTRIBUTING.html">Contributing</a></li>
             <li><a href="guide/CHANGELOG.html">Changelog</a></li>
-            <li>History: <a href="guide/docs/history/2026-refactor/PLAN.html">the 2026 refactor</a> and its <a href="guide/docs/history/2026-refactor/audit/README.html">audit</a>; <a href="guide/docs/history/2026-peer-text/PLAN.html">the 2026 peer-address and two-way text work</a>; <a href="guide/docs/history/2026-shared-store/PLAN.html">the 2026 shared store</a>; <a href="guide/docs/history/2026-monitoring/PLAN.html">the 2026 monitoring work</a></li>
+            <li>History: <a href="guide/docs/history/2026-refactor/PLAN.html">the 2026 refactor</a> and its <a href="guide/docs/history/2026-refactor/audit/README.html">audit</a>; <a href="guide/docs/history/2026-peer-text/PLAN.html">the 2026 peer-address and two-way text work</a>; <a href="guide/docs/history/2026-shared-store/PLAN.html">the 2026 shared store</a>; <a href="guide/docs/history/2026-monitoring/PLAN.html">the 2026 monitoring work</a>; <a href="guide/docs/history/2026-discovery/PLAN.html">the 2026 discovery-by-key work</a></li>
             <li><a href="nsm/index.html">API documentation (rustdoc)</a></li>
           </ul>
           HTML

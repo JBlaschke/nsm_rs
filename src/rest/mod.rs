@@ -33,7 +33,10 @@
 //! a success but is not an error either is a conditional store write whose
 //! `if_version` did not match: `409` with the [`Stored`] reply (`applied`
 //! false, the key's current entry) and an `error` field saying where the key
-//! is.
+//! is. A store body names either a party (`party`) or the broker with a
+//! rendezvous key (`broker` and `rendezvous`, and `party_id` when the key
+//! has several claims); the one `ops::StoreTarget` behind the route is the
+//! command line's too (decision D28).
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -55,7 +58,7 @@ use tracing::{info, warn};
 use crate::broker::admin::constant_time_eq;
 use crate::cli::IfaceOpts;
 use crate::net::{Addr, IpVersion};
-use crate::ops::{self, Collected, NetOpts, StoreOp, Stored};
+use crate::ops::{self, Collected, NetOpts, StoreOp, StoreTarget, Stored};
 use crate::party::Session;
 use crate::protocol::{Key, PartyId, ServiceHandle};
 use crate::{Error, Result};
@@ -350,18 +353,63 @@ pub struct SendBody {
     pub msg: String,
 }
 
-/// `POST /v1/store`: the party to go through and the operation, whose fields
-/// sit next to `party`: `{"party":"http://10.128.0.9:41232","op":"put",
-/// "key":"step","value":"5"}`. A put or a delete may add `"if_version":N`
-/// (0: only if the key is not set).
+/// `POST /v1/store`: where to apply the operation, and the operation, whose
+/// fields sit next to it. Through a party:
+/// `{"party":"http://10.128.0.9:41232","op":"put","key":"step","value":"5"}`;
+/// at the broker by rendezvous key:
+/// `{"broker":"http://10.0.0.1:12000","rendezvous":1234,"op":"get","key":"nsm_mesh_data"}`,
+/// with `"party_id":N` when the key has several claims. Exactly one of the
+/// two forms; anything else is a 400. A put or a delete may add
+/// `"if_version":N` (0: only if the key is not set).
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct StoreBody {
     /// Either party's heartbeat address: the client's or its service's,
     /// which share one store.
-    pub party: Addr,
+    #[serde(default)]
+    pub party: Option<Addr>,
+    /// The broker's address, with `rendezvous`.
+    #[serde(default)]
+    pub broker: Option<Addr>,
+    /// The rendezvous key of the claim, with `broker`.
+    #[serde(default)]
+    pub rendezvous: Option<Key>,
+    /// One party of the key, when it has more than one claim; only with
+    /// `rendezvous`.
+    #[serde(default)]
+    pub party_id: Option<PartyId>,
     /// The operation (`op` with its `key`, `value` and `if_version`).
     #[serde(flatten)]
     pub op: StoreOp,
+}
+
+impl StoreBody {
+    /// Where the body sends the operation.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Json`] (a 400) when the body names both a party and the
+    /// broker, neither, a broker without a rendezvous key or the reverse,
+    /// or a `party_id` beside a party: the body is not a store request.
+    pub fn target(&self) -> Result<StoreTarget> {
+        let invalid =
+            |what: &str| Error::Json(<serde_json::Error as serde::de::Error>::custom(what));
+        match (&self.party, &self.broker, self.rendezvous) {
+            (Some(party), None, None) if self.party_id.is_none() => {
+                Ok(StoreTarget::Party(party.clone()))
+            }
+            (Some(_), _, _) => Err(invalid(
+                "a store body names either party, or broker and rendezvous (with party_id), not both",
+            )),
+            (None, Some(broker), Some(key)) => Ok(StoreTarget::Key {
+                broker: broker.clone(),
+                key,
+                party: self.party_id,
+            }),
+            (None, _, _) => Err(invalid(
+                "a store body names either party, or broker and rendezvous (with party_id)",
+            )),
+        }
+    }
 }
 
 /// Query string of `GET /v1/interfaces` and `GET /v1/ips`.
@@ -586,7 +634,7 @@ struct NotApplied<'a> {
 
 async fn store(State(app): State<Arc<AppState>>, body: Bytes) -> ApiResult<Response> {
     let b: StoreBody = parse_body(&body)?;
-    let stored = ops::store(&b.party, b.op.clone(), &app.net).await?;
+    let stored = b.target()?.store(b.op.clone(), &app.net).await?;
     if stored.applied {
         return Ok(Json(stored).into_response());
     }

@@ -174,16 +174,16 @@ mod tests {
         assert!(check_limits(&Limits::default()).is_ok());
         assert!(check_limits(&limits(4096, 4096 - REPLY_OVERHEAD)).is_ok());
         assert!(check_limits(&limits(64 * 1024, 32 * 1024)).is_ok());
-        // The default budget needs 17408 bytes of frame.
-        assert!(check_limits(&limits(17 * 1024, 16 * 1024)).is_ok());
-        // The smallest budget the command line allows (256) needs 1280, so a
-        // frame limit of 1024 to 1279 can never start a broker from there.
-        assert!(check_limits(&limits(1280, 256)).is_ok());
+        // The default budget needs 20480 bytes of frame.
+        assert!(check_limits(&limits(20 * 1024, 16 * 1024)).is_ok());
+        // The smallest budget the command line allows (256) needs 4352, so a
+        // frame limit of 1024 to 4351 can never start a broker from there.
+        assert!(check_limits(&limits(4352, 256)).is_ok());
         for (frame, store) in [
             (4096, 4096 - REPLY_OVERHEAD + 1),
             (4096, 16 * 1024),
-            (17 * 1024 - 1, 16 * 1024),
-            (1279, 256),
+            (20 * 1024 - 1, 16 * 1024),
+            (4351, 256),
             (1024, 256),
         ] {
             match check_limits(&limits(frame, store)) {

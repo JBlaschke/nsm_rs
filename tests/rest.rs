@@ -389,6 +389,37 @@ async fn store_through_the_api() {
         assert_eq!(status, StatusCode::OK, "{got}");
         assert_eq!(got, put, "the service reads the client's write");
 
+        // The reserved entry nsm_mesh_data: where the claim's parties
+        // listen, as the JSON text of an entry at version 0; a write of a
+        // reserved key is the caller's fault.
+        let (status, mesh) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": service_hb, "op": "get", "key": "nsm_mesh_data" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{mesh}");
+        assert_eq!(mesh["client"], owner, "{mesh}");
+        assert_eq!(mesh["entries"][0]["version"], 0, "{mesh}");
+        let text = mesh["entries"][0]["value"].as_str().expect("JSON text");
+        let data: Value = serde_json::from_str(text).expect("mesh data");
+        assert_eq!(data["nsm_key"], 7, "{data}");
+        assert_eq!(data["nsm_mesh_client"], client_hb, "{data}");
+        assert_eq!(data["nsm_mesh_service"], service_hb, "{data}");
+        assert_eq!(data["nsm_service_port"], 9100, "{data}");
+        assert_eq!(data["nsm_service_address"], "127.0.0.1", "{data}");
+        let (status, body) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": client_hb, "op": "put", "key": "nsm_mesh_data", "value": "x" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"].as_str().unwrap_or("").contains("reserved"),
+            "{body}"
+        );
+
         // The service writes a second entry; either party lists both.
         let (status, second) = api
             .post(
@@ -405,13 +436,24 @@ async fn store_through_the_api() {
             assert_eq!(status, StatusCode::OK, "{listed}");
             assert_eq!(listed["client"], owner, "{party}: {listed}");
             assert_eq!(listed["revision"], second["revision"], "{party}: {listed}");
+            // The stored keys, with the broker's own nsm_ keys among them
+            // at version 0.
             let keys: Vec<&str> = listed["entries"]
                 .as_array()
                 .expect("entries")
                 .iter()
+                .filter(|e| e["version"] != 0)
                 .filter_map(|e| e["key"].as_str())
                 .collect();
             assert_eq!(keys, ["input/path", "step"], "{party}: {listed}");
+            assert!(
+                listed["entries"]
+                    .as_array()
+                    .expect("entries")
+                    .iter()
+                    .any(|e| e["key"] == "nsm_mesh_data" && e["version"] == 0),
+                "{party}: {listed}"
+            );
             assert_eq!(listed["entries"][0]["value"], json!("/scratch/in 1.h5"));
         }
 
@@ -436,21 +478,38 @@ async fn store_through_the_api() {
         assert_eq!(unset["client"], owner, "{unset}");
 
         // A service nobody holds reads an empty store and may not write:
-        // get and list answer with no client, put and delete are refused.
+        // a get answers with no client and no entry, a list with no client
+        // and the broker's own entries alone, put and delete are refused.
         let lonely = cluster.publish(8, 9101).await;
         let lonely_hb = lonely.bound().to_string();
-        for read in [
-            json!({ "party": lonely_hb, "op": "get", "key": "step" }),
-            json!({ "party": lonely_hb, "op": "list" }),
-        ] {
-            let (status, empty) = api.post("/v1/store", &read).await;
-            assert_eq!(status, StatusCode::OK, "{read}: {empty}");
-            assert_eq!(
-                empty,
-                json!({ "client": null, "revision": 0, "applied": true, "entries": [] }),
-                "{read}"
-            );
-        }
+        let (status, empty) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": lonely_hb, "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(
+            empty,
+            json!({ "client": null, "revision": 0, "applied": true, "entries": [] })
+        );
+        let (status, listed) = api
+            .post("/v1/store", &json!({ "party": lonely_hb, "op": "list" }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        assert_eq!((&listed["client"], &listed["revision"]), (&Value::Null, &json!(0)));
+        let entries = listed["entries"].as_array().expect("entries");
+        assert!(
+            !entries.is_empty()
+                && entries.iter().all(|e| {
+                    e["version"] == 0 && e["key"].as_str().is_some_and(|k| k.starts_with("nsm_"))
+                }),
+            "{listed}"
+        );
+        assert!(
+            entries.iter().all(|e| e["key"] != "nsm_mesh_client"),
+            "no client yet: {listed}"
+        );
         for write in [
             json!({ "party": lonely_hb, "op": "put", "key": "step", "value": "5" }),
             json!({ "party": lonely_hb, "op": "delete", "key": "step" }),
@@ -488,6 +547,104 @@ async fn store_through_the_api() {
             .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
         assert!(body["error"].is_string(), "{body}");
+
+        api.stop().await;
+        cluster.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn store_by_key_through_the_api() {
+    with_deadline(async {
+        let cluster = Cluster::start(Transport::Http).await;
+        let api = Api::start(cluster.net().clone(), None).await;
+        let broker = cluster.broker_addr().to_string();
+        let service = cluster.publish(9, 9100).await;
+        let client = cluster.claim(9).await;
+        let client_hb = client.bound().to_string();
+        let owner = json!(client.id());
+
+        // By key: the claim's store, the same reply as through a party.
+        let (status, put) = api
+            .post(
+                "/v1/store",
+                &json!({ "broker": broker, "rendezvous": 9, "op": "put", "key": "step", "value": "5" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{put}");
+        assert_eq!(put["client"], owner, "{put}");
+        let (status, got) = api
+            .post(
+                "/v1/store",
+                &json!({ "party": client_hb, "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{got}");
+        assert_eq!(got, put);
+        // party_id names a party of the key; the mesh data resolves alike.
+        let (status, got) = api
+            .post(
+                "/v1/store",
+                &json!({ "broker": broker, "rendezvous": 9, "party_id": service.id(), "op": "get", "key": "step" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{got}");
+        assert_eq!(got, put);
+        let (status, mesh) = api
+            .post(
+                "/v1/store",
+                &json!({ "broker": broker, "rendezvous": 9, "op": "get", "key": "nsm_mesh_data" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{mesh}");
+        let text = mesh["entries"][0]["value"].as_str().expect("JSON text");
+        let data: Value = serde_json::from_str(text).expect("mesh data");
+        assert_eq!(data["nsm_mesh_client"], client_hb, "{data}");
+        assert_eq!(data["nsm_mesh_service"], service.bound().to_string(), "{data}");
+
+        // The broker's refusals are 400 with the reason.
+        for (body, needle) in [
+            (
+                json!({ "broker": broker, "rendezvous": 10, "op": "list" }),
+                "no party under key 10",
+            ),
+            (
+                json!({ "broker": broker, "rendezvous": 9, "party_id": 99, "op": "list" }),
+                "no party 99 under key 9",
+            ),
+        ] {
+            let (status, b) = api.post("/v1/store", &body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {b}");
+            assert!(
+                b["error"].as_str().unwrap_or("").contains(needle),
+                "{body}: {b}"
+            );
+        }
+        // A body names one form or the other, whole.
+        for bad in [
+            json!({ "party": client_hb, "broker": broker, "rendezvous": 9, "op": "list" }),
+            json!({ "party": client_hb, "rendezvous": 9, "op": "list" }),
+            json!({ "party": client_hb, "party_id": 1, "op": "list" }),
+            json!({ "broker": broker, "op": "list" }),
+            json!({ "rendezvous": 9, "op": "list" }),
+            json!({ "broker": broker, "rendezvous": "9", "op": "list" }),
+            json!({ "broker": broker, "rendezvous": 9, "party_id": -1, "op": "list" }),
+            json!({ "op": "list" }),
+        ] {
+            let (status, b) = api.post("/v1/store", &bad).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {b}");
+            assert!(b["error"].is_string(), "{bad}: {b}");
+        }
+        // A broker that cannot be reached is upstream trouble.
+        let dead = Addr::new(Transport::Http, "127.0.0.1", unused_port()).to_string();
+        let (status, b) = api
+            .post(
+                "/v1/store",
+                &json!({ "broker": dead, "rendezvous": 9, "op": "list" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{b}");
 
         api.stop().await;
         cluster.stop().await;

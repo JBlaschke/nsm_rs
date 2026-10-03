@@ -58,10 +58,14 @@ use crate::{Error, Result};
 /// version.
 pub const ENTRY_OVERHEAD: usize = 64;
 
-/// Bytes a `stored` reply needs on top of its entries: the `type` tag, a
-/// 20-digit client id and revision, the field names and brackets, with room
-/// to spare.
-pub const REPLY_OVERHEAD: usize = 1024;
+/// Bytes a `stored` reply needs on top of its stored entries: the `type`
+/// tag, a 20-digit client id and revision, the field names and brackets,
+/// and the broker's own entries (the reserved `nsm_` keys, which a `list`
+/// carries beside the stored ones; see
+/// [`MeshData::entries`](crate::protocol::MeshData::entries)) at their
+/// largest, with room to spare. A test in `protocol::types` pins the latter
+/// under this number.
+pub const REPLY_OVERHEAD: usize = 4096;
 
 /// Length in bytes of `text` encoded as a JSON string by `serde_json`,
 /// including both quotes.
@@ -676,11 +680,16 @@ mod tests {
                 .map(|e| entry_cost(&e.key, &e.value))
                 .sum();
             assert_eq!(s.bytes(), accounted, "iteration {i}");
+            // The reply to a list carries the broker's own entries too.
             let reply = Message::Stored(Stored {
                 client: Some(PartyId(u64::MAX)),
                 revision: u64::MAX,
                 applied: false,
-                entries: s.entries(),
+                entries: [
+                    s.entries(),
+                    crate::protocol::MeshData::largest().entries().unwrap(),
+                ]
+                .concat(),
             });
             let wire = serde_json::to_vec(&reply).unwrap();
             assert!(

@@ -33,7 +33,9 @@ it, plan and audit, is under [`history/2026-refactor/`](history/2026-refactor/PL
 
 - The **broker** is the only fixed address. It admits registrations, pairs
   clients with services, monitors liveness, relays short texts and keeps the
-  one copy of the store each claim shares. It never sees the service's own
+  one copy of the store each claim shares; it also answers an operator who
+  knows only a rendezvous key (`store_by_key`, behind `nsm store --key`),
+  resolving the key to its one claim. It never sees the service's own
   traffic. With `--admin-bind` it also answers an operator, on a separate
   plain-HTTP socket parties never use: Prometheus metrics and a status
   document ([`MONITORING.md`](MONITORING.md)).
@@ -147,7 +149,16 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   `Registry::store` finds the store the way `deliver` finds the peer: a
   client uses its own, also while orphaned; a service uses the store of the
   client holding it, and a service nobody holds reads an empty store and may
-  not write.
+  not write. Store keys starting with `nsm_` are reserved for the broker:
+  `Registry::store` answers them from `Registry::mesh_data` (where the
+  claim's parties listen, projected from the records: one JSON value under
+  `nsm_mesh_data` and one entry per field that is set, all at version 0),
+  adds them to every `list`, refuses a write of any of them and never
+  stores one.
+  `Registry::resolve_key` is the one party a rendezvous key means (its one
+  client, else its one service, or the party a request names, which must
+  be under the key; anything else is refused with the candidates), and
+  `Registry::store_by_key` applies an operation there.
 - `store.rs` is `Store`: a key-value map with a byte budget, pure like the
   registry. Each entry counts as its JSON-encoded key and value plus 64
   bytes, which bounds the largest `stored` reply as well as memory; write
@@ -176,7 +187,8 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
   matching-host check, the per-host cap) and one `match` over the request
   variants, written once for every transport. A relayed request (`deliver`,
   `store_relay`) checks the sender's token and acts on the registry in one
-  critical section. Every request is counted once by kind and outcome, and
+  critical section; a `store_by_key` carries no token, and the registry
+  resolves its rendezvous key to one party in that same critical section. Every request is counted once by kind and outcome, and
   registrations, refusals (by reason) and store operations (by operation
   and outcome) where the decision is made.
 - `admin.rs` is the admin listener (decision D23): an axum
@@ -198,8 +210,10 @@ shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
 ### Party (`party`)
 
 `Session::publish` and `Session::claim` bind the party's own listener first
-(so the broker can dial it the moment registration succeeds), then register
-with retries, then return a `Session` whose `run()` keeps the party alive:
+(so the broker can dial it the moment registration succeeds; on the port
+`--bind-port` names, or on one the operating system picks when the flag is
+left out, which the registration then carries), then register with retries,
+then return a `Session` whose `run()` keeps the party alive:
 in two-sided mode a watchdog that fails with `Error::BrokerLost` when the
 broker's heartbeats stop for `broker_watchdog`; in ping mode a loop that
 pings every `heartbeat_interval`, applies what the broker returns, and gives
@@ -234,12 +248,17 @@ failed re-pairing line stops the printing but not the party.
 the binary adds no logic of its own. `ops::store` takes a `StoreOp` to either
 party and returns the broker's `Stored` as it is (a key that is not set is an
 answer with no entry, a write whose condition was not met an answer with
-`applied` false, a refusal is `Error::Rejected`), so the command line
-and the control plane need no store logic of their own either: `nsm store`
-gets the party and the `StoreOp` from `StoreCommand::into_parts` and only
-prints (the value, the new version, the keys, or with `--json` the reply as
-one line), and `POST /v1/store` returns the reply as its body, with status
-409 and an `error` field when `applied` is false. `rest` serves
+`applied` false, a refusal is `Error::Rejected`); `ops::store_by_key` does
+the same at the broker by rendezvous key, and `ops::StoreTarget` (a party's
+address, or the broker's with the key and an optional party id) is the one
+way in for both front-ends, so the command line and the control plane need
+no store logic of their own: `nsm store` gets the target and the `StoreOp`
+from `StoreCommand::into_parts` (`--key RENDEZVOUS` and `--party-id ID`
+make the address the broker's) and only prints (the value, the new version,
+the keys, or with `--json` the reply as one line), and `POST /v1/store`
+returns the reply as its body, with status 409 and an `error` field when
+`applied` is false, its body naming either `party` or `broker` and
+`rendezvous`. `rest` serves
 the same operations over HTTP: `publish` and `claim` become background jobs
 with a view the API reports, cancels and reaps; a bearer token guards every
 route when one is configured, and it is mandatory off loopback.
@@ -268,10 +287,11 @@ Two limits only matter at a broker: `max_registrations` and
 `max_store_bytes` (`--max-store-bytes`, default 16384, allowed 256 to
 32768). `serve` accepts both with the other limits and ignores them.
 `listen` refuses to start, with a configuration error naming both flags,
-when a full store's reply (the budget plus 1024 bytes) would not fit its own
-`--max-frame-bytes`, so a broker needs a frame limit of at least 1280 bytes
-(17408 with the default budget). Parties use the default 64 KiB frame, which every
-allowed budget fits. `nsm serve` uses its `--max-frame-bytes` for the parties
+when a full store's reply (the budget plus 4096 bytes, which cover the
+reply's own fields and the broker's reserved entries a `list` carries)
+would not fit its own `--max-frame-bytes`, so a broker needs a frame limit
+of at least 4352 bytes (20480 with the default budget). Parties use the
+default 64 KiB frame, which every allowed budget fits. `nsm serve` uses its `--max-frame-bytes` for the parties
 it starts and for every reply it reads itself, so lowering it below a store's
 reply size breaks large replies there: at those parties, and as a 400 from
 `POST /v1/store`. There is at most one store per client, and every
@@ -300,17 +320,29 @@ exist: about 80 MiB of accounted store bytes with the defaults, and at most
   service can write nothing, and the next claimer of a service never sees
   the previous claim's data. The operator presents no token: **a party's
   listener is the capability**. Anyone who can reach a party's bind address
-  can read and write its store through it, as with `send` and `collect`, and
-  TLS on that listener encrypts but does not authenticate callers (mutual
-  TLS is a listed follow-up). The store is not a place for secrets. Store
+  can read and write its store through it, as with `send` and `collect`,
+  and can learn where its peer listens for heartbeats (`nsm_mesh_data`),
+  and TLS on that listener encrypts but does not authenticate callers
+  (mutual TLS is a listed follow-up). The store is not a place for secrets. Store
   keys and values are never logged, and a `Store`'s `Debug` shows counts
   only.
+- **The rendezvous key is a capability too.** `store_by_key` lets whoever
+  knows a key read and write that key's claim's store at the broker, with
+  no party address and no token. The key already lets its holder publish a
+  service under it and be paired with the key's clients, so this adds no
+  power the key did not give; what it changes is where the store can be
+  reached from: the broker's address is fixed and reachable by every party,
+  while a party's own listener behind NAT or in ping mode may not be. A
+  refused resolution names party ids, which are not secrets.
 - **The control plane** binds loopback by default, requires a bearer token
   elsewhere, takes no file paths from requests and limits body sizes.
 - **The admin listener** is off by default and follows the same rule when
   on: loopback, or a bearer token on every request. It is read-only, but
   its status document lists every party with its key and bind address, an
-  operator's view that no party can obtain through the protocol listener.
+  operator's view of the whole mesh; through the protocol listener a party
+  learns only the addresses of its own claim (`nsm_mesh_data`), and
+  whoever knows a rendezvous key those of that key's claim
+  (`store_by_key`).
   It speaks plain HTTP; on a shared network it belongs on loopback behind an
   SSH tunnel, or behind a TLS-terminating proxy.
 - **Resource bounds** everywhere: frame sizes, connection counts, request
@@ -390,7 +422,9 @@ are decisions P1 to P10; D17 to D20 from the shared-store plan of the same
 month ([`history/2026-shared-store/`](history/2026-shared-store/PLAN.md)),
 where they are decisions S1 to S12; D21 to D24 from the monitoring plan of
 October 2026 ([`history/2026-monitoring/`](history/2026-monitoring/PLAN.md)),
-where they are decisions M1 to M10.
+where they are decisions M1 to M10; and D25 to D28 from the discovery plan
+of the same month ([`history/2026-discovery/`](history/2026-discovery/PLAN.md)),
+where they are decisions L1 to L10.
 
 | # | Decision |
 |---|---|
@@ -418,6 +452,10 @@ where they are decisions M1 to M10.
 | D22 | One status document. `Status` (version, start time and uptime, the bound address, the limits and timing in force, the counts, a per-key and a per-host breakdown, the counters since start, every party) is the body of `GET /v1/status` and the input of `nsm status`, which prints `Status::summary`, or the document as one JSON line with `--json`; `--parties` adds a row per party, and `--watch SECS` repeats with a timestamp header and never clears the screen. The per-key and per-host breakdowns live here and not as metric labels. |
 | D23 | A separate admin listener, off by default. `nsm listen --admin-bind ADDR` serves `GET /metrics`, `GET /v1/status` and `GET /healthz` over plain HTTP on a second socket parties never use, checked and bound before anything else starts. D9 applies: loopback, or `--admin-token` (`NSM_ADMIN_TOKEN`) on every request, compared in constant time. Nothing changes on the wire (`PROTOCOL_VERSION` stays 3); counters reset with the broker, and `nsm_start_time_seconds` says when. |
 | D24 | A local stack, with and without containers. `deploy/monitoring/` runs Prometheus and Grafana on loopback by compose with the datasource and the `NSM broker` dashboard provisioned, scraping a broker on the host (token from a file) or one inside the stack (`--profile broker`); `scripts/monitoring-local.sh fetch\|start\|status\|stop` runs the same two servers as the current user from one work directory on hosts without containers, `fetch` checking the published SHA-256 sums of what it downloads. |
+| D25 | `--bind-port` is optional on `publish` and `claim`: left out, or given as 0, the operating system picks a free port for the party's heartbeat listener when it is bound, with no scan (binding port 0 is atomic and race-free, and the kernel's ephemeral range is the site's to set). The party prints the address it got, the registration carries it and the registry keeps it, so the broker already holds every discovered address and nothing is written into a store for it. `listen` keeps a required `--bind-port`: the broker is the one fixed address. |
+| D26 | Store keys starting with `nsm_` are the broker's: projected from its registry when read, never stored, never written, counted against no budget, so they are always current across re-pairings. They say where the parties of the asking party's claim listen. `nsm_mesh_data` is the whole picture as one JSON value (`MeshData`: `nsm_service_address` and `nsm_service_port`, `nsm_mesh_service_address` and `nsm_mesh_service_port`, `nsm_mesh_client_address` and `nsm_mesh_client_port`, each endpoint also as one string, `nsm_key` and both party ids; `null` for a side that is not there), and every field that is set is also a key of its own under the field's name, so a shell script reads one value without a JSON parser; a field that is `null` has no entry (exit 3), the polling idiom of any key. All are at version 0; `list` carries them beside the stored entries in one key order; a put or a delete of any `nsm_` key is refused. The reply overhead `listen` adds to the store budget is 4096 bytes, which covers them at their largest. |
+| D27 | A store operation may be addressed to the broker by rendezvous key: `store_by_key { rendezvous, party_id, op }`, answered exactly as if the key's party had relayed it. The broker resolves the key to the one client under it (its claim's store), or to the one service when no client is under it (an empty view, writes refused), or to `party_id`, which must be under the key; two or more clients, or no client and two or more services, are refused with the candidates listed. No token travels: the rendezvous key is the capability, as it is for `publish` and `claim` (whoever knows it can publish under it and be paired with its clients), so this adds no power the key did not give; it changes where the store can be reached from, since the broker is reachable where a party's listener behind NAT or in ping mode may not be. One new variant, so the protocol stays at version 3; `nsm_requests_total` gains `kind="store_by_key"`, and operations by key count in `nsm_store_ops_total`. |
+| D28 | One command and one route, as for the store: `nsm store get\|put\|delete\|list ADDR [STORE_KEY] [--key RENDEZVOUS [--party-id ID]]`, where `ADDR` is a party's heartbeat address or, with `--key`, the broker's (the usage lines say `<ADDR>` and `<STORE_KEY>` to keep the two keys apart), and `POST /v1/store` with `party`, or `broker` and `rendezvous` (and `party_id`), exactly one of the two forms; `ops::StoreTarget` is the one way in for both front-ends. `send`, `collect` and `peer` keep taking a party's address, which the broker's keys hand out. |
 
 ## 12. History
 
@@ -444,3 +482,10 @@ The monitoring work of October 2026, recorded under
 broker an admin listener with Prometheus metrics and a status document,
 `nsm status` for a shell, and a Prometheus and Grafana stack for a laptop or
 an interactive node; its decisions are D21 to D24.
+
+The discovery-by-key work of the same month, recorded under
+[`history/2026-discovery/`](history/2026-discovery/PLAN.md), let parties
+leave their heartbeat port to the operating system, gave every store the
+broker's own `nsm_` keys that say where a claim's parties listen, and let
+`nsm store` reach a claim's store at the broker by rendezvous key; its
+decisions are D25 to D28.

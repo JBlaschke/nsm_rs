@@ -43,6 +43,8 @@ pub enum RequestKind {
     Deliver,
     /// [`Message::StoreRelay`].
     StoreRelay,
+    /// [`Message::StoreByKey`].
+    StoreByKey,
     /// Anything else, which the broker refuses as unexpected.
     Other,
 }
@@ -55,18 +57,20 @@ impl From<&Message> for RequestKind {
             Message::Ping { .. } => RequestKind::Ping,
             Message::Deliver { .. } => RequestKind::Deliver,
             Message::StoreRelay { .. } => RequestKind::StoreRelay,
+            Message::StoreByKey { .. } => RequestKind::StoreByKey,
             _ => RequestKind::Other,
         }
     }
 }
 
 impl RequestKind {
-    const ALL: [RequestKind; 6] = [
+    const ALL: [RequestKind; 7] = [
         RequestKind::Publish,
         RequestKind::Claim,
         RequestKind::Ping,
         RequestKind::Deliver,
         RequestKind::StoreRelay,
+        RequestKind::StoreByKey,
         RequestKind::Other,
     ];
 
@@ -78,6 +82,7 @@ impl RequestKind {
             RequestKind::Ping => "ping",
             RequestKind::Deliver => "deliver",
             RequestKind::StoreRelay => "store_relay",
+            RequestKind::StoreByKey => "store_by_key",
             RequestKind::Other => "other",
         }
     }
@@ -396,7 +401,7 @@ impl Histogram {
 pub struct Metrics {
     started_wall: SystemTime,
     started: Instant,
-    requests: [[AtomicU64; 3]; 6],
+    requests: [[AtomicU64; 3]; 7],
     registrations: [AtomicU64; 2],
     refused: [AtomicU64; 5],
     removals: [[AtomicU64; 3]; 2],
