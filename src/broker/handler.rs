@@ -6,8 +6,11 @@
 //!
 //! Relayed requests ([`Message::Deliver`], [`Message::StoreRelay`]) check the
 //! sender's token and act on the registry inside one critical section, so
-//! nothing can remove the sender or re-pair it in between. Store keys and
-//! values are never logged, only the operation's name.
+//! nothing can remove the sender or re-pair it in between. A
+//! [`Message::StoreByKey`] carries no token: the broker resolves the
+//! rendezvous key to one party in that same critical section and answers as
+//! if that party had relayed the operation. Store keys and values are never
+//! logged, only the operation's name, and neither is a rendezvous key.
 //!
 //! The handler is where requests, registrations, refusals and store
 //! operations are counted ([`Broker::metrics`]): every request once by kind
@@ -231,6 +234,36 @@ impl BrokerHandler {
                 }
             }
 
+            Message::StoreByKey {
+                rendezvous,
+                party_id,
+                op,
+            } => {
+                debug!(
+                    op = op.kind(),
+                    named = party_id.is_some(),
+                    "store request by key"
+                );
+                let kind = StoreOpKind::from(&op);
+                // The registry resolves the key to one party; no token, the
+                // key is the capability (decision D27).
+                let outcome = self
+                    .broker
+                    .with_registry(|r| r.store_by_key(rendezvous, party_id, op));
+                let metrics = self.broker.metrics();
+                match outcome {
+                    Ok(stored) => {
+                        metrics.store_op(kind, StoreOutcome::of(&stored));
+                        Ok(Message::Stored(stored))
+                    }
+                    Err(Error::Rejected(reason)) => {
+                        metrics.store_op(kind, StoreOutcome::Refused);
+                        Ok(Message::nack(reason))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+
             other => Ok(Message::nack(format!(
                 "unexpected {} at the broker",
                 other.kind()
@@ -387,6 +420,28 @@ mod tests {
             h.handle(forged, peer()).await.unwrap(),
             Message::Nack { .. }
         ));
+        // By key: one answered (the key's one claim), one refused (no such
+        // key), each counted as a request of its own kind and as a store
+        // operation.
+        let by_key = |rendezvous, op| Message::StoreByKey {
+            rendezvous,
+            party_id: None,
+            op,
+        };
+        match h
+            .handle(by_key(1, crate::protocol::StoreOp::List), peer())
+            .await
+            .unwrap()
+        {
+            Message::Stored(s) => assert_eq!(s.client, Some(cid)),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            h.handle(by_key(2, crate::protocol::StoreOp::List), peer())
+                .await
+                .unwrap(),
+            Message::Nack { .. }
+        ));
         // A refused deliver (the service has a client, so use a wrong token)
         // and an unexpected message.
         let deliver = Message::Deliver {
@@ -410,6 +465,8 @@ mod tests {
         assert_eq!(m.requests(RequestKind::Claim, Outcome::Nack), 1);
         assert_eq!(m.requests(RequestKind::StoreRelay, Outcome::Ok), 2);
         assert_eq!(m.requests(RequestKind::StoreRelay, Outcome::Nack), 1);
+        assert_eq!(m.requests(RequestKind::StoreByKey, Outcome::Ok), 1);
+        assert_eq!(m.requests(RequestKind::StoreByKey, Outcome::Nack), 1);
         assert_eq!(m.requests(RequestKind::Deliver, Outcome::Nack), 1);
         assert_eq!(m.requests(RequestKind::Other, Outcome::Nack), 1);
         assert_eq!(m.requests(RequestKind::Ping, Outcome::Ok), 0);
@@ -422,7 +479,8 @@ mod tests {
         assert_eq!(m.refusals(RefusalReason::Full), 0);
         assert_eq!(m.store_ops(StoreOpKind::Put, StoreOutcome::Applied), 1);
         assert_eq!(m.store_ops(StoreOpKind::Put, StoreOutcome::NotApplied), 1);
-        assert_eq!(m.store_ops(StoreOpKind::List, StoreOutcome::Refused), 1);
+        assert_eq!(m.store_ops(StoreOpKind::List, StoreOutcome::Refused), 2);
+        assert_eq!(m.store_ops(StoreOpKind::List, StoreOutcome::Applied), 1);
         assert_eq!(m.store_ops(StoreOpKind::Get, StoreOutcome::Applied), 0);
 
         // The gauges follow the registry, and the exposition renders them.
@@ -433,6 +491,7 @@ mod tests {
         assert_eq!(g.store_entries, 1);
         let text = h.broker.render_metrics();
         assert!(text.contains("nsm_requests_total{kind=\"publish\",outcome=\"nack\"} 2\n"));
+        assert!(text.contains("nsm_requests_total{kind=\"store_by_key\",outcome=\"ok\"} 1\n"));
         assert!(text.contains("nsm_registrations_refused_total{reason=\"per_host\"} 1\n"));
         let status = h.broker.status(None);
         assert_eq!(status.counts.clients, 1);
@@ -651,18 +710,25 @@ mod tests {
             assert_eq!(unknown, wrong_token);
 
             // Right token, but nobody holds the service: it reads an empty
-            // store and may not write.
-            assert_eq!(
-                h.handle(relay(service, service_token, StoreOp::List), peer())
-                    .await
-                    .unwrap(),
-                Message::Stored(Stored {
-                    client: None,
-                    revision: 0,
-                    applied: true,
-                    entries: vec![],
-                })
-            );
+            // store (a list shows the broker's own entries alone) and may
+            // not write.
+            match h
+                .handle(relay(service, service_token, StoreOp::List), peer())
+                .await
+                .unwrap()
+            {
+                Message::Stored(empty) => {
+                    assert_eq!(
+                        (empty.client, empty.revision, empty.applied),
+                        (None, 0, true)
+                    );
+                    assert!(
+                        empty.entries.iter().all(|e| e.key.is_reserved()),
+                        "{empty:?}"
+                    );
+                }
+                other => panic!("{other:?}"),
+            }
             assert_eq!(
                 h.handle(relay(service, service_token, put("5")), peer())
                     .await
@@ -738,6 +804,97 @@ mod tests {
         })
         .await
         .expect("the store relay test finished in time");
+    }
+
+    #[tokio::test]
+    async fn store_by_key_resolves_the_claim_and_needs_no_token() {
+        use crate::protocol::StoreOp;
+        use crate::protocol::message::store_key;
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            crate::tls::install_default_provider();
+            let h = handler(BrokerPolicy::default());
+            let by_key = |rendezvous, party_id, op| Message::StoreByKey {
+                rendezvous,
+                party_id,
+                op,
+            };
+            let put = |value: &str| StoreOp::Put {
+                key: store_key("step"),
+                value: value.into(),
+                if_version: None,
+            };
+            // Nothing under the key yet.
+            assert_eq!(
+                h.handle(by_key(1, None, StoreOp::List), peer())
+                    .await
+                    .unwrap(),
+                Message::nack("no party under key 1")
+            );
+            // A service nobody holds: an empty store, no writes.
+            let (service, _) = registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
+            match h
+                .handle(by_key(1, None, StoreOp::List), peer())
+                .await
+                .unwrap()
+            {
+                Message::Stored(s) => assert_eq!((s.client, s.revision), (None, 0)),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(
+                h.handle(by_key(1, None, put("5")), peer()).await.unwrap(),
+                Message::nack(format!("service {service} is not claimed"))
+            );
+            // One claim: its store, through the key alone or either party.
+            let claim = Message::Claim {
+                key: 1,
+                bind_addr: Addr::tcp("127.0.0.1", 2),
+                ping: true,
+            };
+            let (client, client_token, _) = paired(h.handle(claim, peer()).await.unwrap());
+            let written = match h.handle(by_key(1, None, put("5")), peer()).await.unwrap() {
+                Message::Stored(s) => {
+                    assert_eq!(s.client, Some(client));
+                    s
+                }
+                other => panic!("{other:?}"),
+            };
+            let get = StoreOp::Get {
+                key: store_key("step"),
+            };
+            for party_id in [None, Some(service), Some(client)] {
+                assert_eq!(
+                    h.handle(by_key(1, party_id, get.clone()), peer())
+                        .await
+                        .unwrap(),
+                    Message::Stored(written.clone()),
+                    "{party_id:?}"
+                );
+            }
+            // The relay with the client's token sees the same store.
+            assert_eq!(
+                h.handle(
+                    Message::StoreRelay {
+                        from: client,
+                        token: client_token,
+                        op: get.clone(),
+                    },
+                    peer()
+                )
+                .await
+                .unwrap(),
+                Message::Stored(written)
+            );
+            // A party under another key is not under this one.
+            assert_eq!(
+                h.handle(by_key(2, Some(client), get), peer())
+                    .await
+                    .unwrap(),
+                Message::nack(format!("no party {client} under key 2"))
+            );
+        })
+        .await
+        .expect("the test finished in time");
     }
 
     #[tokio::test]

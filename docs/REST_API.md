@@ -27,7 +27,7 @@ nsm serve --bind 0.0.0.0:8080 --token "$NSM_TOKEN"   # any other address needs a
 
 | Status | When |
 |---|---|
-| 400 | malformed or incomplete body, bad address or query value, a refusal by the broker or a party (unknown key, admission, a store write at a service nobody holds, a full store), oversized frame |
+| 400 | malformed or incomplete body, bad address or query value, a refusal by the broker or a party (unknown key, admission, a store write at a service nobody holds, a full store, a reserved store key, a rendezvous key with no party or with several claims), oversized frame |
 | 401 | missing or wrong bearer token |
 | 404 | unknown job id, unknown route |
 | 405 | wrong method on a known route |
@@ -78,7 +78,7 @@ Start a service party.
 | `broker` | address string | yes | the broker (`host:port`, `tls://`, `http://`, `https://`) |
 | `key` | integer | yes | rendezvous key |
 | `service_port` | integer | yes | port the real service listens on |
-| `bind_port` | integer | no (0) | heartbeat port; 0 picks a free one |
+| `bind_port` | integer | no (0) | heartbeat port; 0 or omitted lets the operating system pick a free one, as leaving `--bind-port` out does on the command line |
 | `interface`, `ip_start`, `ip_version` | strings | no | local address selection, as `-n`, `-i`, `--ip-version` |
 | `tls` | boolean | no (false) | serve TLS on the heartbeat listener, using the server's certificate |
 | `ping` | boolean | no (false) | one-sided liveness |
@@ -155,12 +155,15 @@ holds is a 400 with the reason.
 ### `POST /v1/store`
 
 One operation on the store a client shares with the service it holds,
-through either party. The operation's fields sit next to `party`, in the
-shape of the protocol's `store` message.
+through either party, or at the broker by rendezvous key. The operation's
+fields sit next to the target, in the shape of the protocol's `store` and
+`store_by_key` messages.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `party` | address string | yes | either party's heartbeat address (a job's `bind_addr`); the client and its service reach the same store |
+| `party` | address string | one form | either party's heartbeat address (a job's `bind_addr`); the client and its service reach the same store |
+| `broker`, `rendezvous` | address string, integer | the other form | the broker's address and the rendezvous key of the claim: the broker resolves the key to its one client (or to its one service while nobody holds it) and answers as if that party had relayed the operation |
+| `party_id` | integer | no | with `rendezvous`: one party of the key, a client or a service, when the key has more than one claim |
 | `op` | string | yes | `"get"`, `"put"`, `"delete"` or `"list"` |
 | `key` | string | for get, put, delete | store key: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-` (unrelated to the rendezvous `key` of publish and claim) |
 | `value` | string | for put | the new value: any text, including empty text and newlines |
@@ -172,7 +175,16 @@ shape of the protocol's `store` message.
 {"party":"http://10.128.0.7:41231","op":"get","key":"step"}
 {"party":"http://10.128.0.7:41231","op":"delete","key":"step"}
 {"party":"http://10.128.0.7:41231","op":"list"}
+{"broker":"http://10.0.0.1:12000","rendezvous":1234,"op":"get","key":"nsm_mesh_data"}
+{"broker":"http://10.0.0.1:12000","rendezvous":1234,"party_id":8,"op":"put","key":"step","value":"5"}
 ```
+
+A body names exactly one of the two forms: `party`, or `broker` with
+`rendezvous` (and `party_id`); both, neither, or a `party_id` beside
+`party` is a 400. By key, the broker's refusals are 400s with its reason:
+`no party under key 1234`, `key 1234 has 2 clients (4, 7); name one with
+party_id`, `no party 7 under key 1234`. No token is involved: whoever knows
+the key may publish under it anyway, so the key is the capability.
 
 Every operation answers 200 with the broker's reply, the same line
 `nsm store ... --json` prints, except a conditional write that did not match
@@ -194,7 +206,27 @@ operation:
 | `get` | the entry, or `[]` when the key is not set (still 200, as `collect` answers `text: null`) |
 | `put` | the entry as written, with its new version |
 | `delete` | the removed entry, or `[]` when the key was not set (still 200) |
-| `list` | every entry, sorted by key: one consistent snapshot |
+| `list` | every entry, sorted by key: one consistent snapshot, the broker's reserved entries (below) among them at version 0 |
+
+Store keys starting with `nsm_` are reserved for the broker: entries it
+builds when asked and never stores, saying where the claim's parties
+listen. A `get` of `nsm_mesh_data` answers one entry at version 0 whose
+`value` is JSON text with `nsm_service_address` and `nsm_service_port` (the
+service's data-plane endpoint, also as `nsm_service`),
+`nsm_mesh_service_address` and `nsm_mesh_service_port` (the service's
+heartbeat address, also as `nsm_mesh_service`, the form `party` takes),
+`nsm_mesh_client_address` and `nsm_mesh_client_port` (the client's, also as
+`nsm_mesh_client`), `nsm_key`, `nsm_service_id` and `nsm_client_id`; a side
+that is not there is `null`. Each of those fields is also an entry of its
+own under the field's name: a `get` of `nsm_service_port` answers
+`{"key":"nsm_service_port","value":"9000","version":0}`, and a field that
+is `null` has no entry (200 with `entries: []`, as for a key that is not
+set). A `list` carries them beside the stored entries at version 0, and a
+`put` or a `delete` of any `nsm_` key is a 400 (`... is reserved`).
+
+```json
+{"client":8,"revision":3,"applied":true,"entries":[{"key":"nsm_mesh_data","value":"{\"nsm_key\":1234,\"nsm_service_id\":7,\"nsm_service_address\":\"10.128.0.7\",\"nsm_service_port\":9000,\"nsm_service\":\"10.128.0.7:9000\",\"nsm_mesh_service_address\":\"10.128.0.7\",\"nsm_mesh_service_port\":41231,\"nsm_mesh_service\":\"http://10.128.0.7:41231\",\"nsm_client_id\":8,\"nsm_mesh_client_address\":\"10.128.0.9\",\"nsm_mesh_client_port\":41232,\"nsm_mesh_client\":\"http://10.128.0.9:41232\"}","version":0}]}
+```
 
 `applied` is true for every 200. A put or a delete with `if_version` is
 checked by the broker in the same step as the write: of two writers that
@@ -258,5 +290,6 @@ curl -s -X POST $B/v1/store   -d '{"party":"<claim bind_addr>","op":"put","key":
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"get","key":"step"}'
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"list"}'
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"put","key":"step","value":"6","if_version":1}'   # 409 unless step is at version 1
+curl -s -X POST $B/v1/store   -d '{"broker":"http://127.0.0.1:12000","rendezvous":77,"op":"get","key":"nsm_mesh_data"}'   # where key 77's parties listen
 curl -s -X DELETE $B/v1/jobs/2
 ```

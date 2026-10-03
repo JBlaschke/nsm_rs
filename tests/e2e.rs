@@ -530,6 +530,12 @@ fn value_of(stored: &Stored, key: &str) -> Option<(String, u64)> {
         .map(|e| (e.value.clone(), e.version))
 }
 
+/// A list reply without the broker's own `nsm_` entries: the stored ones.
+fn stored_only(mut reply: Stored) -> Stored {
+    reply.entries.retain(|e| !e.key.is_reserved());
+    reply
+}
+
 #[tokio::test]
 async fn store_is_shared_by_a_client_and_its_service() {
     for &t in TRANSPORTS {
@@ -557,7 +563,7 @@ async fn store_is_shared_by_a_client_and_its_service() {
             let third = store(&c, &service, put("ready", "")).await;
             let (_, v3) = value_of(&third, "ready").unwrap();
             assert!(v1 < v2 && v2 < v3, "{t:?}: {v1} {v2} {v3}");
-            let listed = store(&c, &client, StoreOp::List).await;
+            let listed = stored_only(store(&c, &client, StoreOp::List).await);
             assert_eq!(listed.client, owner, "{t:?}");
             assert_eq!(listed.revision, v3, "{t:?}");
             assert_eq!(
@@ -618,7 +624,7 @@ async fn store_survives_a_repairing() {
 
         // The replacement reads every earlier write, the dead service's
         // included, under the same client.
-        let listed = store(&c, &s2, StoreOp::List).await;
+        let listed = stored_only(store(&c, &s2, StoreOp::List).await);
         assert_eq!(listed.client, Some(client.id()));
         assert_eq!(listed.revision, earlier);
         assert_eq!(listed.entries, {
@@ -664,7 +670,7 @@ async fn store_is_dropped_with_its_client_and_the_next_claim_starts_empty() {
                     .any(|p| p.id == service.id() && p.paired_with.is_none())
         })
         .await;
-        let orphaned = store(&c, &service, StoreOp::List).await;
+        let orphaned = stored_only(store(&c, &service, StoreOp::List).await);
         assert_eq!(orphaned.client, None, "{orphaned:?}");
         assert!(orphaned.entries.is_empty(), "{orphaned:?}");
 
@@ -676,7 +682,7 @@ async fn store_is_dropped_with_its_client_and_the_next_claim_starts_empty() {
         assert!(fresh.entries.is_empty(), "{fresh:?}");
         assert_eq!(fresh.client, Some(second.id()));
         assert_eq!(fresh.revision, 0, "a store never written");
-        let listed = store(&c, &service, StoreOp::List).await;
+        let listed = stored_only(store(&c, &service, StoreOp::List).await);
         assert_eq!(listed.client, Some(second.id()));
         assert!(listed.entries.is_empty(), "{listed:?}");
         c.stop().await;
@@ -696,7 +702,7 @@ async fn unclaimed_service_reads_an_empty_store_and_may_not_write() {
             entries: vec![],
         };
         assert_eq!(store(&c, &service, get("step")).await, empty);
-        assert_eq!(store(&c, &service, StoreOp::List).await, empty);
+        assert_eq!(stored_only(store(&c, &service, StoreOp::List).await), empty);
         for op in [put("step", "5"), delete("step")] {
             let kind = op.kind();
             let err = ops::store(&service.bound(), op, c.net()).await.unwrap_err();
@@ -706,6 +712,256 @@ async fn unclaimed_service_reads_an_empty_store_and_may_not_write() {
                 "{kind}: {err}"
             );
         }
+        c.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn mesh_data_says_where_a_claims_parties_listen() {
+    for &t in TRANSPORTS {
+        with_deadline(async {
+            let c = Cluster::start(t).await;
+            let service = c.publish(12, 9000).await;
+            // Before any claim: the service's side only, from an "empty"
+            // store that nobody owns.
+            let alone = store(&c, &service, get("nsm_mesh_data")).await;
+            assert_eq!((alone.client, alone.revision), (None, 0), "{t:?}");
+            assert_eq!(alone.entries.len(), 1, "{t:?}: {alone:?}");
+            assert_eq!(alone.entries[0].version, 0, "{t:?}");
+            let data = alone.mesh_data().unwrap().expect("mesh data");
+            assert_eq!(data.nsm_key, 12, "{t:?}");
+            assert_eq!(data.nsm_service_id, Some(service.id()), "{t:?}");
+            assert_eq!(data.nsm_mesh_service, Some(service.bound()), "{t:?}");
+            assert_eq!(data.nsm_mesh_service_port, Some(service.bound().port));
+            assert_eq!(data.nsm_service_port, Some(9000), "{t:?}");
+            assert_eq!(data.nsm_service_address.as_deref(), Some("127.0.0.1"));
+            assert_eq!(data.nsm_client_id, None, "{t:?}");
+            assert_eq!(data.nsm_mesh_client, None, "{t:?}");
+            // The client's keys are not set yet, the service's are, each
+            // with the field's text.
+            let missing = store(&c, &service, get("nsm_mesh_client")).await;
+            assert!(missing.entries.is_empty(), "{t:?}: {missing:?}");
+            let port = store(&c, &service, get("nsm_service_port")).await;
+            assert_eq!(
+                port.entries
+                    .iter()
+                    .map(|e| (e.value.as_str(), e.version))
+                    .collect::<Vec<_>>(),
+                [("9000", 0)],
+                "{t:?}"
+            );
+
+            // Paired: the same answer through either party, naming both.
+            let client = c.claim(12).await;
+            let via_client = store(&c, &client, get("nsm_mesh_data")).await;
+            let via_service = store(&c, &service, get("nsm_mesh_data")).await;
+            assert_eq!(via_client, via_service, "{t:?}");
+            assert_eq!(via_client.client, Some(client.id()), "{t:?}");
+            let data = via_client.mesh_data().unwrap().expect("mesh data");
+            assert_eq!(data.nsm_client_id, Some(client.id()), "{t:?}");
+            assert_eq!(data.nsm_mesh_client, Some(client.bound()), "{t:?}");
+            assert_eq!(data.nsm_mesh_service, Some(service.bound()), "{t:?}");
+            // The combined service endpoint is what the claim was told.
+            assert_eq!(
+                data.nsm_service.map(|a| a.to_string()),
+                Some(client.service().expect("paired").to_string()),
+                "{t:?}"
+            );
+
+            // A list shows every one of the broker's entries, at version 0,
+            // beside no stored entry at all; a put of one is refused, and
+            // the store is as it was.
+            let listed = store(&c, &client, StoreOp::List).await;
+            assert!(
+                stored_only(listed.clone()).entries.is_empty(),
+                "{t:?}: {listed:?}"
+            );
+            assert_eq!(
+                listed.entries,
+                via_client
+                    .mesh_data()
+                    .unwrap()
+                    .expect("mesh data")
+                    .entries()
+                    .unwrap(),
+                "{t:?}"
+            );
+            let found = store(&c, &client, get("nsm_mesh_client")).await;
+            assert_eq!(found.entries[0].value, client.bound().to_string(), "{t:?}");
+            let err = ops::store(&client.bound(), put("nsm_mesh_data", "mine"), c.net())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Rejected(reason) if reason.contains("reserved")),
+                "{t:?}: {err}"
+            );
+            let again = store(&c, &service, get("nsm_mesh_data")).await;
+            assert_eq!(again.revision, 0, "{t:?}");
+            assert_eq!(again.mesh_data().unwrap(), via_client.mesh_data().unwrap());
+            c.stop().await;
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn store_by_key_reaches_the_claim_without_a_party_address() {
+    for &t in TRANSPORTS {
+        with_deadline(async {
+            let c = Cluster::start(t).await;
+            let broker = c.broker_addr();
+            let by_key = |party: Option<PartyId>, op: StoreOp| {
+                let broker = broker.clone();
+                let net = c.net();
+                async move { ops::store_by_key(&broker, 21, party, op, net).await }
+            };
+            // Nothing under the key.
+            let err = by_key(None, StoreOp::List).await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Rejected(r) if r == "no party under key 21"),
+                "{t:?}: {err}"
+            );
+            // One service, nobody holding it: an empty store, no writes.
+            let service = c.publish(21, 9000).await;
+            let empty = by_key(None, StoreOp::List).await.unwrap();
+            assert_eq!((empty.client, empty.revision), (None, 0), "{t:?}");
+            let err = by_key(None, put("step", "5")).await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Rejected(r) if r.contains("not claimed")),
+                "{t:?}: {err}"
+            );
+            // One claim: the key alone, or either party by id, is that store,
+            // the same one the parties relay to.
+            let client = c.claim(21).await;
+            let written = by_key(None, put("step", "5")).await.unwrap();
+            assert_eq!(written.client, Some(client.id()), "{t:?}");
+            for party in [None, Some(client.id()), Some(service.id())] {
+                let read = by_key(party, get("step")).await.unwrap();
+                assert_eq!(read, written, "{t:?} {party:?}");
+            }
+            assert_eq!(store(&c, &service, get("step")).await, written, "{t:?}");
+            // The target enum is the front-ends' way in, and the mesh data
+            // resolves the same way.
+            let target = ops::StoreTarget::Key {
+                broker: broker.clone(),
+                key: 21,
+                party: None,
+            };
+            let mesh = target
+                .store(get("nsm_mesh_data"), c.net())
+                .await
+                .unwrap()
+                .mesh_data()
+                .unwrap()
+                .expect("mesh data");
+            assert_eq!(mesh.nsm_mesh_client, Some(client.bound()), "{t:?}");
+            assert_eq!(mesh.nsm_mesh_service, Some(service.bound()), "{t:?}");
+            // A spare service beside the claim changes nothing; a second
+            // client makes the key ambiguous until a party is named.
+            let spare = c.publish(21, 9001).await;
+            assert_eq!(by_key(None, get("step")).await.unwrap(), written, "{t:?}");
+            let second = c.claim(21).await;
+            let err = by_key(None, get("step")).await.unwrap_err();
+            let expected = format!(
+                "key 21 has 2 clients ({}, {}); name one with party_id",
+                client.id(),
+                second.id()
+            );
+            assert!(
+                matches!(&err, Error::Rejected(r) if *r == expected),
+                "{t:?}: {err}"
+            );
+            let own = by_key(Some(second.id()), get("step")).await.unwrap();
+            assert_eq!(
+                (own.client, own.entries.len()),
+                (Some(second.id()), 0),
+                "{t:?}"
+            );
+            assert_eq!(
+                by_key(Some(spare.id()), get("step")).await.unwrap(),
+                own,
+                "{t:?}: the second claim through its service"
+            );
+            // A party under another key is not under this one.
+            let err = ops::store_by_key(&broker, 22, Some(client.id()), get("step"), c.net())
+                .await
+                .unwrap_err();
+            let expected = format!("no party {} under key 22", client.id());
+            assert!(
+                matches!(&err, Error::Rejected(r) if *r == expected),
+                "{t:?}: {err}"
+            );
+            // The parties do not answer it: the broker does.
+            let reply = c
+                .raw_client()
+                .call(
+                    &client.bound(),
+                    Message::StoreByKey {
+                        rendezvous: 21,
+                        party_id: None,
+                        op: StoreOp::List,
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(&reply, Message::Nack { reason } if reason.contains("unexpected store_by_key")),
+                "{t:?}: {reply:?}"
+            );
+            c.stop().await;
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn mesh_data_follows_a_repairing() {
+    with_deadline(async {
+        let c = Cluster::start(Transport::Tcp).await;
+        let s1 = c.publish(13, 9001).await;
+        let s2 = c.publish(13, 9002).await;
+        let client = c.claim(13).await;
+        let mut pairings = client.pairings();
+        pairings.borrow_and_update();
+        let before = store(&c, &client, get("nsm_mesh_data"))
+            .await
+            .mesh_data()
+            .unwrap()
+            .expect("mesh data");
+        assert_eq!(before.nsm_service_id, Some(s1.id()));
+        // The spare is unclaimed: its own data names no client.
+        let spare = store(&c, &s2, get("nsm_mesh_data")).await;
+        assert_eq!(spare.client, None);
+        let spare = spare.mesh_data().unwrap().expect("mesh data");
+        assert_eq!(
+            (spare.nsm_service_id, spare.nsm_client_id),
+            (Some(s2.id()), None)
+        );
+
+        // The first service dies and the client moves to the spare: the
+        // data follows, through either party.
+        c.kill(s1).await;
+        while pairings.borrow_and_update().as_ref().map(|h| h.id) != Some(s2.id()) {
+            pairings.changed().await.unwrap();
+        }
+        let after = store(&c, &client, get("nsm_mesh_data"))
+            .await
+            .mesh_data()
+            .unwrap()
+            .expect("mesh data");
+        assert_eq!(after.nsm_service_id, Some(s2.id()));
+        assert_eq!(after.nsm_mesh_service, Some(s2.bound()));
+        assert_eq!(after.nsm_service_port, Some(9002));
+        assert_eq!(after.nsm_mesh_client, before.nsm_mesh_client);
+        assert_eq!(after.nsm_client_id, Some(client.id()));
+        assert_eq!(
+            store(&c, &s2, get("nsm_mesh_data"))
+                .await
+                .mesh_data()
+                .unwrap(),
+            Some(after)
+        );
         c.stop().await;
     })
     .await;
@@ -724,7 +980,7 @@ async fn store_works_in_ping_mode() {
         assert_eq!(written.client, Some(client.id()));
         assert_eq!(store(&c, &service, get("step")).await, written);
         store(&c, &service, put("done", "yes")).await;
-        let listed = store(&c, &client, StoreOp::List).await;
+        let listed = stored_only(store(&c, &client, StoreOp::List).await);
         assert_eq!(
             listed.keys().map(|k| k.as_str()).collect::<Vec<_>>(),
             ["done", "step"]
@@ -734,7 +990,10 @@ async fn store_works_in_ping_mode() {
         // sign of life is pinned in the broker handler's tests.)
         tokio::time::sleep(c.timing().ping_staleness * 2).await;
         assert_eq!(c.broker().snapshot().len(), 2);
-        assert_eq!(store(&c, &service, StoreOp::List).await, listed);
+        assert_eq!(
+            stored_only(store(&c, &service, StoreOp::List).await),
+            listed
+        );
         c.stop().await;
         service_run.abort();
         client_run.abort();
@@ -777,7 +1036,7 @@ async fn store_relay_requires_the_registration_token() {
             .unwrap();
         assert_eq!(bare, Message::nack("unexpected store at the broker"));
         // Nothing was written by any of that.
-        let listed = store(&c, &client, StoreOp::List).await;
+        let listed = stored_only(store(&c, &client, StoreOp::List).await);
         assert!(listed.entries.is_empty(), "{listed:?}");
 
         // With its own token each party reaches the store.
@@ -1019,7 +1278,7 @@ async fn a_full_store_refuses_a_write_and_keeps_its_contents() {
                 matches!(&err, Error::Rejected(reason) if reason.starts_with("store full: ")),
                 "{t:?}: {err}"
             );
-            let listed = store(&c, &service, StoreOp::List).await;
+            let listed = stored_only(store(&c, &service, StoreOp::List).await);
             assert_eq!(listed.entries, written.entries, "{t:?}");
             assert_eq!(listed.revision, written.revision, "{t:?}");
             // A smaller value in the same entry always fits.

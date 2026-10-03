@@ -349,13 +349,14 @@ async fn run(command: Command, shutdown: CancellationToken) -> Result<ExitCode> 
     Ok(ExitCode::SUCCESS)
 }
 
-/// `nsm store`: one operation through a party, printed per operation. With
-/// `--json` stdout carries the broker's reply as one line instead (the body
-/// `POST /v1/store` returns); stderr and the exit status stay the same.
+/// `nsm store`: one operation through a party, or at the broker by
+/// rendezvous key, printed per operation. With `--json` stdout carries the
+/// broker's reply as one line instead (the body `POST /v1/store` returns);
+/// stderr and the exit status stay the same either way.
 async fn store(command: StoreCommand) -> Result<ExitCode> {
-    let (party, op, tls, timing, json) = command.into_parts();
+    let (target, op, tls, timing, json) = command.into_parts();
     let net = net_opts(&tls, &timing, &LimitsOpts::default());
-    let stored = ops::store(&party, op.clone(), &net).await?;
+    let stored = target.store(op.clone(), &net).await?;
     let mut lines = Vec::new();
     let mut code = ExitCode::SUCCESS;
     match &op {

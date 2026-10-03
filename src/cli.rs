@@ -5,12 +5,20 @@
 //! definition and one set of validation rules.
 //!
 //! `store` is a group of four subcommands ([`StoreCommand`]), one per
-//! operation on the store a client shares with its service. `status` is the
+//! operation on the store a client shares with its service, reached through
+//! either party's heartbeat address or, with `--key RENDEZVOUS`, at the
+//! broker by rendezvous key (decision D28). `status` is the
 //! one command that talks to a broker's admin listener instead of a party.
 //!
 //! The transport is taken from the peer address: `host:port` is raw TCP,
 //! `http://host:port` and `https://host:port` are HTTP. `listen` and `serve`
 //! have no peer address and take `--transport` instead.
+//!
+//! A party's heartbeat port (`--bind-port` on `publish` and `claim`) may be
+//! left out: the operating system then picks a free one when the listener
+//! is bound, and the party prints the address it got (decision D25). The
+//! broker's port is the one fixed address of the mesh and stays required on
+//! `listen`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,7 +28,8 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, Selector, Transport};
-use crate::protocol::{StoreKey, StoreOp};
+use crate::ops::StoreTarget;
+use crate::protocol::{PartyId, StoreKey, StoreOp};
 
 /// NERSC Service Mesh: publish, claim and broker services across HPC systems.
 #[derive(Debug, Parser)]
@@ -190,8 +199,8 @@ impl TimingOpts {
 #[derive(Debug, Clone, Default, Args, serde::Serialize, serde::Deserialize)]
 pub struct LimitsOpts {
     /// Largest message accepted on any transport, in bytes (at least 1024;
-    /// `listen` needs at least `--max-store-bytes` plus 1024, which is 17408
-    /// with the default store budget and never less than 1280).
+    /// `listen` needs at least `--max-store-bytes` plus 4096, which is 20480
+    /// with the default store budget and never less than 4352).
     #[arg(long, value_name = "BYTES", value_parser = clap::value_parser!(u64).range(1024..))]
     pub max_frame_bytes: Option<u64>,
     /// Connections a listener serves concurrently.
@@ -342,8 +351,9 @@ pub enum Command {
     Publish {
         /// Broker address (`host:port`, `http://host:port` or `https://host:port`).
         broker: Addr,
-        /// Port this party listens on for the broker's heartbeats.
-        #[arg(long, value_name = "PORT")]
+        /// Port this party listens on for the broker's heartbeats; 0, or
+        /// omitting the flag, lets the operating system pick a free one.
+        #[arg(long, value_name = "PORT", default_value_t = 0)]
         bind_port: u16,
         /// Port the actual service accepts connections on.
         #[arg(long, value_name = "PORT")]
@@ -369,8 +379,9 @@ pub enum Command {
     Claim {
         /// Broker address.
         broker: Addr,
-        /// Port this party listens on for the broker's heartbeats.
-        #[arg(long, value_name = "PORT")]
+        /// Port this party listens on for the broker's heartbeats; 0, or
+        /// omitting the flag, lets the operating system pick a free one.
+        #[arg(long, value_name = "PORT", default_value_t = 0)]
         bind_port: u16,
         /// Rendezvous key of the wanted service.
         #[arg(long)]
@@ -499,17 +510,54 @@ pub enum Command {
     },
 }
 
-/// The operations of `nsm store`. `PARTY` is either party's heartbeat
-/// address: the client's or its service's, which share one store; `KEY` is a
-/// store key, unrelated to the rendezvous `--key`.
+/// Where `nsm store` sends its operation: `ADDR` is either party's
+/// heartbeat address (the client's or its service's, which share one
+/// store), or, with `--key RENDEZVOUS`, the broker's, which then applies the
+/// operation to the one claim under that key (`--party-id ID` names one
+/// party of the key when it has several). Shared by every subcommand.
+#[derive(Debug, Clone, Args)]
+pub struct StoreWhere {
+    /// A party's heartbeat address (the client's or its service's), or the
+    /// broker's address with --key.
+    pub addr: Addr,
+    /// Address the store by rendezvous key at the broker: ADDR is then the
+    /// broker's address, and the operation applies to the one claim under
+    /// the key (or to its one unclaimed service).
+    #[arg(long = "key", value_name = "RENDEZVOUS")]
+    pub rendezvous: Option<u64>,
+    /// With --key: the party (a client or a service) whose claim is meant,
+    /// when the key has more than one.
+    #[arg(long, value_name = "ID", requires = "rendezvous")]
+    pub party_id: Option<u64>,
+}
+
+impl StoreWhere {
+    /// The target as the operations layer takes it.
+    pub fn target(self) -> StoreTarget {
+        match self.rendezvous {
+            Some(key) => StoreTarget::Key {
+                broker: self.addr,
+                key,
+                party: self.party_id.map(PartyId),
+            },
+            None => StoreTarget::Party(self.addr),
+        }
+    }
+}
+
+/// The operations of `nsm store`. `ADDR` is either party's heartbeat
+/// address, or the broker's with `--key` ([`StoreWhere`]); `STORE_KEY` is a
+/// store key, unrelated to the rendezvous key `--key` names.
 #[derive(Debug, Subcommand)]
 pub enum StoreCommand {
     /// Print the value stored under a key (exit 3 when the key is not set).
     Get {
-        /// Either party's heartbeat address.
-        party: Addr,
+        /// Where to ask.
+        #[command(flatten)]
+        at: StoreWhere,
         /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
         /// starting with -.
+        #[arg(value_name = "STORE_KEY")]
         key: StoreKey,
         /// Print the broker's reply as one line of JSON instead.
         #[arg(long)]
@@ -525,10 +573,12 @@ pub enum StoreCommand {
     /// Store a value under a key, replacing what was there, and print the
     /// write's version (exit 4 when --if-version does not match).
     Put {
-        /// Either party's heartbeat address.
-        party: Addr,
+        /// Where to ask.
+        #[command(flatten)]
+        at: StoreWhere,
         /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
         /// starting with -.
+        #[arg(value_name = "STORE_KEY")]
         key: StoreKey,
         /// The value: any text, including empty text.
         #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
@@ -551,10 +601,12 @@ pub enum StoreCommand {
     /// Remove a key; succeeds whether or not it was set (exit 4 when
     /// --if-version does not match).
     Delete {
-        /// Either party's heartbeat address.
-        party: Addr,
+        /// Where to ask.
+        #[command(flatten)]
+        at: StoreWhere,
         /// Store key: 1 to 128 characters from A-Z a-z 0-9 . _ - : /, not
         /// starting with -.
+        #[arg(value_name = "STORE_KEY")]
         key: StoreKey,
         /// Remove only if the key is at version N (0: only if it is not
         /// set); otherwise change nothing and exit 4.
@@ -571,10 +623,12 @@ pub enum StoreCommand {
         timing: TimingOpts,
     },
 
-    /// Print every key in the store, one per line.
+    /// Print every key in the store, one per line: the stored ones and the
+    /// broker's own `nsm_` keys.
     List {
-        /// Either party's heartbeat address.
-        party: Addr,
+        /// Where to ask.
+        #[command(flatten)]
+        at: StoreWhere,
         /// Print the broker's reply, with every value, as one line of JSON
         /// instead.
         #[arg(long)]
@@ -589,20 +643,20 @@ pub enum StoreCommand {
 }
 
 impl StoreCommand {
-    /// The request as the operations layer takes it: the party to ask, the
+    /// The request as the operations layer takes it: where to ask, the
     /// operation, the TLS and timing options, and whether to print the reply
     /// as JSON.
-    pub fn into_parts(self) -> (Addr, StoreOp, TlsOpts, TimingOpts, bool) {
+    pub fn into_parts(self) -> (StoreTarget, StoreOp, TlsOpts, TimingOpts, bool) {
         match self {
             StoreCommand::Get {
-                party,
+                at,
                 key,
                 json,
                 tls,
                 timing,
-            } => (party, StoreOp::Get { key }, tls, timing, json),
+            } => (at.target(), StoreOp::Get { key }, tls, timing, json),
             StoreCommand::Put {
-                party,
+                at,
                 key,
                 value,
                 if_version,
@@ -610,7 +664,7 @@ impl StoreCommand {
                 tls,
                 timing,
             } => (
-                party,
+                at.target(),
                 StoreOp::Put {
                     key,
                     value,
@@ -621,25 +675,25 @@ impl StoreCommand {
                 json,
             ),
             StoreCommand::Delete {
-                party,
+                at,
                 key,
                 if_version,
                 json,
                 tls,
                 timing,
             } => (
-                party,
+                at.target(),
                 StoreOp::Delete { key, if_version },
                 tls,
                 timing,
                 json,
             ),
             StoreCommand::List {
-                party,
+                at,
                 json,
                 tls,
                 timing,
-            } => (party, StoreOp::List, tls, timing, json),
+            } => (at.target(), StoreOp::List, tls, timing, json),
         }
     }
 }
@@ -697,6 +751,38 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn bind_port_is_optional_for_parties_and_required_for_the_broker() {
+        match parse(&[
+            "publish",
+            "broker:12000",
+            "--service-port",
+            "9000",
+            "--key",
+            "1",
+        ])
+        .command
+        {
+            Command::Publish { bind_port, .. } => assert_eq!(bind_port, 0),
+            other => panic!("{other:?}"),
+        }
+        match parse(&["claim", "broker:12000", "--key", "1"]).command {
+            Command::Claim { bind_port, .. } => assert_eq!(bind_port, 0),
+            other => panic!("{other:?}"),
+        }
+        // Given, the flag still chooses the port; 0 is the same as leaving
+        // it out.
+        for (given, expected) in [("12020", 12020u16), ("0", 0)] {
+            match parse(&["claim", "broker:12000", "--key", "1", "--bind-port", given]).command {
+                Command::Claim { bind_port, .. } => assert_eq!(bind_port, expected, "{given}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        let err = Cli::try_parse_from(["nsm", "listen"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert!(err.to_string().contains("--bind-port"), "{err}");
     }
 
     #[test]
@@ -777,11 +863,15 @@ mod tests {
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
-    fn store(args: &[&str]) -> (Addr, StoreOp, TlsOpts, TimingOpts, bool) {
+    fn store(args: &[&str]) -> (StoreTarget, StoreOp, TlsOpts, TimingOpts, bool) {
         match parse(&[&["store"], args].concat()).command {
             Command::Store { op } => op.into_parts(),
             other => panic!("{other:?}"),
         }
+    }
+
+    fn party(addr: &str) -> StoreTarget {
+        StoreTarget::Party(addr.parse().unwrap_or_else(|e| panic!("{addr}: {e}")))
     }
 
     fn store_key(text: &str) -> StoreKey {
@@ -790,8 +880,8 @@ mod tests {
 
     #[test]
     fn store_subcommands_become_store_ops() {
-        let (party, op, tls, timing, json) = store(&["get", "10.0.0.9:41232", "input/path"]);
-        assert_eq!(party.to_string(), "10.0.0.9:41232");
+        let (target, op, tls, timing, json) = store(&["get", "10.0.0.9:41232", "input/path"]);
+        assert_eq!(target, party("10.0.0.9:41232"));
         assert_eq!(
             op,
             StoreOp::Get {
@@ -801,7 +891,7 @@ mod tests {
         assert!(!tls.tls && !json);
         assert_eq!(timing.timing(), Timing::default());
 
-        let (party, op, _, timing, json) = store(&[
+        let (target, op, _, timing, json) = store(&[
             "put",
             "http://10.0.0.7:41231",
             "step",
@@ -811,7 +901,7 @@ mod tests {
             "--request-timeout",
             "2",
         ]);
-        assert_eq!(party.to_string(), "http://10.0.0.7:41231");
+        assert_eq!(target, party("http://10.0.0.7:41231"));
         assert_eq!(
             op,
             StoreOp::Put {
@@ -840,6 +930,96 @@ mod tests {
             tls.root_ca.as_deref(),
             Some(std::path::Path::new("/ca.pem"))
         );
+    }
+
+    #[test]
+    fn with_a_rendezvous_key_the_address_is_the_brokers() {
+        let broker = || -> Addr { "http://broker:12000".parse().unwrap() };
+        let (target, op, _, _, json) = store(&[
+            "get",
+            "http://broker:12000",
+            "nsm_mesh_data",
+            "--key",
+            "1234",
+        ]);
+        assert_eq!(
+            target,
+            StoreTarget::Key {
+                broker: broker(),
+                key: 1234,
+                party: None,
+            }
+        );
+        assert_eq!(
+            op,
+            StoreOp::Get {
+                key: store_key("nsm_mesh_data")
+            }
+        );
+        assert!(!json);
+        // The two keys are kept apart: the store key is positional, the
+        // rendezvous key the flag, and --party-id narrows the claim.
+        let (target, op, _, _, json) = store(&[
+            "put",
+            "http://broker:12000",
+            "step",
+            "--value",
+            "5",
+            "--key",
+            "1234",
+            "--party-id",
+            "7",
+            "--json",
+        ]);
+        assert_eq!(
+            target,
+            StoreTarget::Key {
+                broker: broker(),
+                key: 1234,
+                party: Some(PartyId(7)),
+            }
+        );
+        assert_eq!(
+            op,
+            StoreOp::Put {
+                key: store_key("step"),
+                value: "5".into(),
+                if_version: None,
+            }
+        );
+        assert!(json);
+        for sub in [
+            &["list", "b:1", "--key", "1"][..],
+            &["delete", "b:1", "k", "--key", "1"],
+        ] {
+            let (target, ..) = store(sub);
+            assert!(
+                matches!(
+                    target,
+                    StoreTarget::Key {
+                        key: 1,
+                        party: None,
+                        ..
+                    }
+                ),
+                "{sub:?}"
+            );
+        }
+        // --party-id needs --key; both are numbers.
+        for bad in [
+            &["store", "get", "b:1", "k", "--party-id", "7"][..],
+            &["store", "get", "b:1", "k", "--key", "abc"],
+            &["store", "get", "b:1", "k", "--key", "-1"],
+            &["store", "list", "b:1", "--key", "1", "--party-id", "x"],
+            &["store", "list", "b:1", "--key"],
+        ] {
+            let err =
+                Cli::try_parse_from(std::iter::once("nsm").chain(bad.iter().copied())).unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{bad:?}: {err}");
+        }
+        let err = Cli::try_parse_from(["nsm", "store", "get", "b:1", "k", "--party-id", "7"])
+            .unwrap_err();
+        assert!(err.to_string().contains("--key"), "{err}");
     }
 
     #[test]

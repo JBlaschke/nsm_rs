@@ -6,8 +6,9 @@
 //! to the broker that keeps the store the party shares with its peer. Both
 //! relays go through one helper, which adds the party's id and token and
 //! refuses before registration, so the two cannot drift apart. Anything
-//! else is a [`Message::Nack`]; nothing here panics on the request contents,
-//! and store keys and values are never logged.
+//! else, a `store_by_key` meant for the broker included, is a
+//! [`Message::Nack`]; nothing here panics on the request contents, and
+//! store keys and values are never logged.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -507,6 +508,12 @@ mod tests {
             Message::StoreRelay {
                 from: PartyId(2),
                 token: tok(),
+                op: StoreOp::List,
+            },
+            // A store by rendezvous key is the broker's to answer.
+            Message::StoreByKey {
+                rendezvous: 1,
+                party_id: None,
                 op: StoreOp::List,
             },
             Message::Stored(Stored {

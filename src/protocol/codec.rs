@@ -442,7 +442,7 @@ mod tests {
             host: rng.host(),
             service_port: rng.next_u64() as u16,
         };
-        match rng.below(16) {
+        match rng.below(17) {
             0 => Message::Publish {
                 key: rng.next_u64(),
                 service_port: rng.next_u64() as u16,
@@ -500,6 +500,11 @@ mod tests {
                 op: random_store_op(rng),
             },
             13 => Message::Store {
+                op: random_store_op(rng),
+            },
+            15 => Message::StoreByKey {
+                rendezvous: rng.next_u64(),
+                party_id: rng.chance(2).then(|| PartyId(rng.next_u64())),
                 op: random_store_op(rng),
             },
             14 => Message::Stored(Stored {
