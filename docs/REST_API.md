@@ -76,7 +76,7 @@ Start a service party.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `broker` | address string | yes | the broker (`host:port`, `tls://`, `http://`, `https://`) |
-| `key` | integer | yes | rendezvous key |
+| `key` | string | yes | rendezvous key: 1 to 64 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`; an integer is accepted and read as its decimal text |
 | `service_port` | integer | yes | port the real service listens on |
 | `bind_port` | integer | no (0) | heartbeat port; 0 or omitted lets the operating system pick a free one, as leaving `--bind-port` out does on the command line |
 | `interface`, `ip_start`, `ip_version` | strings | no | local address selection, as `-n`, `-i`, `--ip-version` |
@@ -85,12 +85,12 @@ Start a service party.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/v1/publish -H 'content-type: application/json' \
-  -d '{"broker":"http://10.0.0.1:12000","key":1234,"service_port":9000,"interface":"hsn0","ip_version":"4"}'
+  -d '{"broker":"http://10.0.0.1:12000","key":"1234","service_port":9000,"interface":"hsn0","ip_version":"4"}'
 ```
 
 ```json
 {"id":1,"kind":"publish","state":"running","error":null,"party_id":7,
- "bind_addr":"http://10.128.0.7:41231","service":null,"broker":"http://10.0.0.1:12000","key":1234}
+ "bind_addr":"http://10.128.0.7:41231","service":null,"broker":"http://10.0.0.1:12000","key":"1234"}
 ```
 
 Status 202. A broker refusal (for example the per-host cap) is a 400 with the
@@ -103,7 +103,7 @@ Start a client party. Same fields as `publish` without `service_port`.
 ```json
 {"id":2,"kind":"claim","state":"running","error":null,"party_id":8,
  "bind_addr":"http://10.128.0.9:41232","service":{"id":7,"host":"10.128.0.7","service_port":9000},
- "broker":"http://10.0.0.1:12000","key":1234}
+ "broker":"http://10.0.0.1:12000","key":"1234"}
 ```
 
 `service` is the paired service; it is updated when the broker re-pairs the
@@ -162,7 +162,7 @@ fields sit next to the target, in the shape of the protocol's `store` and
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `party` | address string | one form | either party's heartbeat address (a job's `bind_addr`); the client and its service reach the same store |
-| `broker`, `rendezvous` | address string, integer | the other form | the broker's address and the rendezvous key of the claim: the broker resolves the key to its one client (or to its one service while nobody holds it) and answers as if that party had relayed the operation |
+| `broker`, `rendezvous` | address string, string | the other form | the broker's address and the rendezvous key of the claim (the rule of `key` above, an integer accepted): the broker resolves the key to its one client (or to its one service while nobody holds it) and answers as if that party had relayed the operation |
 | `party_id` | integer | no | with `rendezvous`: one party of the key, a client or a service, when the key has more than one claim |
 | `op` | string | yes | `"get"`, `"put"`, `"delete"` or `"list"` |
 | `key` | string | for get, put, delete | store key: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-` (unrelated to the rendezvous `key` of publish and claim) |
@@ -175,8 +175,8 @@ fields sit next to the target, in the shape of the protocol's `store` and
 {"party":"http://10.128.0.7:41231","op":"get","key":"step"}
 {"party":"http://10.128.0.7:41231","op":"delete","key":"step"}
 {"party":"http://10.128.0.7:41231","op":"list"}
-{"broker":"http://10.0.0.1:12000","rendezvous":1234,"op":"get","key":"nsm_mesh_data"}
-{"broker":"http://10.0.0.1:12000","rendezvous":1234,"party_id":8,"op":"put","key":"step","value":"5"}
+{"broker":"http://10.0.0.1:12000","rendezvous":"1234","op":"get","key":"nsm_mesh_data"}
+{"broker":"http://10.0.0.1:12000","rendezvous":"1234","party_id":8,"op":"put","key":"step","value":"5"}
 ```
 
 A body names exactly one of the two forms: `party`, or `broker` with
@@ -225,7 +225,7 @@ set). A `list` carries them beside the stored entries at version 0, and a
 `put` or a `delete` of any `nsm_` key is a 400 (`... is reserved`).
 
 ```json
-{"client":8,"revision":3,"applied":true,"entries":[{"key":"nsm_mesh_data","value":"{\"nsm_key\":1234,\"nsm_service_id\":7,\"nsm_service_address\":\"10.128.0.7\",\"nsm_service_port\":9000,\"nsm_service\":\"10.128.0.7:9000\",\"nsm_mesh_service_address\":\"10.128.0.7\",\"nsm_mesh_service_port\":41231,\"nsm_mesh_service\":\"http://10.128.0.7:41231\",\"nsm_client_id\":8,\"nsm_mesh_client_address\":\"10.128.0.9\",\"nsm_mesh_client_port\":41232,\"nsm_mesh_client\":\"http://10.128.0.9:41232\"}","version":0}]}
+{"client":8,"revision":3,"applied":true,"entries":[{"key":"nsm_mesh_data","value":"{\"nsm_key\":\"1234\",\"nsm_service_id\":7,\"nsm_service_address\":\"10.128.0.7\",\"nsm_service_port\":9000,\"nsm_service\":\"10.128.0.7:9000\",\"nsm_mesh_service_address\":\"10.128.0.7\",\"nsm_mesh_service_port\":41231,\"nsm_mesh_service\":\"http://10.128.0.7:41231\",\"nsm_client_id\":8,\"nsm_mesh_client_address\":\"10.128.0.9\",\"nsm_mesh_client_port\":41232,\"nsm_mesh_client\":\"http://10.128.0.9:41232\"}","version":0}]}
 ```
 
 `applied` is true for every 200. A put or a delete with `if_version` is
@@ -282,14 +282,14 @@ Job views never contain the registration token or file paths.
 ```bash
 B=http://127.0.0.1:8080
 curl -s $B/healthz
-curl -s -X POST $B/v1/publish -d '{"broker":"http://127.0.0.1:12000","key":77,"service_port":9100,"ip_start":"127.","ip_version":"4"}'
-curl -s -X POST $B/v1/claim   -d '{"broker":"http://127.0.0.1:12000","key":77,"ip_start":"127.","ip_version":"4"}'
+curl -s -X POST $B/v1/publish -d '{"broker":"http://127.0.0.1:12000","key":"77","service_port":9100,"ip_start":"127.","ip_version":"4"}'
+curl -s -X POST $B/v1/claim   -d '{"broker":"http://127.0.0.1:12000","key":"77","ip_start":"127.","ip_version":"4"}'
 curl -s -X POST $B/v1/send    -d '{"party":"<claim bind_addr>","msg":"job 17"}'
 curl -s -X POST $B/v1/collect -d '{"party":"<publish bind_addr>"}'
 curl -s -X POST $B/v1/store   -d '{"party":"<claim bind_addr>","op":"put","key":"step","value":"5"}'
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"get","key":"step"}'
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"list"}'
 curl -s -X POST $B/v1/store   -d '{"party":"<publish bind_addr>","op":"put","key":"step","value":"6","if_version":1}'   # 409 unless step is at version 1
-curl -s -X POST $B/v1/store   -d '{"broker":"http://127.0.0.1:12000","rendezvous":77,"op":"get","key":"nsm_mesh_data"}'   # where key 77's parties listen
+curl -s -X POST $B/v1/store   -d '{"broker":"http://127.0.0.1:12000","rendezvous":"77","op":"get","key":"nsm_mesh_data"}'   # where key 77's parties listen
 curl -s -X DELETE $B/v1/jobs/2
 ```

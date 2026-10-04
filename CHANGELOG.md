@@ -7,7 +7,7 @@ All notable changes to NSM are recorded here. The format follows
 
 The 2026-09 cleanup rewrote the backend once for every transport. Everything
 below compares against the last pre-cleanup state of `main`. Wire protocol
-version: 3.
+version: 4.
 
 ### Breaking changes
 
@@ -52,6 +52,21 @@ version: 3.
   delivers to the sender's peer as it knows it, so a text that races a
   re-pairing reaches the new service instead of being refused, and a service
   can relay text too.
+- **The rendezvous key is text** (wire protocol version 4). `--key` on
+  `publish`, `claim` and `store` takes 1 to 64 characters from
+  `A-Z a-z 0-9 . _ - : /`, not starting with `-`: one shell word, the rule
+  of a store key with a shorter cap; anything else is a usage error (exit
+  2) or, on the control plane, a 400. Two keys are the same when their
+  text is, so `1234` and `01234` are different keys. On the wire the key
+  (`key` of `publish` and `claim`, `rendezvous` of `store_by_key`,
+  `nsm_key` of `nsm_mesh_data`, the key fields of the status document and
+  of a job view) is a JSON string; an unsigned integer, what parties of
+  version 3 sent, still decodes as its decimal text, so a party or a
+  script from before this change keeps working against a new broker and
+  names the same keys. In the library: `protocol::Key` is a validated
+  newtype (`FromStr`, `TryFrom<String>`, `From<u64>` for the decimal
+  text) with `KeyError` and `MAX_KEY_BYTES`, and `Error::NoService`
+  carries a `Key`. Decisions K1 to K4.
 - `collect` and `send` ignore `--key` (still accepted, hidden).
 - **`collect` answers one question.** It prints the last text a party
   received and nothing else. The service a client is paired with is now
@@ -185,8 +200,8 @@ version: 3.
   lines now say `<ADDR>` and `<STORE_KEY>`); on the control plane
   `POST /v1/store` with `broker` and `rendezvous` (and `party_id`) in place
   of `party`. No token travels: the rendezvous key is the capability, as
-  for `publish` and `claim`. One more variant, so the wire protocol stays
-  version 3; `nsm_requests_total` gains `kind="store_by_key"`, and
+  for `publish` and `claim`. One more variant, which needed no protocol
+  bump; `nsm_requests_total` gains `kind="store_by_key"`, and
   operations by key count in `nsm_store_ops_total`. In the library:
   `Message::StoreByKey`, `Registry::resolve_key` and
   `Registry::store_by_key`, `ops::StoreTarget` and `ops::store_by_key`,

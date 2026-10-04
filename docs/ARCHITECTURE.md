@@ -130,7 +130,9 @@ redirects, and `https_only` when the address is `https://`. Both sides share
 `Message` is a `#[serde(tag = "type")]` enum: one variant per request and
 reply. `codec::MessageCodec` is the tokio-util `Encoder`/`Decoder` for the
 4-byte length prefix used on streams; `encode`/`decode` are the JSON functions
-both transports use. `types` holds `PartyId`, `Key`, `RegToken` (a 128-bit
+both transports use. `types` holds `PartyId`, `Key` (the rendezvous key: text
+under the store key's rule with a cap of 64, validated on parse and on decode,
+where an unsigned integer still decodes as its text), `RegToken` (a 128-bit
 secret with constant-time comparison and a redacted `Debug`), `ServiceHandle`
 (what a client is told about its service), the broker's records, and the
 shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
@@ -302,7 +304,8 @@ exist: about 80 MiB of accounted store bytes with the defaults, and at most
 ## 6. Security model
 
 - **Rendezvous keys** select a service; they are not secrets in the sense of
-  authentication (anyone who knows the key may claim). **Registration
+  authentication (anyone who knows the key may claim); a key is one shell
+  word of at most 64 characters, compared as text. **Registration
   tokens** are: the broker issues one per registration, and pings, relays
   and the broker's own heartbeats must carry it. Refusals for an unknown id
   and a wrong token share one text so ids cannot be enumerated.

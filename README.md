@@ -163,7 +163,7 @@ nsm claim 127.0.0.1:12000 --key 1234 -i 127. --ip-version 4
 ```bash
 nsm store get 127.0.0.1:12000 nsm_mesh_data --key 1234
 # prints one line of JSON, for example:
-# {"nsm_key":1234,"nsm_service_id":1,"nsm_service_address":"127.0.0.1","nsm_service_port":9000,"nsm_service":"127.0.0.1:9000","nsm_mesh_service_address":"127.0.0.1","nsm_mesh_service_port":54321,"nsm_mesh_service":"127.0.0.1:54321","nsm_client_id":2,"nsm_mesh_client_address":"127.0.0.1","nsm_mesh_client_port":54322,"nsm_mesh_client":"127.0.0.1:54322"}
+# {"nsm_key":"1234","nsm_service_id":1,"nsm_service_address":"127.0.0.1","nsm_service_port":9000,"nsm_service":"127.0.0.1:9000","nsm_mesh_service_address":"127.0.0.1","nsm_mesh_service_port":54321,"nsm_mesh_service":"127.0.0.1:54321","nsm_client_id":2,"nsm_mesh_client_address":"127.0.0.1","nsm_mesh_client_port":54322,"nsm_mesh_client":"127.0.0.1:54322"}
 ```
 
 ```bash
@@ -224,6 +224,13 @@ they actually bound on stderr (`nsm: client registered as 2 (heartbeats on
 `ADMIN`, for `nsm status`, is a broker's admin listener (what `--admin-bind`
 named): `host:port` or `http://host:port`, plain HTTP only.
 
+**Keys.** `KEY`, the rendezvous key of `publish`, `claim` and `store --key`,
+is 1 to 64 characters from `A-Z a-z 0-9 . _ - : /` and does not start with
+`-`: one shell word that never needs quoting, such as `1234`, `job-17` or
+`run.3/step:a`. Two keys are the same when their text is (`1234` and `01234`
+are different keys). The numeric keys of earlier versions are keys like any
+other, written the same way.
+
 **Exit codes and output.** 0 on success; 1 when an operation fails at run time
 (a message prefixed `nsm: ` goes to stderr); 2 for a command-line error; 3 when
 the party answered but has nothing to report yet (`collect` before the first
@@ -250,8 +257,9 @@ or at the broker by rendezvous key (`ADDR` is then the broker's address and
 `--key` names the key); both parties see every write at once, without
 waiting for a heartbeat. A **store key** is 1 to
 128 characters from `A-Z a-z 0-9 . _ - : /` and does not start with `-`, so
-it never needs quoting; it has nothing to do with the rendezvous key that
-`--key` names. A value is any text, including empty text. How much a store
+it never needs quoting (a rendezvous key follows the same rule, capped at
+64 characters); it has nothing to do with the rendezvous key that `--key`
+names. A value is any text, including empty text. How much a store
 holds is the broker's `--max-store-bytes` (see [limit
 options](#limit-options)); a put that does not fit is refused.
 
