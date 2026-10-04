@@ -288,7 +288,7 @@ impl StoreTarget {
         match self {
             StoreTarget::Party(party) => store(party, op, net).await,
             StoreTarget::Key { broker, key, party } => {
-                store_by_key(broker, *key, *party, op, net).await
+                store_by_key(broker, key, *party, op, net).await
             }
         }
     }
@@ -328,14 +328,14 @@ pub async fn store(party: &Addr, op: StoreOp, net: &NetOpts) -> Result<Stored> {
 /// is not under the key.
 pub async fn store_by_key(
     broker: &Addr,
-    key: Key,
+    key: &Key,
     party: Option<PartyId>,
     op: StoreOp,
     net: &NetOpts,
 ) -> Result<Stored> {
     let (kind, conditional) = (op.kind(), op.if_version().is_some());
     let request = Message::StoreByKey {
-        rendezvous: key,
+        rendezvous: key.clone(),
         party_id: party,
         op,
     };
@@ -518,7 +518,7 @@ mod tests {
             );
             server.shutdown().await;
             let (server, _, _) = start(Transport::Tcp, PeerReporter).await;
-            let err = store_by_key(&server.bound(), Key::from(7), None, StoreOp::List, &net)
+            let err = store_by_key(&server.bound(), &Key::from(7), None, StoreOp::List, &net)
                 .await
                 .unwrap_err();
             assert!(matches!(err, Error::Rejected(_)), "{err}");

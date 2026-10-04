@@ -435,7 +435,7 @@ mod tests {
     }
 
     fn random_message(rng: &mut crate::testing::Rng) -> Message {
-        use crate::protocol::{Key, Role, ServiceHandle, StoreEntry, Stored};
+        use crate::protocol::{Role, ServiceHandle, StoreEntry, Stored};
         let token = rng.token();
         let handle = ServiceHandle {
             id: PartyId(rng.next_u64()),
@@ -444,13 +444,13 @@ mod tests {
         };
         match rng.below(17) {
             0 => Message::Publish {
-                key: Key::from(rng.next_u64()),
+                key: rng.key(),
                 service_port: rng.next_u64() as u16,
                 bind_addr: rng.addr(),
                 ping: rng.chance(2),
             },
             1 => Message::Claim {
-                key: Key::from(rng.next_u64()),
+                key: rng.key(),
                 bind_addr: rng.addr(),
                 ping: rng.chance(2),
             },
@@ -503,7 +503,7 @@ mod tests {
                 op: random_store_op(rng),
             },
             15 => Message::StoreByKey {
-                rendezvous: Key::from(rng.next_u64()),
+                rendezvous: rng.key(),
                 party_id: rng.chance(2).then(|| PartyId(rng.next_u64())),
                 op: random_store_op(rng),
             },

@@ -357,7 +357,7 @@ pub struct SendBody {
 /// fields sit next to it. Through a party:
 /// `{"party":"http://10.128.0.9:41232","op":"put","key":"step","value":"5"}`;
 /// at the broker by rendezvous key:
-/// `{"broker":"http://10.0.0.1:12000","rendezvous":1234,"op":"get","key":"nsm_mesh_data"}`,
+/// `{"broker":"http://10.0.0.1:12000","rendezvous":"1234","op":"get","key":"nsm_mesh_data"}`,
 /// with `"party_id":N` when the key has several claims. Exactly one of the
 /// two forms; anything else is a 400. A put or a delete may add
 /// `"if_version":N` (0: only if the key is not set).
@@ -393,7 +393,7 @@ impl StoreBody {
     pub fn target(&self) -> Result<StoreTarget> {
         let invalid =
             |what: &str| Error::Json(<serde_json::Error as serde::de::Error>::custom(what));
-        match (&self.party, &self.broker, self.rendezvous) {
+        match (&self.party, &self.broker, &self.rendezvous) {
             (Some(party), None, None) if self.party_id.is_none() => {
                 Ok(StoreTarget::Party(party.clone()))
             }
@@ -402,7 +402,7 @@ impl StoreBody {
             )),
             (None, Some(broker), Some(key)) => Ok(StoreTarget::Key {
                 broker: broker.clone(),
-                key,
+                key: key.clone(),
                 party: self.party_id,
             }),
             (None, _, _) => Err(invalid(
@@ -549,7 +549,7 @@ async fn publish(
     let b: PublishBody = parse_body(&body)?;
     let session = ops::publish(ops::PublishRequest {
         broker: b.broker.clone(),
-        key: b.key,
+        key: b.key.clone(),
         bind_port: b.bind_port,
         service_port: b.service_port,
         selector: b.iface.selector(),
@@ -569,7 +569,7 @@ async fn claim(
     let b: ClaimBody = parse_body(&body)?;
     let session = ops::claim(ops::ClaimRequest {
         broker: b.broker.clone(),
-        key: b.key,
+        key: b.key.clone(),
         bind_port: b.bind_port,
         selector: b.iface.selector(),
         serve_tls: b.tls,

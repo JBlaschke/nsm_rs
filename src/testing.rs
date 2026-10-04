@@ -6,7 +6,13 @@
 //! and the iteration number in the assertion message identify it.
 
 use crate::net::{Addr, Transport};
-use crate::protocol::{MAX_STORE_KEY_BYTES, RegToken, StoreKey};
+use crate::protocol::{Key, MAX_KEY_BYTES, MAX_STORE_KEY_BYTES, RegToken, StoreKey};
+
+/// The key alphabet mixed with characters it excludes, for text that is
+/// a valid key about half the time.
+const KEY_TEXT_ALPHABET: &[char] = &[
+    'a', 'Z', '5', '.', '_', '-', ':', '/', ' ', '\n', '*', '"', '\\', 'é', '\u{7f}', '~',
+];
 
 /// xorshift64*: small, fast, and good enough to shake out parser and codec
 /// corner cases.
@@ -107,23 +113,51 @@ impl Rng {
         Addr::new(transport, host, self.next_u64() as u16)
     }
 
-    /// A valid store key: 1 to 128 characters of the store-key alphabet,
-    /// short ones more often than long ones, never starting with `-`.
-    pub(crate) fn store_key(&mut self) -> StoreKey {
+    /// One shell word of the key alphabet (`A-Z a-z 0-9 . _ - : /`), 1 to
+    /// `max` characters, short ones more often than long ones, never
+    /// starting with `-`.
+    fn shell_word(&mut self, max: usize) -> String {
         const ALPHABET: &[char] = &['a', 'k', 'z', 'A', 'Z', '0', '9', '.', '_', '-', ':', '/'];
-        let max = if self.chance(8) {
-            MAX_STORE_KEY_BYTES
-        } else {
-            8
-        };
+        let max = if self.chance(8) { max } else { 8 };
         let len = self.range(1, max);
         let mut text: String = (0..len).map(|_| *self.pick(ALPHABET)).collect();
         if text.starts_with('-') {
             text.replace_range(..1, "k");
         }
-        match StoreKey::try_from(text) {
+        text
+    }
+
+    /// A valid store key: 1 to 128 characters of the key alphabet, short
+    /// ones more often than long ones, never starting with `-`.
+    pub(crate) fn store_key(&mut self) -> StoreKey {
+        match StoreKey::try_from(self.shell_word(MAX_STORE_KEY_BYTES)) {
             Ok(key) => key,
             Err(e) => panic!("generated an invalid store key: {e}"),
+        }
+    }
+
+    /// A valid rendezvous key: 1 to 64 characters of the key alphabet, and
+    /// now and then a bare number, as parties before protocol version 4
+    /// sent them.
+    pub(crate) fn key(&mut self) -> Key {
+        if self.chance(4) {
+            return Key::from(self.next_u64());
+        }
+        match Key::try_from(self.shell_word(MAX_KEY_BYTES)) {
+            Ok(key) => key,
+            Err(e) => panic!("generated an invalid rendezvous key: {e}"),
+        }
+    }
+
+    /// Text that is a valid rendezvous key about half the time, as
+    /// [`store_key_text`](Self::store_key_text) is for store keys.
+    pub(crate) fn key_text(&mut self) -> String {
+        match self.below(6) {
+            0 => String::new(),
+            1 => "k".repeat(self.range(MAX_KEY_BYTES - 1, MAX_KEY_BYTES + 2)),
+            2 => format!("-{}", self.key()),
+            3 => self.key().to_string(),
+            _ => self.string(KEY_TEXT_ALPHABET, 12),
         }
     }
 
@@ -131,15 +165,12 @@ impl Rng {
     /// mixed with characters it excludes, empty, too long or starting with
     /// `-` now and then.
     pub(crate) fn store_key_text(&mut self) -> String {
-        const ALPHABET: &[char] = &[
-            'a', 'Z', '5', '.', '_', '-', ':', '/', ' ', '\n', '*', '"', '\\', 'é', '\u{7f}', '~',
-        ];
         match self.below(6) {
             0 => String::new(),
             1 => "k".repeat(self.range(MAX_STORE_KEY_BYTES - 1, MAX_STORE_KEY_BYTES + 2)),
             2 => format!("-{}", self.store_key()),
             3 => self.store_key().to_string(),
-            _ => self.string(ALPHABET, 12),
+            _ => self.string(KEY_TEXT_ALPHABET, 12),
         }
     }
 

@@ -123,7 +123,12 @@ impl Session {
             opts.timing.clone(),
             opts.limits.clone(),
         ));
-        let state = PartyState::new(role, opts.broker.clone(), opts.key, Arc::clone(&client));
+        let state = PartyState::new(
+            role,
+            opts.broker.clone(),
+            opts.key.clone(),
+            Arc::clone(&client),
+        );
 
         let server = transport::serve(
             &opts.bind_addr(),
@@ -137,14 +142,20 @@ impl Session {
         let bound = server.bound();
         info!(%role, %bound, broker = %opts.broker, "listening; registering with the broker");
 
-        let (id, token) =
-            match register(&client, &opts, &state, request(bound, opts.key, opts.ping)).await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    server.shutdown().await;
-                    return Err(e);
-                }
-            };
+        let (id, token) = match register(
+            &client,
+            &opts,
+            &state,
+            request(bound, opts.key.clone(), opts.ping),
+        )
+        .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                server.shutdown().await;
+                return Err(e);
+            }
+        };
         state.touch();
         info!(%role, %id, "registered");
 

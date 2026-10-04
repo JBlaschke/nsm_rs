@@ -143,10 +143,9 @@ impl BrokerHandler {
                 let token = RegToken::generate()?;
                 loop {
                     let now = Instant::now();
-                    match self
-                        .broker
-                        .with_registry(|r| r.claim(key, bind_addr.clone(), ping, token, now))
-                    {
+                    match self.broker.with_registry(|r| {
+                        r.claim(key.clone(), bind_addr.clone(), ping, token, now)
+                    }) {
                         Ok((id, service)) => {
                             self.broker.metrics().registered(Role::Client);
                             self.broker.watch(id);
@@ -249,7 +248,7 @@ impl BrokerHandler {
                 // key is the capability (decision D27).
                 let outcome = self
                     .broker
-                    .with_registry(|r| r.store_by_key(rendezvous, party_id, op));
+                    .with_registry(|r| r.store_by_key(&rendezvous, party_id, op));
                 let metrics = self.broker.metrics();
                 match outcome {
                     Ok(stored) => {

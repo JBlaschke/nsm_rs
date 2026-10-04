@@ -71,8 +71,8 @@ impl PartyState {
     }
 
     /// The rendezvous key.
-    pub fn key(&self) -> Key {
-        self.key
+    pub fn key(&self) -> &Key {
+        &self.key
     }
 
     /// The transport client used to reach the broker.

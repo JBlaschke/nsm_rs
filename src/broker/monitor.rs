@@ -213,7 +213,7 @@ impl Broker {
                     Party::Service(s) => Some(PartySummary {
                         id,
                         kind: "service",
-                        key: s.record.key,
+                        key: s.record.key.clone(),
                         bind_addr: s.record.bind_addr.clone(),
                         ping: s.record.ping,
                         failures: s.failures,
@@ -222,7 +222,7 @@ impl Broker {
                     Party::Client(c) => Some(PartySummary {
                         id,
                         kind: "client",
-                        key: c.record.key,
+                        key: c.record.key.clone(),
                         bind_addr: c.record.bind_addr.clone(),
                         ping: c.record.ping,
                         failures: c.failures,

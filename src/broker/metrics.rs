@@ -909,8 +909,8 @@ impl Gauges {
                 g.failing += 1;
             }
             *hosts.entry(party.bind_addr().host.clone()).or_default() += 1;
-            let row = keys.entry(party.key()).or_insert_with(|| KeyRow {
-                key: party.key(),
+            let row = keys.entry(party.key().clone()).or_insert_with(|| KeyRow {
+                key: party.key().clone(),
                 services: 0,
                 unclaimed: 0,
                 clients: 0,
@@ -1164,7 +1164,7 @@ impl PartyRow {
                 PartyRow {
                     id: party.id(),
                     role,
-                    key: party.key(),
+                    key: party.key().clone(),
                     bind_addr: party.bind_addr().clone(),
                     ping: party.is_ping(),
                     failures: party.failures(),
@@ -1305,7 +1305,7 @@ impl Status {
             let mut rows = vec![row(["key", "services", "unclaimed", "clients"])];
             rows.extend(self.keys.iter().map(|k| {
                 row([
-                    &k.key.to_string(),
+                    k.key.as_str(),
                     &k.services.to_string(),
                     &k.unclaimed.to_string(),
                     &k.clients.to_string(),
@@ -1337,7 +1337,7 @@ impl Status {
                 row([
                     &p.id.to_string(),
                     &p.role.to_string(),
-                    &p.key.to_string(),
+                    p.key.as_str(),
                     if p.ping { "ping" } else { "heartbeat" },
                     &p.bind_addr.to_string(),
                     &p.paired_with
