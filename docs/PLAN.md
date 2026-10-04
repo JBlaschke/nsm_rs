@@ -11,7 +11,7 @@
 
 | Branch | State | Notes |
 |---|---|---|
-| `key/01-key-newtype` | planned | `protocol::Key` is a type of its own instead of an alias for `u64`; nothing changes on the wire, on the command line or on the control plane |
+| `key/01-key-newtype` | done | `protocol::Key` is a type of its own instead of an alias for `u64`; nothing changes on the wire, on the command line or on the control plane |
 | `key/02-text-keys` | planned | a rendezvous key is text: 1 to 64 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`; a JSON string on the wire, an unsigned integer still decoded as its decimal text; protocol version 4 |
 
 Each branch builds on the previous one and passes the checks in

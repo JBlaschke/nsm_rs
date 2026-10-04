@@ -29,7 +29,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, Selector, Transport};
 use crate::ops::StoreTarget;
-use crate::protocol::{PartyId, StoreKey, StoreOp};
+use crate::protocol::{Key, PartyId, StoreKey, StoreOp};
 
 /// NERSC Service Mesh: publish, claim and broker services across HPC systems.
 #[derive(Debug, Parser)]
@@ -360,7 +360,7 @@ pub enum Command {
         service_port: u16,
         /// Rendezvous key shared with the clients that may claim this service.
         #[arg(long)]
-        key: u64,
+        key: Key,
         /// Send one-sided heartbeats to the broker instead of answering its heartbeats.
         #[arg(long)]
         ping: bool,
@@ -385,7 +385,7 @@ pub enum Command {
         bind_port: u16,
         /// Rendezvous key of the wanted service.
         #[arg(long)]
-        key: u64,
+        key: Key,
         /// Send one-sided heartbeats to the broker instead of answering its heartbeats.
         #[arg(long)]
         ping: bool,
@@ -406,7 +406,7 @@ pub enum Command {
         party: Addr,
         /// Accepted for compatibility; not used.
         #[arg(long, hide = true)]
-        key: Option<u64>,
+        key: Option<Key>,
         /// Local address selection.
         #[command(flatten)]
         iface: IfaceOpts,
@@ -440,7 +440,7 @@ pub enum Command {
         msg: String,
         /// Accepted for compatibility; not used.
         #[arg(long, hide = true)]
-        key: Option<u64>,
+        key: Option<Key>,
         /// Local address selection.
         #[command(flatten)]
         iface: IfaceOpts,
@@ -524,7 +524,7 @@ pub struct StoreWhere {
     /// broker's address, and the operation applies to the one claim under
     /// the key (or to its one unclaimed service).
     #[arg(long = "key", value_name = "RENDEZVOUS")]
-    pub rendezvous: Option<u64>,
+    pub rendezvous: Option<Key>,
     /// With --key: the party (a client or a service) whose claim is meant,
     /// when the key has more than one.
     #[arg(long, value_name = "ID", requires = "rendezvous")]
@@ -743,7 +743,7 @@ mod tests {
                 assert_eq!(broker.to_string(), "https://broker:12000");
                 assert_eq!(
                     (bind_port, service_port, key, ping),
-                    (12010, 9000, 1234, false)
+                    (12010, 9000, Key::from(1234), false)
                 );
                 assert_eq!(iface.interface.as_deref(), Some("en0"));
                 assert_eq!(iface.ip_version, Some(IpVersion::V4));
@@ -946,7 +946,7 @@ mod tests {
             target,
             StoreTarget::Key {
                 broker: broker(),
-                key: 1234,
+                key: Key::from(1234),
                 party: None,
             }
         );
@@ -975,7 +975,7 @@ mod tests {
             target,
             StoreTarget::Key {
                 broker: broker(),
-                key: 1234,
+                key: Key::from(1234),
                 party: Some(PartyId(7)),
             }
         );
@@ -997,10 +997,10 @@ mod tests {
                 matches!(
                     target,
                     StoreTarget::Key {
-                        key: 1,
+                        key,
                         party: None,
                         ..
-                    }
+                    } if key == Key::from(1)
                 ),
                 "{sub:?}"
             );

@@ -148,8 +148,31 @@ impl<'de> Deserialize<'de> for RegToken {
 /// Rendezvous key shared by a service and the clients allowed to claim it.
 ///
 /// Services publish under a key; a claim for the same key is paired with one
-/// of them. The key carries no other meaning to the broker.
-pub type Key = u64;
+/// of them. The key carries no other meaning to the broker. On the wire a
+/// key is a bare JSON integer, and `--key` takes the same number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Key(u64);
+
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl FromStr for Key {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        text.parse().map(Key)
+    }
+}
+
+impl From<u64> for Key {
+    fn from(key: u64) -> Self {
+        Key(key)
+    }
+}
 
 /// Which side of a pairing a party is.
 ///
@@ -714,19 +737,19 @@ impl MeshData {
         let heartbeat = Addr::new(crate::net::Transport::Https, host, u16::MAX);
         let service = ServiceRecord {
             id: PartyId(u64::MAX),
-            key: u64::MAX,
+            key: Key::from(u64::MAX),
             service_addr: Addr::tcp(host, u16::MAX),
             bind_addr: heartbeat.clone(),
             ping: false,
         };
         let client = ClientRecord {
             id: PartyId(u64::MAX),
-            key: u64::MAX,
+            key: Key::from(u64::MAX),
             bind_addr: heartbeat,
             service: PartyId(u64::MAX),
             ping: false,
         };
-        MeshData::new(u64::MAX, Some(&service), Some(&client))
+        MeshData::new(Key::from(u64::MAX), Some(&service), Some(&client))
     }
 }
 
@@ -738,7 +761,7 @@ mod tests {
     fn service() -> ServiceRecord {
         ServiceRecord {
             id: PartyId(3),
-            key: 42,
+            key: Key::from(42),
             service_addr: Addr::tcp("10.0.0.5", 9000),
             bind_addr: Addr::new(Transport::Https, "10.0.0.5", 9001),
             ping: false,
@@ -748,7 +771,7 @@ mod tests {
     fn client() -> ClientRecord {
         ClientRecord {
             id: PartyId(4),
-            key: 42,
+            key: Key::from(42),
             bind_addr: Addr::new(Transport::Https, "10.0.0.6", 7000),
             service: PartyId(3),
             ping: false,
@@ -763,6 +786,22 @@ mod tests {
         assert!(serde_json::from_str::<PartyId>("\"7\"").is_err());
         assert!(serde_json::from_str::<PartyId>("-1").is_err());
         assert!(serde_json::from_str::<PartyId>("{\"0\":7}").is_err());
+    }
+
+    #[test]
+    fn key_is_a_bare_integer_on_the_wire() {
+        assert_eq!(serde_json::to_string(&Key::from(42)).unwrap(), "42");
+        let key: Key = serde_json::from_str("42").unwrap();
+        assert_eq!(key, Key::from(42));
+        assert!(serde_json::from_str::<Key>("\"42\"").is_err());
+        assert!(serde_json::from_str::<Key>("-1").is_err());
+        assert!(serde_json::from_str::<Key>("null").is_err());
+        assert_eq!(Key::from(42).to_string(), "42");
+        assert_eq!(format!("{:>4}", Key::from(42)), "  42");
+        assert_eq!("42".parse::<Key>().unwrap(), Key::from(42));
+        assert!("abc".parse::<Key>().is_err());
+        assert!("-1".parse::<Key>().is_err());
+        assert!(Key::from(1) < Key::from(2));
     }
 
     #[test]
@@ -858,7 +897,7 @@ mod tests {
 
         let c = ClientRecord {
             id: PartyId(4),
-            key: 42,
+            key: Key::from(42),
             bind_addr: Addr::tcp("::1", 7000),
             service: PartyId(3),
             ping: true,
@@ -1214,7 +1253,7 @@ mod tests {
 
     #[test]
     fn mesh_data_json_shape_is_flat_with_nsm_prefixed_fields() {
-        let both = MeshData::new(42, Some(&service()), Some(&client()));
+        let both = MeshData::new(Key::from(42), Some(&service()), Some(&client()));
         let json = serde_json::to_string(&both).unwrap();
         assert_eq!(
             json,
@@ -1233,7 +1272,7 @@ mod tests {
         assert!(fields.keys().all(|k| k.starts_with("nsm_")), "{json}");
 
         // A side that is not there is null, not missing.
-        let service_only = MeshData::new(42, Some(&service()), None);
+        let service_only = MeshData::new(Key::from(42), Some(&service()), None);
         let json = serde_json::to_string(&service_only).unwrap();
         assert!(
             json.ends_with(
@@ -1245,7 +1284,7 @@ mod tests {
             serde_json::from_str::<MeshData>(&json).unwrap(),
             service_only
         );
-        let client_only = MeshData::new(42, None, Some(&client()));
+        let client_only = MeshData::new(Key::from(42), None, Some(&client()));
         assert_eq!(client_only.nsm_service, None);
         assert_eq!(client_only.nsm_service_port, None);
         assert_eq!(client_only.nsm_mesh_client, Some(client().bind_addr));
@@ -1256,7 +1295,7 @@ mod tests {
         let mut v6 = service();
         v6.service_addr = Addr::tcp("fe80::1", 9000);
         v6.bind_addr = Addr::new(Transport::Tcp, "fe80::1", 9001);
-        let data = serde_json::to_value(MeshData::new(42, Some(&v6), None)).unwrap();
+        let data = serde_json::to_value(MeshData::new(Key::from(42), Some(&v6), None)).unwrap();
         assert_eq!(data["nsm_service_address"], "fe80::1");
         assert_eq!(data["nsm_service"], "[fe80::1]:9000");
         assert_eq!(data["nsm_mesh_service"], "[fe80::1]:9001");
@@ -1264,13 +1303,13 @@ mod tests {
         // Like every Option, a null may be left out on the way in; the key
         // may not.
         let sparse: MeshData = serde_json::from_str(r#"{"nsm_key":1}"#).unwrap();
-        assert_eq!(sparse, MeshData::new(1, None, None));
+        assert_eq!(sparse, MeshData::new(Key::from(1), None, None));
         assert!(serde_json::from_str::<MeshData>(r#"{"nsm_service_id":1}"#).is_err());
     }
 
     #[test]
     fn the_mesh_data_entry_is_version_0_and_a_reply_parses_it_back() {
-        let data = MeshData::new(42, Some(&service()), Some(&client()));
+        let data = MeshData::new(Key::from(42), Some(&service()), Some(&client()));
         let entry = data.entry().unwrap();
         assert_eq!(entry.key, StoreKey::mesh_data());
         assert_eq!(entry.version, 0, "nothing was written");
@@ -1310,7 +1349,7 @@ mod tests {
 
     #[test]
     fn every_field_is_an_entry_of_its_own_and_a_null_field_has_none() {
-        let both = MeshData::new(42, Some(&service()), Some(&client()));
+        let both = MeshData::new(Key::from(42), Some(&service()), Some(&client()));
         let entries = both.entries().unwrap();
         let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(
@@ -1367,7 +1406,9 @@ mod tests {
         }
         // A side that is not there: null in the aggregate, no entry of its
         // own.
-        let alone = MeshData::new(42, Some(&service()), None).entries().unwrap();
+        let alone = MeshData::new(Key::from(42), Some(&service()), None)
+            .entries()
+            .unwrap();
         let keys: Vec<&str> = alone.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(
             keys,
@@ -1384,7 +1425,10 @@ mod tests {
             ]
         );
         assert_eq!(
-            MeshData::new(1, None, None).entries().unwrap().len(),
+            MeshData::new(Key::from(1), None, None)
+                .entries()
+                .unwrap()
+                .len(),
             2,
             "the key and the aggregate"
         );

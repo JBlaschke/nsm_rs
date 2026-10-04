@@ -1629,7 +1629,7 @@ mod tests {
         let mut r = Registry::default();
         let s1 = r
             .publish(
-                7,
+                Key::from(7),
                 Addr::tcp("10.0.0.1", 9000),
                 Addr::tcp("10.0.0.1", 7001),
                 false,
@@ -1638,7 +1638,7 @@ mod tests {
             )
             .unwrap();
         r.publish(
-            7,
+            Key::from(7),
             Addr::tcp("10.0.0.2", 9000),
             Addr::tcp("10.0.0.2", 7002),
             true,
@@ -1647,7 +1647,7 @@ mod tests {
         )
         .unwrap();
         r.publish(
-            9,
+            Key::from(9),
             Addr::new(Transport::Https, "svc.example", 4433),
             Addr::new(Transport::Https, "svc.example", 4434),
             false,
@@ -1656,7 +1656,13 @@ mod tests {
         )
         .unwrap();
         let (c, handle) = r
-            .claim(7, Addr::tcp("10.0.0.1", 7003), false, token(4), now())
+            .claim(
+                Key::from(7),
+                Addr::tcp("10.0.0.1", 7003),
+                false,
+                token(4),
+                now(),
+            )
             .unwrap();
         assert_eq!(handle.id, s1);
         r.store(
@@ -1695,13 +1701,13 @@ mod tests {
             g.per_key,
             vec![
                 KeyRow {
-                    key: 7,
+                    key: Key::from(7),
                     services: 2,
                     unclaimed: 1,
                     clients: 1
                 },
                 KeyRow {
-                    key: 9,
+                    key: Key::from(9),
                     services: 1,
                     unclaimed: 1,
                     clients: 0

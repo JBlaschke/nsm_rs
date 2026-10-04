@@ -500,7 +500,7 @@ mod tests {
             // `store_by_key`.
             let by_key = StoreTarget::Key {
                 broker: server.bound(),
-                key: 7,
+                key: Key::from(7),
                 party: Some(PartyId(3)),
             };
             let err = by_key.store(StoreOp::List, &net).await.unwrap_err();
@@ -518,7 +518,7 @@ mod tests {
             );
             server.shutdown().await;
             let (server, _, _) = start(Transport::Tcp, PeerReporter).await;
-            let err = store_by_key(&server.bound(), 7, None, StoreOp::List, &net)
+            let err = store_by_key(&server.bound(), Key::from(7), None, StoreOp::List, &net)
                 .await
                 .unwrap_err();
             assert!(matches!(err, Error::Rejected(_)), "{err}");

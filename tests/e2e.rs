@@ -8,7 +8,7 @@ use std::time::Duration;
 use nsm::config::BrokerPolicy;
 use nsm::net::Transport;
 use nsm::ops::{StoreKey, StoreOp, Stored};
-use nsm::protocol::{Message, PartyId, RegToken, ServiceHandle};
+use nsm::protocol::{Key, Message, PartyId, RegToken, ServiceHandle};
 use nsm::{Error, ops};
 
 use common::{Cluster, Party, TRANSPORTS};
@@ -730,7 +730,7 @@ async fn mesh_data_says_where_a_claims_parties_listen() {
             assert_eq!(alone.entries.len(), 1, "{t:?}: {alone:?}");
             assert_eq!(alone.entries[0].version, 0, "{t:?}");
             let data = alone.mesh_data().unwrap().expect("mesh data");
-            assert_eq!(data.nsm_key, 12, "{t:?}");
+            assert_eq!(data.nsm_key, Key::from(12), "{t:?}");
             assert_eq!(data.nsm_service_id, Some(service.id()), "{t:?}");
             assert_eq!(data.nsm_mesh_service, Some(service.bound()), "{t:?}");
             assert_eq!(data.nsm_mesh_service_port, Some(service.bound().port));
@@ -814,7 +814,7 @@ async fn store_by_key_reaches_the_claim_without_a_party_address() {
             let by_key = |party: Option<PartyId>, op: StoreOp| {
                 let broker = broker.clone();
                 let net = c.net();
-                async move { ops::store_by_key(&broker, 21, party, op, net).await }
+                async move { ops::store_by_key(&broker, Key::from(21), party, op, net).await }
             };
             // Nothing under the key.
             let err = by_key(None, StoreOp::List).await.unwrap_err();
@@ -845,7 +845,7 @@ async fn store_by_key_reaches_the_claim_without_a_party_address() {
             // resolves the same way.
             let target = ops::StoreTarget::Key {
                 broker: broker.clone(),
-                key: 21,
+                key: Key::from(21),
                 party: None,
             };
             let mesh = target
@@ -884,7 +884,7 @@ async fn store_by_key_reaches_the_claim_without_a_party_address() {
                 "{t:?}: the second claim through its service"
             );
             // A party under another key is not under this one.
-            let err = ops::store_by_key(&broker, 22, Some(client.id()), get("step"), c.net())
+            let err = ops::store_by_key(&broker, Key::from(22), Some(client.id()), get("step"), c.net())
                 .await
                 .unwrap_err();
             let expected = format!("no party {} under key 22", client.id());
@@ -898,7 +898,7 @@ async fn store_by_key_reaches_the_claim_without_a_party_address() {
                 .call(
                     &client.bound(),
                     Message::StoreByKey {
-                        rendezvous: 21,
+                        rendezvous: Key::from(21),
                         party_id: None,
                         op: StoreOp::List,
                     },

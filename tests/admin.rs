@@ -10,7 +10,7 @@ use nsm::broker::admin::{AdminOpts, METRICS_CONTENT_TYPE, serve};
 use nsm::broker::metrics::{HostRow, KeyRow};
 use nsm::net::Transport;
 use nsm::ops::{self, StoreKey, StoreOp};
-use nsm::protocol::Role;
+use nsm::protocol::{Key, Role};
 use tokio_util::sync::CancellationToken;
 
 use common::Cluster;
@@ -197,7 +197,7 @@ async fn metrics_and_status_follow_a_session() {
             assert_eq!(
                 s.keys,
                 vec![KeyRow {
-                    key: 42,
+                    key: Key::from(42),
                     services: 1,
                     unclaimed: 0,
                     clients: 1

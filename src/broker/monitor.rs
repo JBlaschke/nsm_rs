@@ -401,10 +401,10 @@ mod tests {
         RegToken::from_bytes([n; 16])
     }
 
-    fn publish(b: &Broker, key: Key, bind: &Addr, ping: bool) -> PartyId {
+    fn publish(b: &Broker, key: impl Into<Key>, bind: &Addr, ping: bool) -> PartyId {
         b.with_registry(|r| {
             r.publish(
-                key,
+                key.into(),
                 Addr::tcp(bind.host.clone(), 9000),
                 bind.clone(),
                 ping,
@@ -415,8 +415,8 @@ mod tests {
         .unwrap()
     }
 
-    fn claim(b: &Broker, key: Key, bind: &Addr) -> (PartyId, ServiceHandle) {
-        b.with_registry(|r| r.claim(key, bind.clone(), true, token(2), Instant::now()))
+    fn claim(b: &Broker, key: impl Into<Key>, bind: &Addr) -> (PartyId, ServiceHandle) {
+        b.with_registry(|r| r.claim(key.into(), bind.clone(), true, token(2), Instant::now()))
             .unwrap()
     }
 
@@ -695,7 +695,7 @@ mod tests {
             PartySummary {
                 id: s,
                 kind: "service",
-                key: 5,
+                key: Key::from(5),
                 bind_addr: Addr::new(Transport::Https, "svc.example", 4433),
                 ping: true,
                 failures: 0,

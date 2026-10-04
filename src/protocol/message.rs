@@ -429,13 +429,13 @@ pub(crate) fn all_variants() -> Vec<Message> {
     let token = test_token();
     vec![
         Message::Publish {
-            key: 42,
+            key: Key::from(42),
             service_port: 9000,
             bind_addr: Addr::new(Transport::Https, "10.0.0.5", 9001),
             ping: false,
         },
         Message::Claim {
-            key: 42,
+            key: Key::from(42),
             bind_addr: Addr::tcp("10.0.0.6", 7000),
             ping: true,
         },
@@ -489,7 +489,7 @@ pub(crate) fn all_variants() -> Vec<Message> {
             },
         },
         Message::StoreByKey {
-            rendezvous: 42,
+            rendezvous: Key::from(42),
             party_id: Some(PartyId(4)),
             op: StoreOp::Get {
                 key: store_key("nsm_mesh_data"),
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn publish_json_shape() {
         let msg = Message::Publish {
-            key: 42,
+            key: Key::from(42),
             service_port: 9000,
             bind_addr: Addr::new(Transport::Https, "10.0.0.5", 9001),
             ping: false,
@@ -940,7 +940,7 @@ mod tests {
         // The rendezvous key is `rendezvous`; the store key stays `key`,
         // next to `type` with the rest of the operation.
         let msg = Message::StoreByKey {
-            rendezvous: 1234,
+            rendezvous: Key::from(1234),
             party_id: Some(PartyId(7)),
             op: StoreOp::Get {
                 key: store_key("step"),
@@ -951,7 +951,7 @@ mod tests {
         assert_eq!(serde_json::to_string(&msg).unwrap(), json);
         assert_eq!(decode(json).unwrap(), msg);
         let any = Message::StoreByKey {
-            rendezvous: 1234,
+            rendezvous: Key::from(1234),
             party_id: None,
             op: StoreOp::Put {
                 key: store_key("step"),
@@ -967,7 +967,7 @@ mod tests {
         assert_eq!(
             decode(r#"{"type":"store_by_key","rendezvous":1234,"op":"list"}"#).unwrap(),
             Message::StoreByKey {
-                rendezvous: 1234,
+                rendezvous: Key::from(1234),
                 party_id: None,
                 op: StoreOp::List,
             }

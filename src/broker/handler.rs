@@ -298,7 +298,7 @@ mod tests {
     use super::*;
     use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
     use crate::net::Transport;
-    use crate::protocol::PartyId;
+    use crate::protocol::{Key, PartyId};
     use crate::transport::Client;
 
     fn handler(policy: BrokerPolicy) -> BrokerHandler {
@@ -325,7 +325,7 @@ mod tests {
 
     fn publish(host: &str, port: u16) -> Message {
         Message::Publish {
-            key: 1,
+            key: Key::from(1),
             service_port: 9000,
             bind_addr: Addr::tcp(host, port),
             ping: true, // no heartbeat task is spawned for ping parties
@@ -364,7 +364,7 @@ mod tests {
         let refused = h
             .handle(
                 Message::Claim {
-                    key: 2,
+                    key: Key::from(2),
                     bind_addr: Addr::tcp("127.0.0.1", 7001),
                     ping: true,
                 },
@@ -377,7 +377,7 @@ mod tests {
         let (cid, ctoken, _) = paired(
             h.handle(
                 Message::Claim {
-                    key: 1,
+                    key: Key::from(1),
                     bind_addr: Addr::tcp("127.0.0.1", 7002),
                     ping: true,
                 },
@@ -429,7 +429,7 @@ mod tests {
             op,
         };
         match h
-            .handle(by_key(1, crate::protocol::StoreOp::List), peer())
+            .handle(by_key(Key::from(1), crate::protocol::StoreOp::List), peer())
             .await
             .unwrap()
         {
@@ -437,7 +437,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(matches!(
-            h.handle(by_key(2, crate::protocol::StoreOp::List), peer())
+            h.handle(by_key(Key::from(2), crate::protocol::StoreOp::List), peer())
                 .await
                 .unwrap(),
             Message::Nack { .. }
@@ -524,7 +524,7 @@ mod tests {
         let claim = h
             .handle(
                 Message::Claim {
-                    key: 1,
+                    key: Key::from(1),
                     bind_addr: Addr::tcp("127.0.0.1", 7002),
                     ping: true,
                 },
@@ -543,7 +543,7 @@ mod tests {
         let h = handler(BrokerPolicy::default());
         let (pinger, token) = registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
         let two_sided = Message::Publish {
-            key: 1,
+            key: Key::from(1),
             service_port: 9000,
             bind_addr: Addr::tcp("127.0.0.1", 2),
             ping: false,
@@ -637,7 +637,7 @@ mod tests {
         }
 
         let claim = Message::Claim {
-            key: 1,
+            key: Key::from(1),
             bind_addr: Addr::tcp("127.0.0.1", 2),
             ping: true,
         };
@@ -737,7 +737,7 @@ mod tests {
             );
 
             let claim = Message::Claim {
-                key: 1,
+                key: Key::from(1),
                 bind_addr: Addr::tcp("127.0.0.1", 2),
                 ping: false,
             };
@@ -826,7 +826,7 @@ mod tests {
             };
             // Nothing under the key yet.
             assert_eq!(
-                h.handle(by_key(1, None, StoreOp::List), peer())
+                h.handle(by_key(Key::from(1), None, StoreOp::List), peer())
                     .await
                     .unwrap(),
                 Message::nack("no party under key 1")
@@ -834,7 +834,7 @@ mod tests {
             // A service nobody holds: an empty store, no writes.
             let (service, _) = registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
             match h
-                .handle(by_key(1, None, StoreOp::List), peer())
+                .handle(by_key(Key::from(1), None, StoreOp::List), peer())
                 .await
                 .unwrap()
             {
@@ -842,17 +842,23 @@ mod tests {
                 other => panic!("{other:?}"),
             }
             assert_eq!(
-                h.handle(by_key(1, None, put("5")), peer()).await.unwrap(),
+                h.handle(by_key(Key::from(1), None, put("5")), peer())
+                    .await
+                    .unwrap(),
                 Message::nack(format!("service {service} is not claimed"))
             );
             // One claim: its store, through the key alone or either party.
             let claim = Message::Claim {
-                key: 1,
+                key: Key::from(1),
                 bind_addr: Addr::tcp("127.0.0.1", 2),
                 ping: true,
             };
             let (client, client_token, _) = paired(h.handle(claim, peer()).await.unwrap());
-            let written = match h.handle(by_key(1, None, put("5")), peer()).await.unwrap() {
+            let written = match h
+                .handle(by_key(Key::from(1), None, put("5")), peer())
+                .await
+                .unwrap()
+            {
                 Message::Stored(s) => {
                     assert_eq!(s.client, Some(client));
                     s
@@ -864,7 +870,7 @@ mod tests {
             };
             for party_id in [None, Some(service), Some(client)] {
                 assert_eq!(
-                    h.handle(by_key(1, party_id, get.clone()), peer())
+                    h.handle(by_key(Key::from(1), party_id, get.clone()), peer())
                         .await
                         .unwrap(),
                     Message::Stored(written.clone()),
@@ -887,7 +893,7 @@ mod tests {
             );
             // A party under another key is not under this one.
             assert_eq!(
-                h.handle(by_key(2, Some(client), get), peer())
+                h.handle(by_key(Key::from(2), Some(client), get), peer())
                     .await
                     .unwrap(),
                 Message::nack(format!("no party {client} under key 2"))
@@ -906,7 +912,7 @@ mod tests {
             let h = handler(BrokerPolicy::default());
             let _service = registered(h.handle(publish("127.0.0.1", 1), peer()).await.unwrap());
             let claim = Message::Claim {
-                key: 1,
+                key: Key::from(1),
                 bind_addr: Addr::tcp("127.0.0.1", 2),
                 ping: true,
             };
@@ -982,7 +988,7 @@ mod tests {
             Message::Registered { .. }
         ));
         let claim = Message::Claim {
-            key: 1,
+            key: Key::from(1),
             bind_addr: Addr::tcp("127.0.0.1", 2),
             ping: true,
         };

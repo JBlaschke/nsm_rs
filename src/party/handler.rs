@@ -143,7 +143,7 @@ mod tests {
     use crate::config::{Limits, Timing, TlsPaths};
     use crate::net::{Addr, Transport};
     use crate::protocol::message::store_key;
-    use crate::protocol::{RegToken, ServiceHandle, StoreEntry, StoreOp, Stored};
+    use crate::protocol::{Key, RegToken, ServiceHandle, StoreEntry, StoreOp, Stored};
     use crate::transport::Client;
 
     fn tok() -> RegToken {
@@ -161,7 +161,12 @@ mod tests {
             Timing::fast(),
             Limits::default(),
         ));
-        PartyHandler::new(PartyState::new(role, Addr::tcp("127.0.0.1", 1), 42, client))
+        PartyHandler::new(PartyState::new(
+            role,
+            Addr::tcp("127.0.0.1", 1),
+            Key::from(42),
+            client,
+        ))
     }
 
     fn peer() -> PeerInfo {
@@ -397,7 +402,7 @@ mod tests {
                 let h = PartyHandler::new(PartyState::new(
                     role,
                     server.bound(),
-                    42,
+                    Key::from(42),
                     Arc::clone(&client),
                 ));
                 h.state().set_id(id);
@@ -478,13 +483,13 @@ mod tests {
         let h = handler(Role::Client);
         for msg in [
             Message::Publish {
-                key: 1,
+                key: Key::from(1),
                 service_port: 1,
                 bind_addr: Addr::tcp("h", 1),
                 ping: false,
             },
             Message::Claim {
-                key: 1,
+                key: Key::from(1),
                 bind_addr: Addr::tcp("h", 1),
                 ping: false,
             },
@@ -512,7 +517,7 @@ mod tests {
             },
             // A store by rendezvous key is the broker's to answer.
             Message::StoreByKey {
-                rendezvous: 1,
+                rendezvous: Key::from(1),
                 party_id: None,
                 op: StoreOp::List,
             },
