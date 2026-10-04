@@ -991,7 +991,7 @@ mod tests {
     fn rendezvous_keys_are_strings_on_the_wire_and_integers_still_decode() {
         // Protocol version 4: the key travels as a string. An unsigned
         // integer, what earlier parties sent, decodes as its decimal text
-        // and so names the same key (decision K3).
+        // and so names the same key (decision D30).
         let publish = Message::Publish {
             key: Key::from(1234),
             service_port: 9000,

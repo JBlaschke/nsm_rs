@@ -719,6 +719,7 @@ cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 | [`docs/history/2026-shared-store/`](docs/history/2026-shared-store/PLAN.md) | the 2026 shared-store work: its plan and the decisions S1 to S12 (D17 to D20 in the architecture guide) |
 | [`docs/history/2026-monitoring/`](docs/history/2026-monitoring/PLAN.md) | the 2026 monitoring work: its plan and the decisions M1 to M10 (D21 to D24 in the architecture guide) |
 | [`docs/history/2026-discovery/`](docs/history/2026-discovery/PLAN.md) | the 2026 discovery-by-key work: its plan and the decisions L1 to L10 (D25 to D28 in the architecture guide) |
+| [`docs/history/2026-text-keys/`](docs/history/2026-text-keys/PLAN.md) | the 2026 rendezvous-keys-as-text work: its plan and the decisions K1 to K5 (D29 to D31 in the architecture guide) |
 
 API documentation (`cargo doc`) and these pages are published by CI to
 <https://jblaschke.github.io/nsm_rs/> (the repository's Pages source must be

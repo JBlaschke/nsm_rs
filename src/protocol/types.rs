@@ -161,12 +161,12 @@ pub const MAX_KEY_BYTES: usize = 64;
 /// the rule ([`FromStr`], [`TryFrom<String>`] and deserialisation), so an
 /// invalid key is a usage error at the command line and a decode error on
 /// the wire. Two keys are the same when their text is: `1234` and `01234`
-/// are different keys, and nothing is trimmed or folded (decision K1).
+/// are different keys, and nothing is trimmed or folded (decision D29).
 ///
 /// On the wire a key is a JSON string. An unsigned JSON integer, which is
 /// what parties before protocol version 4 sent, decodes as its decimal text,
 /// so `1234` and `"1234"` name one key; [`From<u64>`](#impl-From<u64>-for-Key)
-/// is that mapping. A key is always sent as a string (decision K3).
+/// is that mapping. A key is always sent as a string (decision D30).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Key(String);
 

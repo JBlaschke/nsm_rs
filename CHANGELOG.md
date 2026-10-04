@@ -66,7 +66,7 @@ version: 4.
   names the same keys. In the library: `protocol::Key` is a validated
   newtype (`FromStr`, `TryFrom<String>`, `From<u64>` for the decimal
   text) with `KeyError` and `MAX_KEY_BYTES`, and `Error::NoService`
-  carries a `Key`. Decisions K1 to K4.
+  carries a `Key`. Decisions D29 to D31.
 - `collect` and `send` ignore `--key` (still accepted, hidden).
 - **`collect` answers one question.** It prints the last text a party
   received and nothing else. The service a client is paired with is now
