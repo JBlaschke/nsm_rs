@@ -29,7 +29,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::config::{BrokerPolicy, Limits, Timing, TlsPaths};
 use crate::net::{Addr, IpVersion, Selector, Transport};
 use crate::ops::StoreTarget;
-use crate::protocol::{PartyId, StoreKey, StoreOp};
+use crate::protocol::{Key, PartyId, StoreKey, StoreOp};
 
 /// NERSC Service Mesh: publish, claim and broker services across HPC systems.
 #[derive(Debug, Parser)]
@@ -358,9 +358,11 @@ pub enum Command {
         /// Port the actual service accepts connections on.
         #[arg(long, value_name = "PORT")]
         service_port: u16,
-        /// Rendezvous key shared with the clients that may claim this service.
+        /// Rendezvous key shared with the clients that may claim this
+        /// service: 1 to 64 characters from A-Z a-z 0-9 . _ - : /, not
+        /// starting with -.
         #[arg(long)]
-        key: u64,
+        key: Key,
         /// Send one-sided heartbeats to the broker instead of answering its heartbeats.
         #[arg(long)]
         ping: bool,
@@ -383,9 +385,10 @@ pub enum Command {
         /// omitting the flag, lets the operating system pick a free one.
         #[arg(long, value_name = "PORT", default_value_t = 0)]
         bind_port: u16,
-        /// Rendezvous key of the wanted service.
+        /// Rendezvous key of the wanted service: 1 to 64 characters from
+        /// A-Z a-z 0-9 . _ - : /, not starting with -.
         #[arg(long)]
-        key: u64,
+        key: Key,
         /// Send one-sided heartbeats to the broker instead of answering its heartbeats.
         #[arg(long)]
         ping: bool,
@@ -406,7 +409,7 @@ pub enum Command {
         party: Addr,
         /// Accepted for compatibility; not used.
         #[arg(long, hide = true)]
-        key: Option<u64>,
+        key: Option<Key>,
         /// Local address selection.
         #[command(flatten)]
         iface: IfaceOpts,
@@ -440,7 +443,7 @@ pub enum Command {
         msg: String,
         /// Accepted for compatibility; not used.
         #[arg(long, hide = true)]
-        key: Option<u64>,
+        key: Option<Key>,
         /// Local address selection.
         #[command(flatten)]
         iface: IfaceOpts,
@@ -522,9 +525,10 @@ pub struct StoreWhere {
     pub addr: Addr,
     /// Address the store by rendezvous key at the broker: ADDR is then the
     /// broker's address, and the operation applies to the one claim under
-    /// the key (or to its one unclaimed service).
+    /// the key (or to its one unclaimed service). A key is 1 to 64
+    /// characters from A-Z a-z 0-9 . _ - : /, not starting with -.
     #[arg(long = "key", value_name = "RENDEZVOUS")]
-    pub rendezvous: Option<u64>,
+    pub rendezvous: Option<Key>,
     /// With --key: the party (a client or a service) whose claim is meant,
     /// when the key has more than one.
     #[arg(long, value_name = "ID", requires = "rendezvous")]
@@ -714,6 +718,28 @@ mod tests {
     }
 
     #[test]
+    fn rendezvous_keys_are_text() {
+        let longest = "k".repeat(64);
+        for key in ["1234", "01234", "job-17/step.2:a", longest.as_str()] {
+            let cli = parse(&["claim", "b:1", "--key", key]);
+            match cli.command {
+                Command::Claim { key: parsed, .. } => assert_eq!(parsed.as_str(), key),
+                other => panic!("{other:?}"),
+            }
+        }
+        let too_long = "k".repeat(65);
+        for bad in ["", "a b", "-x", too_long.as_str(), "é"] {
+            let flag = format!("--key={bad}");
+            let err = Cli::try_parse_from(["nsm", "publish", "b:1", "--service-port", "1", &flag])
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("a rendezvous key is 1 to 64"),
+                "{bad:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn publish_parses_positional_broker_and_flags() {
         let cli = parse(&[
             "publish",
@@ -743,7 +769,7 @@ mod tests {
                 assert_eq!(broker.to_string(), "https://broker:12000");
                 assert_eq!(
                     (bind_port, service_port, key, ping),
-                    (12010, 9000, 1234, false)
+                    (12010, 9000, Key::from(1234), false)
                 );
                 assert_eq!(iface.interface.as_deref(), Some("en0"));
                 assert_eq!(iface.ip_version, Some(IpVersion::V4));
@@ -946,7 +972,7 @@ mod tests {
             target,
             StoreTarget::Key {
                 broker: broker(),
-                key: 1234,
+                key: Key::from(1234),
                 party: None,
             }
         );
@@ -975,7 +1001,7 @@ mod tests {
             target,
             StoreTarget::Key {
                 broker: broker(),
-                key: 1234,
+                key: Key::from(1234),
                 party: Some(PartyId(7)),
             }
         );
@@ -997,18 +1023,18 @@ mod tests {
                 matches!(
                     target,
                     StoreTarget::Key {
-                        key: 1,
+                        key,
                         party: None,
                         ..
-                    }
+                    } if key == Key::from(1)
                 ),
                 "{sub:?}"
             );
         }
-        // --party-id needs --key; both are numbers.
+        // --party-id needs --key; the id is a number, the key one shell word.
         for bad in [
             &["store", "get", "b:1", "k", "--party-id", "7"][..],
-            &["store", "get", "b:1", "k", "--key", "abc"],
+            &["store", "get", "b:1", "k", "--key", "a b"],
             &["store", "get", "b:1", "k", "--key", "-1"],
             &["store", "list", "b:1", "--key", "1", "--party-id", "x"],
             &["store", "list", "b:1", "--key"],

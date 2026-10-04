@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use nsm::net::{Addr, Transport};
 use nsm::ops::NetOpts;
+use nsm::protocol::Key;
 use nsm::rest::{ControlPlane, ServeOpts, serve};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
@@ -99,10 +100,10 @@ impl Api {
 }
 
 /// A publish/claim body selecting the loopback address, plus `extra` fields.
-fn party_body(broker: &Addr, key: u64, extra: Value) -> Value {
+fn party_body(broker: &Addr, key: impl Into<Value>, extra: Value) -> Value {
     let mut body = json!({
         "broker": broker.to_string(),
-        "key": key,
+        "key": key.into(),
         "ip_start": "127.",
         "ip_version": "4",
     });
@@ -186,7 +187,8 @@ async fn publish_claim_send_collect_and_cancel_through_the_api() {
         assert_eq!(publish["kind"], json!("publish"));
         assert_eq!(publish["state"], json!("running"));
         assert!(publish["party_id"].is_u64(), "{publish}");
-        assert_eq!(publish["key"], json!(7));
+        // An integer key is accepted as its decimal text and shown as text.
+        assert_eq!(publish["key"], json!("7"));
         assert_eq!(publish["error"], Value::Null);
         assert_eq!(publish["service"], Value::Null);
         assert_eq!(publish["broker"], json!(broker.to_string()));
@@ -318,6 +320,19 @@ async fn errors_map_to_statuses() {
             "{body}"
         );
 
+        // A key against the rule is the caller's fault too.
+        let (status, body) = api
+            .post("/v1/claim", &party_body(&broker, "a b", json!({})))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("rendezvous key"),
+            "{body}"
+        );
+
         // The broker's refusal is reported as a 400 that says why.
         let (status, body) = api
             .post("/v1/claim", &party_body(&broker, 999, json!({})))
@@ -403,7 +418,7 @@ async fn store_through_the_api() {
         assert_eq!(mesh["entries"][0]["version"], 0, "{mesh}");
         let text = mesh["entries"][0]["value"].as_str().expect("JSON text");
         let data: Value = serde_json::from_str(text).expect("mesh data");
-        assert_eq!(data["nsm_key"], 7, "{data}");
+        assert_eq!(data["nsm_key"], "7", "{data}");
         assert_eq!(data["nsm_mesh_client"], client_hb, "{data}");
         assert_eq!(data["nsm_mesh_service"], service_hb, "{data}");
         assert_eq!(data["nsm_service_port"], 9100, "{data}");
@@ -560,8 +575,9 @@ async fn store_by_key_through_the_api() {
         let cluster = Cluster::start(Transport::Http).await;
         let api = Api::start(cluster.net().clone(), None).await;
         let broker = cluster.broker_addr().to_string();
-        let service = cluster.publish(9, 9100).await;
-        let client = cluster.claim(9).await;
+        let key: Key = "job-17/step.2".parse().unwrap();
+        let service = cluster.publish(key.clone(), 9100).await;
+        let client = cluster.claim(key.clone()).await;
         let client_hb = client.bound().to_string();
         let owner = json!(client.id());
 
@@ -569,7 +585,7 @@ async fn store_by_key_through_the_api() {
         let (status, put) = api
             .post(
                 "/v1/store",
-                &json!({ "broker": broker, "rendezvous": 9, "op": "put", "key": "step", "value": "5" }),
+                &json!({ "broker": broker, "rendezvous": "job-17/step.2", "op": "put", "key": "step", "value": "5" }),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{put}");
@@ -586,7 +602,7 @@ async fn store_by_key_through_the_api() {
         let (status, got) = api
             .post(
                 "/v1/store",
-                &json!({ "broker": broker, "rendezvous": 9, "party_id": service.id(), "op": "get", "key": "step" }),
+                &json!({ "broker": broker, "rendezvous": "job-17/step.2", "party_id": service.id(), "op": "get", "key": "step" }),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{got}");
@@ -594,7 +610,7 @@ async fn store_by_key_through_the_api() {
         let (status, mesh) = api
             .post(
                 "/v1/store",
-                &json!({ "broker": broker, "rendezvous": 9, "op": "get", "key": "nsm_mesh_data" }),
+                &json!({ "broker": broker, "rendezvous": "job-17/step.2", "op": "get", "key": "nsm_mesh_data" }),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{mesh}");
@@ -606,12 +622,12 @@ async fn store_by_key_through_the_api() {
         // The broker's refusals are 400 with the reason.
         for (body, needle) in [
             (
-                json!({ "broker": broker, "rendezvous": 10, "op": "list" }),
-                "no party under key 10",
+                json!({ "broker": broker, "rendezvous": "job-18", "op": "list" }),
+                "no party under key job-18",
             ),
             (
-                json!({ "broker": broker, "rendezvous": 9, "party_id": 99, "op": "list" }),
-                "no party 99 under key 9",
+                json!({ "broker": broker, "rendezvous": "job-17/step.2", "party_id": 99, "op": "list" }),
+                "no party 99 under key job-17/step.2",
             ),
         ] {
             let (status, b) = api.post("/v1/store", &body).await;
@@ -623,13 +639,13 @@ async fn store_by_key_through_the_api() {
         }
         // A body names one form or the other, whole.
         for bad in [
-            json!({ "party": client_hb, "broker": broker, "rendezvous": 9, "op": "list" }),
-            json!({ "party": client_hb, "rendezvous": 9, "op": "list" }),
+            json!({ "party": client_hb, "broker": broker, "rendezvous": "job-17/step.2", "op": "list" }),
+            json!({ "party": client_hb, "rendezvous": "job-17/step.2", "op": "list" }),
             json!({ "party": client_hb, "party_id": 1, "op": "list" }),
             json!({ "broker": broker, "op": "list" }),
-            json!({ "rendezvous": 9, "op": "list" }),
-            json!({ "broker": broker, "rendezvous": "9", "op": "list" }),
-            json!({ "broker": broker, "rendezvous": 9, "party_id": -1, "op": "list" }),
+            json!({ "rendezvous": "job-17/step.2", "op": "list" }),
+            json!({ "broker": broker, "rendezvous": "a b", "op": "list" }),
+            json!({ "broker": broker, "rendezvous": "job-17/step.2", "party_id": -1, "op": "list" }),
             json!({ "op": "list" }),
         ] {
             let (status, b) = api.post("/v1/store", &bad).await;
@@ -641,7 +657,7 @@ async fn store_by_key_through_the_api() {
         let (status, b) = api
             .post(
                 "/v1/store",
-                &json!({ "broker": dead, "rendezvous": 9, "op": "list" }),
+                &json!({ "broker": dead, "rendezvous": "job-17/step.2", "op": "list" }),
             )
             .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{b}");

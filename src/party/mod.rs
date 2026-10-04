@@ -71,8 +71,8 @@ impl PartyState {
     }
 
     /// The rendezvous key.
-    pub fn key(&self) -> Key {
-        self.key
+    pub fn key(&self) -> &Key {
+        &self.key
     }
 
     /// The transport client used to reach the broker.
@@ -178,7 +178,7 @@ mod tests {
             Timing::fast(),
             Limits::default(),
         ));
-        PartyState::new(role, Addr::tcp("127.0.0.1", 1), 42, client)
+        PartyState::new(role, Addr::tcp("127.0.0.1", 1), Key::from(42), client)
     }
 
     #[test]

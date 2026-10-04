@@ -10,7 +10,7 @@ use nsm::broker::admin::{AdminOpts, METRICS_CONTENT_TYPE, serve};
 use nsm::broker::metrics::{HostRow, KeyRow};
 use nsm::net::Transport;
 use nsm::ops::{self, StoreKey, StoreOp};
-use nsm::protocol::Role;
+use nsm::protocol::{Key, Role};
 use tokio_util::sync::CancellationToken;
 
 use common::Cluster;
@@ -93,9 +93,11 @@ async fn metrics_and_status_follow_a_session() {
             assert_eq!(before.protocol_version, nsm::protocol::PROTOCOL_VERSION);
             assert!(before.uptime_seconds < 60);
 
-            let service = c.publish(42, 9000).await;
-            let client = c.claim(42).await;
-            assert!(c.try_claim(43).await.is_err(), "no service under 43");
+            let rendezvous: Key = "job-17/step.2".parse().unwrap();
+            let service = c.publish(rendezvous.clone(), 9000).await;
+            let client = c.claim(rendezvous.clone()).await;
+            let other: Key = "job-18".parse().unwrap();
+            assert!(c.try_claim(other).await.is_err(), "no service under job-18");
             ops::send(&client.bound(), "hi".into(), c.net())
                 .await
                 .unwrap();
@@ -197,7 +199,7 @@ async fn metrics_and_status_follow_a_session() {
             assert_eq!(
                 s.keys,
                 vec![KeyRow {
-                    key: 42,
+                    key: rendezvous.clone(),
                     services: 1,
                     unclaimed: 0,
                     clients: 1

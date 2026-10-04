@@ -448,7 +448,14 @@ fn usage_errors_exit_2_and_explain() {
             &["store", "get", "127.0.0.1:1", "step", "--party-id", "3"],
             "--key",
         ),
-        (&["store", "list", "127.0.0.1:1", "--key", "abc"], "abc"),
+        (
+            &["store", "list", "127.0.0.1:1", "--key", "a b"],
+            "a rendezvous key is 1 to 64",
+        ),
+        (
+            &["claim", "127.0.0.1:1", "--key", ""],
+            "a rendezvous key is 1 to 64",
+        ),
         (&["store", "frobnicate"], "unrecognized subcommand"),
         (&["serve", "--bind", "not-an-address"], "not-an-address"),
     ];
@@ -1146,7 +1153,7 @@ fn store_session(client_hb: &str, service_hb: &str) {
     assert_eq!(out.stdout.lines().count(), 1, "{}", out.stdout);
     let mesh_json = out.stdout.clone();
     let data: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON");
-    assert_eq!(data["nsm_key"], 1234, "{data}");
+    assert_eq!(data["nsm_key"], "1234", "{data}");
     assert_eq!(data["nsm_service"], "127.0.0.1:9000", "{data}");
     assert_eq!(data["nsm_service_address"], "127.0.0.1", "{data}");
     assert_eq!(data["nsm_service_port"], 9000, "{data}");
@@ -1417,7 +1424,7 @@ fn claim_prints_a_line_for_every_pairing() {
                     "--service-port",
                     port,
                     "--key",
-                    "77",
+                    "job-17/step.2:a",
                 ],
                 IFACE,
                 FAST,
@@ -1433,7 +1440,14 @@ fn claim_prints_a_line_for_every_pairing() {
     let mut client = Proc::spawn(
         "claim",
         &argv(&[
-            &["claim", &broker_addr, "--bind-port", "0", "--key", "77"],
+            &[
+                "claim",
+                &broker_addr,
+                "--bind-port",
+                "0",
+                "--key",
+                "job-17/step.2:a",
+            ],
             IFACE,
             FAST,
         ]),
@@ -1715,7 +1729,7 @@ fn status_prints_usage_statistics() {
     assert_eq!(doc["counts"]["services"], 1);
     assert_eq!(doc["counts"]["clients"], 1);
     assert_eq!(doc["bound"], broker_addr);
-    assert_eq!(doc["keys"][0]["key"], 77);
+    assert_eq!(doc["keys"][0]["key"], "77");
     assert_eq!(doc["parties"].as_array().map(Vec::len), Some(2));
     assert_eq!(doc["totals"]["store_ops"]["put"]["applied"], 1);
 

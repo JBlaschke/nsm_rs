@@ -7,7 +7,7 @@
 //!
 //! A message is a JSON object whose `"type"` field is the snake_case variant
 //! name, followed by the variant's fields, e.g.
-//! `{"type":"publish","key":42,"service_port":9000,"bind_addr":"https://10.0.0.5:9001","ping":false}`.
+//! `{"type":"publish","key":"42","service_port":9000,"bind_addr":"https://10.0.0.5:9001","ping":false}`.
 //! Variants without fields are just the tag: `{"type":"collect"}`. The store
 //! messages carry a [`StoreOp`] whose own fields sit next to `type`, and
 //! [`Stored`](Message::Stored) carries the fields of a [`Stored`] record the
@@ -58,6 +58,7 @@ use crate::net::Addr;
 /// | 1 | the first versioned format |
 /// | 2 | [`Collected`](Message::Collected) carries the answering party's `role` |
 /// | 3 | [`Deliver`](Message::Deliver) names no target: the broker delivers to the sender's peer, so text flows both ways |
+/// | 4 | the rendezvous [`Key`] is a string (`key` of [`Publish`](Message::Publish) and [`Claim`](Message::Claim), `rendezvous` of [`StoreByKey`](Message::StoreByKey), `nsm_key` of a [`MeshData`](super::MeshData)); an unsigned integer, what version 3 sent, still decodes as its decimal text |
 ///
 /// Version 3 also carries [`Store`](Message::Store),
 /// [`StoreRelay`](Message::StoreRelay) and [`Stored`](Message::Stored), added
@@ -65,7 +66,7 @@ use crate::net::Addr;
 /// with `applied` on `stored`, added later still as fields that decode when
 /// absent, and [`StoreByKey`](Message::StoreByKey), one more variant; none
 /// needs a bump.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 
 /// One wire message: a request to the broker or to a party, or a reply.
 ///
@@ -429,13 +430,13 @@ pub(crate) fn all_variants() -> Vec<Message> {
     let token = test_token();
     vec![
         Message::Publish {
-            key: 42,
+            key: Key::from(42),
             service_port: 9000,
             bind_addr: Addr::new(Transport::Https, "10.0.0.5", 9001),
             ping: false,
         },
         Message::Claim {
-            key: 42,
+            key: Key::from(42),
             bind_addr: Addr::tcp("10.0.0.6", 7000),
             ping: true,
         },
@@ -489,7 +490,7 @@ pub(crate) fn all_variants() -> Vec<Message> {
             },
         },
         Message::StoreByKey {
-            rendezvous: 42,
+            rendezvous: Key::from(42),
             party_id: Some(PartyId(4)),
             op: StoreOp::Get {
                 key: store_key("nsm_mesh_data"),
@@ -559,7 +560,7 @@ mod tests {
     #[test]
     fn publish_json_shape() {
         let msg = Message::Publish {
-            key: 42,
+            key: Key::from(42),
             service_port: 9000,
             bind_addr: Addr::new(Transport::Https, "10.0.0.5", 9001),
             ping: false,
@@ -567,7 +568,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&msg).unwrap(),
             concat!(
-                r#"{"type":"publish","key":42,"service_port":9000,"#,
+                r#"{"type":"publish","key":"42","service_port":9000,"#,
                 r#""bind_addr":"https://10.0.0.5:9001","#,
                 r#""ping":false}"#
             )
@@ -940,18 +941,18 @@ mod tests {
         // The rendezvous key is `rendezvous`; the store key stays `key`,
         // next to `type` with the rest of the operation.
         let msg = Message::StoreByKey {
-            rendezvous: 1234,
+            rendezvous: Key::from(1234),
             party_id: Some(PartyId(7)),
             op: StoreOp::Get {
                 key: store_key("step"),
             },
         };
         let json =
-            r#"{"type":"store_by_key","rendezvous":1234,"party_id":7,"op":"get","key":"step"}"#;
+            r#"{"type":"store_by_key","rendezvous":"1234","party_id":7,"op":"get","key":"step"}"#;
         assert_eq!(serde_json::to_string(&msg).unwrap(), json);
         assert_eq!(decode(json).unwrap(), msg);
         let any = Message::StoreByKey {
-            rendezvous: 1234,
+            rendezvous: Key::from(1234),
             party_id: None,
             op: StoreOp::Put {
                 key: store_key("step"),
@@ -959,29 +960,69 @@ mod tests {
                 if_version: Some(0),
             },
         };
-        let json = r#"{"type":"store_by_key","rendezvous":1234,"party_id":null,"op":"put","key":"step","value":"5","if_version":0}"#;
+        let json = r#"{"type":"store_by_key","rendezvous":"1234","party_id":null,"op":"put","key":"step","value":"5","if_version":0}"#;
         assert_eq!(serde_json::to_string(&any).unwrap(), json);
         assert_eq!(decode(json).unwrap(), any);
         // Like every Option, a missing party_id is none; the rendezvous
         // key and the operation are required, and it carries no token.
         assert_eq!(
-            decode(r#"{"type":"store_by_key","rendezvous":1234,"op":"list"}"#).unwrap(),
+            decode(r#"{"type":"store_by_key","rendezvous":"1234","op":"list"}"#).unwrap(),
             Message::StoreByKey {
-                rendezvous: 1234,
+                rendezvous: Key::from(1234),
                 party_id: None,
                 op: StoreOp::List,
             }
         );
         for bad in [
             r#"{"type":"store_by_key","op":"list"}"#,
-            r#"{"type":"store_by_key","rendezvous":"1234","op":"list"}"#,
-            r#"{"type":"store_by_key","rendezvous":1234}"#,
-            r#"{"type":"store_by_key","rendezvous":1234,"party_id":-1,"op":"list"}"#,
-            r#"{"type":"store_by_key","rendezvous":1234,"op":"get"}"#,
+            r#"{"type":"store_by_key","rendezvous":"a b","op":"list"}"#,
+            r#"{"type":"store_by_key","rendezvous":"","op":"list"}"#,
+            r#"{"type":"store_by_key","rendezvous":-1,"op":"list"}"#,
+            r#"{"type":"store_by_key","rendezvous":"1234"}"#,
+            r#"{"type":"store_by_key","rendezvous":"1234","party_id":-1,"op":"list"}"#,
+            r#"{"type":"store_by_key","rendezvous":"1234","op":"get"}"#,
         ] {
             assert!(decode(bad).is_err(), "{bad} should not decode");
         }
         assert!(!serde_json::to_string(&any).unwrap().contains("token"));
+    }
+
+    #[test]
+    fn rendezvous_keys_are_strings_on_the_wire_and_integers_still_decode() {
+        // Protocol version 4: the key travels as a string. An unsigned
+        // integer, what earlier parties sent, decodes as its decimal text
+        // and so names the same key (decision D30).
+        let publish = Message::Publish {
+            key: Key::from(1234),
+            service_port: 9000,
+            bind_addr: Addr::tcp("10.0.0.5", 12010),
+            ping: false,
+        };
+        let json = serde_json::to_string(&publish).unwrap();
+        assert!(json.contains(r#""key":"1234""#), "{json}");
+        assert_eq!(decode(&json).unwrap(), publish);
+        let legacy = json.replace(r#""key":"1234""#, r#""key":1234"#);
+        assert_ne!(legacy, json);
+        assert_eq!(decode(&legacy).unwrap(), publish);
+        let text = Message::Claim {
+            key: "job-17/step.2:a".parse().unwrap(),
+            bind_addr: Addr::tcp("10.0.0.6", 12020),
+            ping: true,
+        };
+        let json = serde_json::to_string(&text).unwrap();
+        assert!(json.contains(r#""key":"job-17/step.2:a""#), "{json}");
+        assert_eq!(decode(&json).unwrap(), text);
+        for bad in [
+            r#"{"type":"claim","key":"","bind_addr":"10.0.0.6:1","ping":false}"#,
+            r#"{"type":"claim","key":"a b","bind_addr":"10.0.0.6:1","ping":false}"#,
+            r#"{"type":"claim","key":-1,"bind_addr":"10.0.0.6:1","ping":false}"#,
+            r#"{"type":"claim","key":1.5,"bind_addr":"10.0.0.6:1","ping":false}"#,
+            r#"{"type":"claim","key":null,"bind_addr":"10.0.0.6:1","ping":false}"#,
+            r#"{"type":"publish","key":true,"service_port":1,"bind_addr":"10.0.0.6:1","ping":false}"#,
+        ] {
+            let err = decode(bad).unwrap_err();
+            assert!(err.to_string().contains("rendezvous key"), "{bad}: {err}");
+        }
     }
 
     #[test]

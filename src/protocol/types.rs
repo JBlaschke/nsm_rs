@@ -145,11 +145,132 @@ impl<'de> Deserialize<'de> for RegToken {
     }
 }
 
+/// Longest [`Key`], in bytes.
+pub const MAX_KEY_BYTES: usize = 64;
+
 /// Rendezvous key shared by a service and the clients allowed to claim it.
 ///
 /// Services publish under a key; a claim for the same key is paired with one
 /// of them. The key carries no other meaning to the broker.
-pub type Key = u64;
+///
+/// A key is 1 to [`MAX_KEY_BYTES`] characters from `A-Z`, `a-z`, `0-9` and
+/// `. _ - : /`, and does not start with `-`: the rule of a [`StoreKey`] with
+/// a shorter cap, since a key is a column of `nsm status`. So a key is one
+/// shell word that never needs quoting, never globs and never parses as a
+/// flag, and is safe in a URL and in JSON. Every way of building one checks
+/// the rule ([`FromStr`], [`TryFrom<String>`] and deserialisation), so an
+/// invalid key is a usage error at the command line and a decode error on
+/// the wire. Two keys are the same when their text is: `1234` and `01234`
+/// are different keys, and nothing is trimmed or folded (decision D29).
+///
+/// On the wire a key is a JSON string. An unsigned JSON integer, which is
+/// what parties before protocol version 4 sent, decodes as its decimal text,
+/// so `1234` and `"1234"` name one key; [`From<u64>`](#impl-From<u64>-for-Key)
+/// is that mapping. A key is always sent as a string (decision D30).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Key(String);
+
+/// Why a text is not a [`Key`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "a rendezvous key is 1 to 64 characters from A-Z a-z 0-9 . _ - : / and does not start with -"
+)]
+pub struct KeyError;
+
+impl Key {
+    /// The key as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Key {
+    type Error = KeyError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        if is_one_shell_word(&text, MAX_KEY_BYTES) {
+            Ok(Key(text))
+        } else {
+            Err(KeyError)
+        }
+    }
+}
+
+impl FromStr for Key {
+    type Err = KeyError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Key::try_from(text.to_owned())
+    }
+}
+
+impl From<u64> for Key {
+    /// The number's decimal text: what an integer key on the wire means.
+    fn from(key: u64) -> Self {
+        Key(key.to_string())
+    }
+}
+
+impl From<Key> for String {
+    fn from(key: Key) -> Self {
+        key.0
+    }
+}
+
+impl AsRef<str> for Key {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(&self.0)
+    }
+}
+
+impl Serialize for Key {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Key {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct KeyVisitor;
+
+        impl serde::de::Visitor<'_> for KeyVisitor {
+            type Value = Key;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(
+                    "a rendezvous key: a string of 1 to 64 characters from \
+                     A-Z a-z 0-9 . _ - : / not starting with -, or an unsigned integer",
+                )
+            }
+
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Key, E> {
+                text.parse().map_err(E::custom)
+            }
+
+            fn visit_string<E: serde::de::Error>(self, text: String) -> Result<Key, E> {
+                Key::try_from(text).map_err(E::custom)
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, number: u64) -> Result<Key, E> {
+                Ok(Key::from(number))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, number: i64) -> Result<Key, E> {
+                u64::try_from(number)
+                    .map(Key::from)
+                    .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(number), &self))
+            }
+        }
+
+        deserializer.deserialize_any(KeyVisitor)
+    }
+}
 
 /// Which side of a pairing a party is.
 ///
@@ -273,6 +394,21 @@ pub const RESERVED_STORE_KEY_PREFIX: &str = "nsm_";
 /// ([`MeshData::entries`]).
 pub const MESH_DATA_KEY: &str = "nsm_mesh_data";
 
+/// True when `text` is 1 to `max` bytes from `A-Z`, `a-z`, `0-9` and
+/// `. _ - : /` and does not start with `-`: one shell word that never needs
+/// quoting, never globs and never parses as a flag. The rule of a
+/// [`StoreKey`] (`max` is [`MAX_STORE_KEY_BYTES`]) and of a [`Key`] (`max`
+/// is [`MAX_KEY_BYTES`]).
+fn is_one_shell_word(text: &str, max: usize) -> bool {
+    let bytes = text.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= max
+        && bytes[0] != b'-'
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b':' | b'/'))
+}
+
 /// The name of one entry in a shared store.
 ///
 /// A store key is 1 to [`MAX_STORE_KEY_BYTES`] characters from `A-Z`,
@@ -321,13 +457,7 @@ impl StoreKey {
 
     /// True when `text` is a valid store key.
     fn is_valid(text: &str) -> bool {
-        let bytes = text.as_bytes();
-        !bytes.is_empty()
-            && bytes.len() <= MAX_STORE_KEY_BYTES
-            && bytes[0] != b'-'
-            && bytes
-                .iter()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b':' | b'/'))
+        is_one_shell_word(text, MAX_STORE_KEY_BYTES)
     }
 }
 
@@ -570,7 +700,7 @@ impl Stored {
 /// service's at a client whose service died and that is not re-paired yet.
 ///
 /// ```json
-/// {"nsm_key":1234,
+/// {"nsm_key":"1234",
 ///  "nsm_service_id":1,"nsm_service_address":"10.0.0.5","nsm_service_port":9000,"nsm_service":"10.0.0.5:9000",
 ///  "nsm_mesh_service_address":"10.0.0.5","nsm_mesh_service_port":12010,"nsm_mesh_service":"10.0.0.5:12010",
 ///  "nsm_client_id":2,"nsm_mesh_client_address":"10.0.0.6","nsm_mesh_client_port":12020,"nsm_mesh_client":"10.0.0.6:12020"}
@@ -707,26 +837,27 @@ impl MeshData {
 #[cfg(test)]
 impl MeshData {
     /// The largest value a mesh can produce: IPv6 hosts at their longest
-    /// text (nsm's parties advertise IP literals), the highest ports, ids
-    /// and key, and the longest scheme.
+    /// text (nsm's parties advertise IP literals), the highest ports and
+    /// ids, the longest key and the longest scheme.
     pub(crate) fn largest() -> MeshData {
         let host = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
         let heartbeat = Addr::new(crate::net::Transport::Https, host, u16::MAX);
+        let key = Key::try_from("k".repeat(MAX_KEY_BYTES)).expect("the longest key");
         let service = ServiceRecord {
             id: PartyId(u64::MAX),
-            key: u64::MAX,
+            key: key.clone(),
             service_addr: Addr::tcp(host, u16::MAX),
             bind_addr: heartbeat.clone(),
             ping: false,
         };
         let client = ClientRecord {
             id: PartyId(u64::MAX),
-            key: u64::MAX,
+            key: key.clone(),
             bind_addr: heartbeat,
             service: PartyId(u64::MAX),
             ping: false,
         };
-        MeshData::new(u64::MAX, Some(&service), Some(&client))
+        MeshData::new(key, Some(&service), Some(&client))
     }
 }
 
@@ -738,7 +869,7 @@ mod tests {
     fn service() -> ServiceRecord {
         ServiceRecord {
             id: PartyId(3),
-            key: 42,
+            key: Key::from(42),
             service_addr: Addr::tcp("10.0.0.5", 9000),
             bind_addr: Addr::new(Transport::Https, "10.0.0.5", 9001),
             ping: false,
@@ -748,7 +879,7 @@ mod tests {
     fn client() -> ClientRecord {
         ClientRecord {
             id: PartyId(4),
-            key: 42,
+            key: Key::from(42),
             bind_addr: Addr::new(Transport::Https, "10.0.0.6", 7000),
             service: PartyId(3),
             ping: false,
@@ -763,6 +894,165 @@ mod tests {
         assert!(serde_json::from_str::<PartyId>("\"7\"").is_err());
         assert!(serde_json::from_str::<PartyId>("-1").is_err());
         assert!(serde_json::from_str::<PartyId>("{\"0\":7}").is_err());
+    }
+
+    #[test]
+    fn keys_are_one_shell_word_of_at_most_64() {
+        let longest = "k".repeat(MAX_KEY_BYTES);
+        for good in [
+            "a",
+            "Z",
+            "0",
+            ".",
+            "_",
+            ":",
+            "/",
+            "1234",
+            "01234",
+            "job-17/step.2:a",
+            "a-",
+            longest.as_str(),
+        ] {
+            let parsed: Key = good.parse().unwrap_or_else(|e| panic!("{good:?}: {e}"));
+            assert_eq!(parsed.as_str(), good);
+            assert_eq!(parsed.to_string(), good);
+            assert_eq!(parsed.as_ref(), good);
+            assert_eq!(Key::try_from(good.to_owned()), Ok(parsed.clone()));
+            assert_eq!(String::from(parsed.clone()), good);
+            let json = serde_json::to_string(&parsed).unwrap();
+            assert_eq!(json, format!("\"{good}\""));
+            assert_eq!(serde_json::from_str::<Key>(&json).unwrap(), parsed);
+        }
+        let too_long = "k".repeat(MAX_KEY_BYTES + 1);
+        for bad in [
+            "",
+            too_long.as_str(),
+            "-x",
+            "-",
+            "a b",
+            " a",
+            "a\n",
+            "a\0",
+            "é",
+            "a*",
+            "a?",
+            "[a]",
+            "a~",
+            "a\"",
+            "a\\",
+            "a=b",
+            "a,b",
+            "$HOME",
+        ] {
+            assert_eq!(bad.parse::<Key>(), Err(KeyError), "{bad:?}");
+            assert_eq!(Key::try_from(bad.to_owned()), Err(KeyError));
+            let json = serde_json::to_string(bad).unwrap();
+            let err = serde_json::from_str::<Key>(&json).unwrap_err();
+            assert!(
+                err.to_string().contains("a rendezvous key is"),
+                "{bad:?}: {err}"
+            );
+        }
+        // A store key may be longer; a rendezvous key may not.
+        let long = "k".repeat(MAX_STORE_KEY_BYTES);
+        assert!(long.parse::<StoreKey>().is_ok());
+        assert_eq!(long.parse::<Key>(), Err(KeyError));
+        assert_eq!(
+            KeyError.to_string(),
+            "a rendezvous key is 1 to 64 characters from A-Z a-z 0-9 . _ - : / and does not start with -"
+        );
+        // Equality is by text: nothing is folded or trimmed, and keys order
+        // as text.
+        assert_ne!(
+            "1234".parse::<Key>().unwrap(),
+            "01234".parse::<Key>().unwrap()
+        );
+        assert_ne!("job".parse::<Key>().unwrap(), "JOB".parse::<Key>().unwrap());
+        assert!(Key::from(10) < Key::from(9));
+        assert_eq!(format!("{:>6}", Key::from(42)), "    42");
+    }
+
+    #[test]
+    fn keys_decode_from_a_string_or_an_unsigned_integer() {
+        // The string is what every peer sends (protocol version 4); the
+        // integer is what earlier parties sent, and names the same key.
+        assert_eq!(serde_json::to_string(&Key::from(1234)).unwrap(), "\"1234\"");
+        assert_eq!(
+            serde_json::from_str::<Key>("\"1234\"").unwrap(),
+            Key::from(1234)
+        );
+        assert_eq!(
+            serde_json::from_str::<Key>("1234").unwrap(),
+            Key::from(1234)
+        );
+        assert_eq!(
+            serde_json::from_str::<Key>("1234").unwrap(),
+            "1234".parse().unwrap()
+        );
+        assert_eq!(serde_json::from_str::<Key>("0").unwrap(), Key::from(0));
+        assert_eq!(
+            serde_json::from_str::<Key>(&u64::MAX.to_string()).unwrap(),
+            Key::from(u64::MAX)
+        );
+        assert_eq!(Key::from(u64::MAX).as_str(), "18446744073709551615");
+        for bad in [
+            "-1",
+            "1.5",
+            "1e3",
+            "null",
+            "true",
+            "[1]",
+            "{\"0\":1}",
+            "\"\"",
+            "\"a b\"",
+        ] {
+            let err = serde_json::from_str::<Key>(bad).unwrap_err();
+            assert!(err.to_string().contains("rendezvous key"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn random_keys_agree_across_every_constructor() {
+        let mut rng = crate::testing::Rng::new(23);
+        for i in 0..1000 {
+            let text = rng.key_text();
+            let valid = !text.is_empty()
+                && text.len() <= MAX_KEY_BYTES
+                && !text.starts_with('-')
+                && text
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-_:/".contains(c));
+            let parsed = text.parse::<Key>();
+            assert_eq!(parsed.is_ok(), valid, "iteration {i}: {text:?}");
+            assert_eq!(
+                Key::try_from(text.clone()),
+                parsed,
+                "iteration {i}: {text:?}"
+            );
+            let json = serde_json::to_string(&text).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Key>(&json).ok(),
+                parsed.ok(),
+                "iteration {i}: {text:?}"
+            );
+            let generated = rng.key();
+            assert_eq!(
+                generated.as_str().parse::<Key>(),
+                Ok(generated.clone()),
+                "iteration {i}"
+            );
+            let number = rng.next_u64();
+            assert_eq!(
+                Key::from(number).as_str(),
+                number.to_string(),
+                "iteration {i}"
+            );
+            assert_eq!(
+                serde_json::from_str::<Key>(&number.to_string()).unwrap(),
+                Key::from(number),
+                "iteration {i}"
+            );
+        }
     }
 
     #[test]
@@ -858,7 +1148,7 @@ mod tests {
 
         let c = ClientRecord {
             id: PartyId(4),
-            key: 42,
+            key: Key::from(42),
             bind_addr: Addr::tcp("::1", 7000),
             service: PartyId(3),
             ping: true,
@@ -1214,12 +1504,12 @@ mod tests {
 
     #[test]
     fn mesh_data_json_shape_is_flat_with_nsm_prefixed_fields() {
-        let both = MeshData::new(42, Some(&service()), Some(&client()));
+        let both = MeshData::new(Key::from(42), Some(&service()), Some(&client()));
         let json = serde_json::to_string(&both).unwrap();
         assert_eq!(
             json,
             concat!(
-                r#"{"nsm_key":42,"#,
+                r#"{"nsm_key":"42","#,
                 r#""nsm_service_id":3,"nsm_service_address":"10.0.0.5","nsm_service_port":9000,"nsm_service":"10.0.0.5:9000","#,
                 r#""nsm_mesh_service_address":"10.0.0.5","nsm_mesh_service_port":9001,"nsm_mesh_service":"https://10.0.0.5:9001","#,
                 r#""nsm_client_id":4,"nsm_mesh_client_address":"10.0.0.6","nsm_mesh_client_port":7000,"nsm_mesh_client":"https://10.0.0.6:7000"}"#
@@ -1233,7 +1523,7 @@ mod tests {
         assert!(fields.keys().all(|k| k.starts_with("nsm_")), "{json}");
 
         // A side that is not there is null, not missing.
-        let service_only = MeshData::new(42, Some(&service()), None);
+        let service_only = MeshData::new(Key::from(42), Some(&service()), None);
         let json = serde_json::to_string(&service_only).unwrap();
         assert!(
             json.ends_with(
@@ -1245,7 +1535,7 @@ mod tests {
             serde_json::from_str::<MeshData>(&json).unwrap(),
             service_only
         );
-        let client_only = MeshData::new(42, None, Some(&client()));
+        let client_only = MeshData::new(Key::from(42), None, Some(&client()));
         assert_eq!(client_only.nsm_service, None);
         assert_eq!(client_only.nsm_service_port, None);
         assert_eq!(client_only.nsm_mesh_client, Some(client().bind_addr));
@@ -1256,7 +1546,7 @@ mod tests {
         let mut v6 = service();
         v6.service_addr = Addr::tcp("fe80::1", 9000);
         v6.bind_addr = Addr::new(Transport::Tcp, "fe80::1", 9001);
-        let data = serde_json::to_value(MeshData::new(42, Some(&v6), None)).unwrap();
+        let data = serde_json::to_value(MeshData::new(Key::from(42), Some(&v6), None)).unwrap();
         assert_eq!(data["nsm_service_address"], "fe80::1");
         assert_eq!(data["nsm_service"], "[fe80::1]:9000");
         assert_eq!(data["nsm_mesh_service"], "[fe80::1]:9001");
@@ -1264,13 +1554,13 @@ mod tests {
         // Like every Option, a null may be left out on the way in; the key
         // may not.
         let sparse: MeshData = serde_json::from_str(r#"{"nsm_key":1}"#).unwrap();
-        assert_eq!(sparse, MeshData::new(1, None, None));
+        assert_eq!(sparse, MeshData::new(Key::from(1), None, None));
         assert!(serde_json::from_str::<MeshData>(r#"{"nsm_service_id":1}"#).is_err());
     }
 
     #[test]
     fn the_mesh_data_entry_is_version_0_and_a_reply_parses_it_back() {
-        let data = MeshData::new(42, Some(&service()), Some(&client()));
+        let data = MeshData::new(Key::from(42), Some(&service()), Some(&client()));
         let entry = data.entry().unwrap();
         assert_eq!(entry.key, StoreKey::mesh_data());
         assert_eq!(entry.version, 0, "nothing was written");
@@ -1310,7 +1600,7 @@ mod tests {
 
     #[test]
     fn every_field_is_an_entry_of_its_own_and_a_null_field_has_none() {
-        let both = MeshData::new(42, Some(&service()), Some(&client()));
+        let both = MeshData::new(Key::from(42), Some(&service()), Some(&client()));
         let entries = both.entries().unwrap();
         let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(
@@ -1367,7 +1657,9 @@ mod tests {
         }
         // A side that is not there: null in the aggregate, no entry of its
         // own.
-        let alone = MeshData::new(42, Some(&service()), None).entries().unwrap();
+        let alone = MeshData::new(Key::from(42), Some(&service()), None)
+            .entries()
+            .unwrap();
         let keys: Vec<&str> = alone.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(
             keys,
@@ -1384,7 +1676,10 @@ mod tests {
             ]
         );
         assert_eq!(
-            MeshData::new(1, None, None).entries().unwrap().len(),
+            MeshData::new(Key::from(1), None, None)
+                .entries()
+                .unwrap()
+                .len(),
             2,
             "the key and the aggregate"
         );

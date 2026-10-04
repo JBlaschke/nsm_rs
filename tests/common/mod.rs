@@ -231,10 +231,10 @@ impl Cluster {
         }
     }
 
-    pub async fn publish(&self, key: Key, service_port: u16) -> Party {
+    pub async fn publish(&self, key: impl Into<Key>, service_port: u16) -> Party {
         Self::wrap(
             Session::publish(PublishOpts {
-                party: self.party_opts(key, false),
+                party: self.party_opts(key.into(), false),
                 service_port,
             })
             .await
@@ -242,10 +242,10 @@ impl Cluster {
         )
     }
 
-    pub async fn publish_ping(&self, key: Key, service_port: u16) -> Party {
+    pub async fn publish_ping(&self, key: impl Into<Key>, service_port: u16) -> Party {
         Self::wrap(
             Session::publish(PublishOpts {
-                party: self.party_opts(key, true),
+                party: self.party_opts(key.into(), true),
                 service_port,
             })
             .await
@@ -253,22 +253,22 @@ impl Cluster {
         )
     }
 
-    pub async fn try_claim(&self, key: Key) -> Result<Party> {
+    pub async fn try_claim(&self, key: impl Into<Key>) -> Result<Party> {
         Session::claim(ClaimOpts {
-            party: self.party_opts(key, false),
+            party: self.party_opts(key.into(), false),
         })
         .await
         .map(Self::wrap)
     }
 
-    pub async fn claim(&self, key: Key) -> Party {
+    pub async fn claim(&self, key: impl Into<Key>) -> Party {
         self.try_claim(key).await.expect("claim")
     }
 
-    pub async fn claim_ping(&self, key: Key) -> Party {
+    pub async fn claim_ping(&self, key: impl Into<Key>) -> Party {
         Self::wrap(
             Session::claim(ClaimOpts {
-                party: self.party_opts(key, true),
+                party: self.party_opts(key.into(), true),
             })
             .await
             .expect("claim (ping)"),

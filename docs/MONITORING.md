@@ -131,8 +131,8 @@ reads:
              "ping_staleness": 20.0, "request_timeout": 6.0, "connect_timeout": 5.0, "claim_wait": 1.5},
   "counts": {"services": 3, "services_unclaimed": 1, "clients": 2, "ping_parties": 0,
              "heartbeat_tasks": 5, "keys": 2, "failing": 0, "store_entries": 4, "store_bytes": 420},
-  "keys": [{"key": 1234, "services": 2, "unclaimed": 0, "clients": 2},
-           {"key": 99, "services": 1, "unclaimed": 1, "clients": 0}],
+  "keys": [{"key": "1234", "services": 2, "unclaimed": 0, "clients": 2},
+           {"key": "99", "services": 1, "unclaimed": 1, "clients": 0}],
   "hosts": [{"host": "10.0.0.7", "parties": 3}, {"host": "10.0.0.9", "parties": 2}],
   "totals": {
     "requests": {"publish": {"ok": 3, "nack": 0, "error": 0}, "claim": {"ok": 2, "nack": 1, "error": 0}, "...": {}},
@@ -145,9 +145,9 @@ reads:
     "store_ops": {"get": {"applied": 40, "not_applied": 0, "refused": 0}, "...": {}}
   },
   "parties": [
-    {"id": 1, "role": "service", "key": 1234, "bind_addr": "10.0.0.7:12010", "ping": false,
+    {"id": 1, "role": "service", "key": "1234", "bind_addr": "10.0.0.7:12010", "ping": false,
      "failures": 0, "paired_with": 4, "last_seen_seconds_ago": 1},
-    {"id": 4, "role": "client", "key": 1234, "bind_addr": "10.0.0.9:12020", "ping": false,
+    {"id": 4, "role": "client", "key": "1234", "bind_addr": "10.0.0.9:12020", "ping": false,
      "failures": 0, "paired_with": 1, "last_seen_seconds_ago": 0}
   ]
 }

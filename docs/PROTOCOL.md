@@ -1,9 +1,12 @@
 # Wire protocol
 
-Protocol version **3** (`nsm::protocol::PROTOCOL_VERSION`). Everything below is
+Protocol version **4** (`nsm::protocol::PROTOCOL_VERSION`). Everything below is
 implemented in `src/protocol/` and `src/transport/`; the rustdoc of
 `nsm::protocol::Message` is the authoritative field-by-field reference.
-Version 3 let text flow both ways (`deliver` names no target); version 2 added
+Version 4 made the rendezvous key text (`Key` in section 2): `key`,
+`rendezvous` and `nsm_key` are JSON strings, and an unsigned integer, what
+version 3 sent, still decodes as its decimal text. Version 3 let text flow
+both ways (`deliver` names no target); version 2 added
 the answering party's `role` to `collected`; version 1 was the first versioned
 format. Version 3 also carries the shared store's messages (`store`,
 `store_relay`, `stored`), added compatibly: they are new variants, which by
@@ -41,7 +44,7 @@ handler failure with a `nack`. HTTP/1.1 only; connections may be kept alive.
 variant name, followed by the variant's fields:
 
 ```json
-{"type":"publish","key":1234,"service_port":9000,"bind_addr":"10.0.0.5:12010","ping":false}
+{"type":"publish","key":"1234","service_port":9000,"bind_addr":"10.0.0.5:12010","ping":false}
 ```
 
 Variants without fields are just the tag (`{"type":"collect"}`). An unknown
@@ -53,16 +56,16 @@ as `null` when absent and may be omitted when decoding.
 
 | Type | JSON | Notes |
 |---|---|---|
-| `Key` | unsigned integer (u64) | the rendezvous key shared by a service and its clients |
+| `Key` | string | the rendezvous key shared by a service and its clients: 1 to 64 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-` (the rule of a `StoreKey`, with a shorter cap); anything else is a decode error. Two keys are the same when their text is: `1234` and `01234` are different keys. An unsigned integer in place of the string, what parties before version 4 sent, decodes as its decimal text and so names the same key; a key is always sent as a string |
 | `PartyId` | unsigned integer (u64) | broker-assigned, sequential from 1, never reused within one broker process; not a secret |
 | `RegToken` | string of 32 lowercase hex digits | 128 random bits issued at registration; compared in constant time; never logged |
 | `Addr` | string | `host:port`, `tls://host:port`, `http://host:port` or `https://host:port`; IPv6 literals bracketed and canonicalised (`[::1]:80`) |
 | `ServiceHandle` | `{"id":1,"host":"10.0.0.5","service_port":9000}` | what a client is told about its service; never carries the key |
 | `Role` | `"service"` or `"client"` | which kind of party answered a `collect`, hence which field of `collected` applies |
-| `StoreKey` | string | the name of one entry in a shared store: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`; anything else is a decode error. A store key is unrelated to the rendezvous key (`Key`) |
+| `StoreKey` | string | the name of one entry in a shared store: 1 to 128 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`; anything else is a decode error. A store key is unrelated to the rendezvous key (`Key`), whose rule is the same with a cap of 64 |
 | store operation | `{"op":"get","key":"step"}`, `{"op":"put","key":"step","value":"5","if_version":null}`, `{"op":"delete","key":"step","if_version":null}`, `{"op":"list"}` | carried inside `store` and `store_relay`, its fields next to `type`; a value is any UTF-8 text, empty text included; `if_version` (an unsigned integer or `null`, which is also what a missing field means) makes a put or a delete conditional |
 | `StoreEntry` | `{"key":"step","value":"5","version":3}` | one entry of a store; `version` is the number of its last write |
-| `MeshData` | `{"nsm_key":1234,"nsm_service_id":1,"nsm_service_address":"10.0.0.5","nsm_service_port":9000,"nsm_service":"10.0.0.5:9000","nsm_mesh_service_address":"10.0.0.5","nsm_mesh_service_port":12010,"nsm_mesh_service":"10.0.0.5:12010","nsm_client_id":2,"nsm_mesh_client_address":"10.0.0.6","nsm_mesh_client_port":12020,"nsm_mesh_client":"10.0.0.6:12020"}` | where the parties of a claim listen: the value of the reserved store entry `nsm_mesh_data`, as JSON text, built by the broker from its registry when the entry is read; the `*_address` fields are hosts (IPv6 without brackets), the `*_port` fields ports, and `nsm_service`, `nsm_mesh_service` and `nsm_mesh_client` the same three endpoints as one string each (the data-plane endpoint as `host:port`, the heartbeat addresses with their transport); a side that is not there is `null`; every field that is set is also a reserved entry of its own under the field's name, carrying the field's text |
+| `MeshData` | `{"nsm_key":"1234","nsm_service_id":1,"nsm_service_address":"10.0.0.5","nsm_service_port":9000,"nsm_service":"10.0.0.5:9000","nsm_mesh_service_address":"10.0.0.5","nsm_mesh_service_port":12010,"nsm_mesh_service":"10.0.0.5:12010","nsm_client_id":2,"nsm_mesh_client_address":"10.0.0.6","nsm_mesh_client_port":12020,"nsm_mesh_client":"10.0.0.6:12020"}` | where the parties of a claim listen: the value of the reserved store entry `nsm_mesh_data`, as JSON text, built by the broker from its registry when the entry is read; the `*_address` fields are hosts (IPv6 without brackets), the `*_port` fields ports, and `nsm_service`, `nsm_mesh_service` and `nsm_mesh_client` the same three endpoints as one string each (the data-plane endpoint as `host:port`, the heartbeat addresses with their transport); a side that is not there is `null`; every field that is set is also a reserved entry of its own under the field's name, carrying the field's text |
 
 ## 3. Messages
 
@@ -87,7 +90,7 @@ heartbeats it and names the transport the service listens with. With
 `ping: true` the service will ping instead of being dialled.
 
 ```json
-{"type":"publish","key":1234,"service_port":9000,"bind_addr":"10.0.0.5:12010","ping":false}
+{"type":"publish","key":"1234","service_port":9000,"bind_addr":"10.0.0.5:12010","ping":false}
 {"type":"registered","id":1,"token":"3f9c0a7b1d2e4f60a1b2c3d4e5f60718"}
 ```
 
@@ -102,7 +105,7 @@ A client asks for a service under `key`. `bind_addr` and `ping` mean the same
 as for `publish`.
 
 ```json
-{"type":"claim","key":1234,"bind_addr":"http://10.0.0.6:12020","ping":true}
+{"type":"claim","key":"1234","bind_addr":"http://10.0.0.6:12020","ping":true}
 {"type":"paired","id":2,"token":"9e8d7c6b5a4f30211f2e3d4c5b6a7980","service":{"id":1,"host":"10.0.0.5","service_port":9000}}
 ```
 
@@ -265,7 +268,7 @@ checks the frame limit (see the sizes rule).
 {"type":"store","op":"get","key":"nsm_service_port"}
 {"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"nsm_service_port","value":"9000","version":0}]}
 {"type":"store","op":"get","key":"nsm_mesh_data"}
-{"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"nsm_mesh_data","value":"{\"nsm_key\":1234,\"nsm_service_id\":1,...}","version":0}]}
+{"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"nsm_mesh_data","value":"{\"nsm_key\":\"1234\",\"nsm_service_id\":1,...}","version":0}]}
 ```
 
 **Conditional writes.** A put or a delete may carry `if_version`, compared
@@ -336,8 +339,8 @@ must be under the key. The operation's fields sit next to `type`, as in
 `store`; the rendezvous key is `rendezvous`, since `key` is the store key.
 
 ```json
-{"type":"store_by_key","rendezvous":1234,"party_id":null,"op":"get","key":"nsm_mesh_data"}
-{"type":"store_by_key","rendezvous":1234,"party_id":7,"op":"put","key":"step","value":"5","if_version":null}
+{"type":"store_by_key","rendezvous":"1234","party_id":null,"op":"get","key":"nsm_mesh_data"}
+{"type":"store_by_key","rendezvous":"1234","party_id":7,"op":"put","key":"step","value":"5","if_version":null}
 {"type":"stored","client":2,"revision":3,"applied":true,"entries":[{"key":"step","value":"5","version":3}]}
 ```
 
@@ -531,6 +534,10 @@ one interval; a re-paired client learns its new service within one interval.
   be claimed again.
 - **Ids** are never reused within a broker process; a removed id stays
   unknown.
+- **Keys** are text: 1 to 64 characters from `A-Z a-z 0-9 . _ - : /`, not
+  starting with `-`, compared as text (`1234` and `01234` are different
+  keys). An unsigned integer in place of the string decodes as its decimal
+  text; a key is always sent as a string.
 - **Stores follow the claim.** A claim's store is created empty when the
   claim is granted, kept when the client is re-paired (the replacement
   service reads everything written before, the dead service's writes

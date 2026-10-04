@@ -8,7 +8,7 @@ use std::time::Duration;
 use nsm::config::BrokerPolicy;
 use nsm::net::Transport;
 use nsm::ops::{StoreKey, StoreOp, Stored};
-use nsm::protocol::{Message, PartyId, RegToken, ServiceHandle};
+use nsm::protocol::{Key, Message, PartyId, RegToken, ServiceHandle};
 use nsm::{Error, ops};
 
 use common::{Cluster, Party, TRANSPORTS};
@@ -730,7 +730,7 @@ async fn mesh_data_says_where_a_claims_parties_listen() {
             assert_eq!(alone.entries.len(), 1, "{t:?}: {alone:?}");
             assert_eq!(alone.entries[0].version, 0, "{t:?}");
             let data = alone.mesh_data().unwrap().expect("mesh data");
-            assert_eq!(data.nsm_key, 12, "{t:?}");
+            assert_eq!(data.nsm_key, Key::from(12), "{t:?}");
             assert_eq!(data.nsm_service_id, Some(service.id()), "{t:?}");
             assert_eq!(data.nsm_mesh_service, Some(service.bound()), "{t:?}");
             assert_eq!(data.nsm_mesh_service_port, Some(service.bound().port));
@@ -814,7 +814,7 @@ async fn store_by_key_reaches_the_claim_without_a_party_address() {
             let by_key = |party: Option<PartyId>, op: StoreOp| {
                 let broker = broker.clone();
                 let net = c.net();
-                async move { ops::store_by_key(&broker, 21, party, op, net).await }
+                async move { ops::store_by_key(&broker, &Key::from(21), party, op, net).await }
             };
             // Nothing under the key.
             let err = by_key(None, StoreOp::List).await.unwrap_err();
@@ -845,7 +845,7 @@ async fn store_by_key_reaches_the_claim_without_a_party_address() {
             // resolves the same way.
             let target = ops::StoreTarget::Key {
                 broker: broker.clone(),
-                key: 21,
+                key: Key::from(21),
                 party: None,
             };
             let mesh = target
@@ -884,7 +884,7 @@ async fn store_by_key_reaches_the_claim_without_a_party_address() {
                 "{t:?}: the second claim through its service"
             );
             // A party under another key is not under this one.
-            let err = ops::store_by_key(&broker, 22, Some(client.id()), get("step"), c.net())
+            let err = ops::store_by_key(&broker, &Key::from(22), Some(client.id()), get("step"), c.net())
                 .await
                 .unwrap_err();
             let expected = format!("no party {} under key 22", client.id());
@@ -898,7 +898,7 @@ async fn store_by_key_reaches_the_claim_without_a_party_address() {
                 .call(
                     &client.bound(),
                     Message::StoreByKey {
-                        rendezvous: 21,
+                        rendezvous: Key::from(21),
                         party_id: None,
                         op: StoreOp::List,
                     },
@@ -1316,4 +1316,38 @@ async fn a_write_acknowledged_before_a_send_is_visible_once_the_text_arrives() {
         c.stop().await;
     })
     .await;
+}
+
+#[tokio::test]
+async fn text_keys_pair_and_are_shown_as_text() {
+    let key: Key = "job-17/step.2:a".parse().unwrap();
+    for &t in TRANSPORTS {
+        with_deadline(async {
+            let c = Cluster::start(t).await;
+            let service = c.publish(key.clone(), 9000).await;
+            let client = c.claim(key.clone()).await;
+            assert_eq!(client.service().expect("paired").id, service.id(), "{t:?}");
+            // Another spelling is another key.
+            let other: Key = "JOB-17/step.2:a".parse().unwrap();
+            let err = c.try_claim(other.clone()).await.unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(&format!("no service available for key {other}")),
+                "{t:?}: {err}"
+            );
+            // The broker reports the key as text: in the mesh data reached
+            // by key, and in its snapshot.
+            let data =
+                ops::store_by_key(&c.broker_addr(), &key, None, get("nsm_mesh_data"), c.net())
+                    .await
+                    .unwrap();
+            let mesh = data.mesh_data().unwrap().expect("mesh data");
+            assert_eq!(mesh.nsm_key, key, "{t:?}");
+            let snapshot = c.broker().snapshot();
+            assert_eq!(snapshot.len(), 2, "{t:?}");
+            assert!(snapshot.iter().all(|p| p.key == key), "{t:?}: {snapshot:?}");
+            c.stop().await;
+        })
+        .await;
+    }
 }

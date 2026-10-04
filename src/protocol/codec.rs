@@ -444,13 +444,13 @@ mod tests {
         };
         match rng.below(17) {
             0 => Message::Publish {
-                key: rng.next_u64(),
+                key: rng.key(),
                 service_port: rng.next_u64() as u16,
                 bind_addr: rng.addr(),
                 ping: rng.chance(2),
             },
             1 => Message::Claim {
-                key: rng.next_u64(),
+                key: rng.key(),
                 bind_addr: rng.addr(),
                 ping: rng.chance(2),
             },
@@ -503,7 +503,7 @@ mod tests {
                 op: random_store_op(rng),
             },
             15 => Message::StoreByKey {
-                rendezvous: rng.next_u64(),
+                rendezvous: rng.key(),
                 party_id: rng.chance(2).then(|| PartyId(rng.next_u64())),
                 op: random_store_op(rng),
             },

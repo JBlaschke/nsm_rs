@@ -7,7 +7,7 @@
 use std::net::SocketAddr;
 
 use crate::net::addr::ParseAddrError;
-use crate::protocol::Role;
+use crate::protocol::{Key, Role};
 
 /// Errors produced by the NSM library.
 #[derive(Debug, thiserror::Error)]
@@ -61,7 +61,7 @@ pub enum Error {
 
     /// No service is currently available under the given key.
     #[error("no service available for key {0}")]
-    NoService(u64),
+    NoService(Key),
 
     /// The broker rejected a request.
     #[error("broker rejected the request: {0}")]

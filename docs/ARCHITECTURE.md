@@ -130,7 +130,9 @@ redirects, and `https_only` when the address is `https://`. Both sides share
 `Message` is a `#[serde(tag = "type")]` enum: one variant per request and
 reply. `codec::MessageCodec` is the tokio-util `Encoder`/`Decoder` for the
 4-byte length prefix used on streams; `encode`/`decode` are the JSON functions
-both transports use. `types` holds `PartyId`, `Key`, `RegToken` (a 128-bit
+both transports use. `types` holds `PartyId`, `Key` (the rendezvous key: text
+under the store key's rule with a cap of 64, validated on parse and on decode,
+where an unsigned integer still decodes as its text), `RegToken` (a 128-bit
 secret with constant-time comparison and a redacted `Debug`), `ServiceHandle`
 (what a client is told about its service), the broker's records, and the
 shared store's `StoreKey` (validated on parse and on decode), `StoreOp`,
@@ -302,7 +304,8 @@ exist: about 80 MiB of accounted store bytes with the defaults, and at most
 ## 6. Security model
 
 - **Rendezvous keys** select a service; they are not secrets in the sense of
-  authentication (anyone who knows the key may claim). **Registration
+  authentication (anyone who knows the key may claim); a key is one shell
+  word of at most 64 characters, compared as text. **Registration
   tokens** are: the broker issues one per registration, and pings, relays
   and the broker's own heartbeats must carry it. Refusals for an unknown id
   and a wrong token share one text so ids cannot be enumerated.
@@ -422,9 +425,11 @@ are decisions P1 to P10; D17 to D20 from the shared-store plan of the same
 month ([`history/2026-shared-store/`](history/2026-shared-store/PLAN.md)),
 where they are decisions S1 to S12; D21 to D24 from the monitoring plan of
 October 2026 ([`history/2026-monitoring/`](history/2026-monitoring/PLAN.md)),
-where they are decisions M1 to M10; and D25 to D28 from the discovery plan
-of the same month ([`history/2026-discovery/`](history/2026-discovery/PLAN.md)),
-where they are decisions L1 to L10.
+where they are decisions M1 to M10; D25 to D28 from the discovery plan of
+the same month ([`history/2026-discovery/`](history/2026-discovery/PLAN.md)),
+where they are decisions L1 to L10; and D29 to D31 from the text-keys plan
+of the same month ([`history/2026-text-keys/`](history/2026-text-keys/PLAN.md)),
+where they are decisions K1 to K4.
 
 | # | Decision |
 |---|---|
@@ -456,6 +461,9 @@ where they are decisions L1 to L10.
 | D26 | Store keys starting with `nsm_` are the broker's: projected from its registry when read, never stored, never written, counted against no budget, so they are always current across re-pairings. They say where the parties of the asking party's claim listen. `nsm_mesh_data` is the whole picture as one JSON value (`MeshData`: `nsm_service_address` and `nsm_service_port`, `nsm_mesh_service_address` and `nsm_mesh_service_port`, `nsm_mesh_client_address` and `nsm_mesh_client_port`, each endpoint also as one string, `nsm_key` and both party ids; `null` for a side that is not there), and every field that is set is also a key of its own under the field's name, so a shell script reads one value without a JSON parser; a field that is `null` has no entry (exit 3), the polling idiom of any key. All are at version 0; `list` carries them beside the stored entries in one key order; a put or a delete of any `nsm_` key is refused. The reply overhead `listen` adds to the store budget is 4096 bytes, which covers them at their largest. |
 | D27 | A store operation may be addressed to the broker by rendezvous key: `store_by_key { rendezvous, party_id, op }`, answered exactly as if the key's party had relayed it. The broker resolves the key to the one client under it (its claim's store), or to the one service when no client is under it (an empty view, writes refused), or to `party_id`, which must be under the key; two or more clients, or no client and two or more services, are refused with the candidates listed. No token travels: the rendezvous key is the capability, as it is for `publish` and `claim` (whoever knows it can publish under it and be paired with its clients), so this adds no power the key did not give; it changes where the store can be reached from, since the broker is reachable where a party's listener behind NAT or in ping mode may not be. One new variant, so the protocol stays at version 3; `nsm_requests_total` gains `kind="store_by_key"`, and operations by key count in `nsm_store_ops_total`. |
 | D28 | One command and one route, as for the store: `nsm store get\|put\|delete\|list ADDR [STORE_KEY] [--key RENDEZVOUS [--party-id ID]]`, where `ADDR` is a party's heartbeat address or, with `--key`, the broker's (the usage lines say `<ADDR>` and `<STORE_KEY>` to keep the two keys apart), and `POST /v1/store` with `party`, or `broker` and `rendezvous` (and `party_id`), exactly one of the two forms; `ops::StoreTarget` is the one way in for both front-ends. `send`, `collect` and `peer` keep taking a party's address, which the broker's keys hand out. |
+| D29 | The rendezvous key is text: `protocol::Key` holds 1 to 64 characters from `A-Z a-z 0-9 . _ - : /`, not starting with `-`, the store key's rule with a shorter cap, since a key is a column of `nsm status`; one validator serves both. The rule is checked wherever a key is built (`FromStr`, `TryFrom<String>`, deserialisation), so an invalid key is a usage error on the command line, a decode error on the wire and a 400 on the control plane, and no invalid key exists in any typed layer. Two keys are the same when their text is: `1234` and `01234` are different keys, and nothing is trimmed or folded. The key is stored and compared as the text it is, with no padding and no fixed length: nothing indexes by key (a claim and a store by key scan the registry comparing for equality, the per-key table of the status gauges is built per scrape, and a key is never a metric label), so the representation decides what a user may write, not how fast the broker answers. |
+| D30 | On the wire a key is a JSON string (`key` of `publish` and `claim`, `rendezvous` of `store_by_key`, `nsm_key` of `nsm_mesh_data`, the key fields of the status document and of a job view). An unsigned integer in its place, what parties before protocol version 4 sent, decodes as its decimal text, so `1234` and `"1234"` name one key and parties and scripts from before the change keep working against a new broker; anything else is a decode error that names the rule. A key is always sent as a string. `PROTOCOL_VERSION` is 4, which `nsm_build_info` and `/v1/status` report; a party of this version fails against an older broker at registration with its nack. `From<u64> for Key` is the same mapping in the library. |
+| D31 | Both front-ends stay thin over the one type: `--key` on `publish`, `claim` and `store` (and the hidden compatibility flag of `collect` and `send`) parses through `FromStr` and refuses a bad key as a usage error with the rule in the message; `POST /v1/publish`, `/v1/claim` and `/v1/store` take `key` and `rendezvous` through `Deserialize`, integers accepted as on the wire, and answer 400 for a bad key. Job views, `GET /v1/status` and `nsm status` show the key text, and the reserved entry `nsm_key` carries it. |
 
 ## 12. History
 
@@ -489,3 +497,9 @@ leave their heartbeat port to the operating system, gave every store the
 broker's own `nsm_` keys that say where a claim's parties listen, and let
 `nsm store` reach a claim's store at the broker by rendezvous key; its
 decisions are D25 to D28.
+
+The rendezvous-keys-as-text work of the same month, recorded under
+[`history/2026-text-keys/`](history/2026-text-keys/PLAN.md), made the key
+text under the store key's rule, a string on the wire with an integer still
+decoded as its decimal text (protocol version 4); its decisions are D29 to
+D31.

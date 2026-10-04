@@ -171,10 +171,10 @@ impl<'a> Party<'a> {
     }
 
     /// The key the party published or claimed.
-    pub fn key(self) -> Key {
+    pub fn key(self) -> &'a Key {
         match self {
-            Party::Service(s) => s.record.key,
-            Party::Client(c) => c.record.key,
+            Party::Service(s) => &s.record.key,
+            Party::Client(c) => &c.record.key,
         }
     }
 
@@ -344,8 +344,8 @@ impl Registry {
         now: Instant,
     ) -> Result<(PartyId, ServiceHandle)> {
         self.check_capacity()?;
-        let service =
-            Self::lowest_unclaimed(&mut self.services, key).ok_or(Error::NoService(key))?;
+        let service = Self::lowest_unclaimed(&mut self.services, &key)
+            .ok_or_else(|| Error::NoService(key.clone()))?;
         let id = self.ids.allocate();
         service.claimed_by = Some(id);
         let handle = service.record.handle();
@@ -426,7 +426,7 @@ impl Registry {
         {
             return Some(current.record.handle());
         }
-        let service = Self::lowest_unclaimed(&mut self.services, entry.record.key)?;
+        let service = Self::lowest_unclaimed(&mut self.services, &entry.record.key)?;
         service.claimed_by = Some(client);
         let handle = service.record.handle();
         entry.record.service = handle.id;
@@ -689,7 +689,7 @@ impl Registry {
     /// key is ambiguous (`"key 1234 has 2 clients (4, 7); name one with
     /// party_id"`, or `"key 1234 has 2 unclaimed services (1, 3); name one
     /// with party_id"`).
-    pub fn resolve_key(&self, key: Key, party_id: Option<PartyId>) -> Result<PartyId> {
+    pub fn resolve_key(&self, key: &Key, party_id: Option<PartyId>) -> Result<PartyId> {
         if let Some(id) = party_id {
             return match self.get(id) {
                 Some(party) if party.key() == key => Ok(id),
@@ -699,7 +699,7 @@ impl Registry {
         let clients: Vec<PartyId> = self
             .clients
             .values()
-            .filter(|c| c.record.key == key)
+            .filter(|c| c.record.key == *key)
             .map(|c| c.record.id)
             .collect();
         match clients.as_slice() {
@@ -710,7 +710,7 @@ impl Registry {
         let services: Vec<PartyId> = self
             .services
             .values()
-            .filter(|s| s.record.key == key)
+            .filter(|s| s.record.key == *key)
             .map(|s| s.record.id)
             .collect();
         match services.as_slice() {
@@ -730,7 +730,7 @@ impl Registry {
     /// [`store`](Registry::store).
     pub fn store_by_key(
         &mut self,
-        key: Key,
+        key: &Key,
         party_id: Option<PartyId>,
         op: StoreOp,
     ) -> Result<Stored> {
@@ -822,7 +822,7 @@ impl Registry {
         if let Some(service) = self.services.get(&from) {
             let client = service.claimed_by.and_then(|id| self.clients.get(&id));
             return Some(MeshData::new(
-                service.record.key,
+                service.record.key.clone(),
                 Some(&service.record),
                 client.map(|c| &c.record),
             ));
@@ -833,7 +833,7 @@ impl Registry {
             .get(&client.record.service)
             .filter(|s| s.claimed_by == Some(from));
         Some(MeshData::new(
-            client.record.key,
+            client.record.key.clone(),
             service.map(|s| &s.record),
             Some(&client.record),
         ))
@@ -892,13 +892,13 @@ impl Registry {
     /// The unclaimed service with the lowest id under `key`. Takes the map
     /// rather than `&mut self` so callers can hold it alongside a borrow of
     /// another field.
-    fn lowest_unclaimed(
-        services: &mut BTreeMap<PartyId, ServiceEntry>,
-        key: Key,
-    ) -> Option<&mut ServiceEntry> {
+    fn lowest_unclaimed<'s>(
+        services: &'s mut BTreeMap<PartyId, ServiceEntry>,
+        key: &Key,
+    ) -> Option<&'s mut ServiceEntry> {
         services
             .values_mut()
-            .find(|s| s.record.key == key && s.claimed_by.is_none())
+            .find(|s| s.record.key == *key && s.claimed_by.is_none())
     }
 
     /// The failure count and `last_seen` of a party of either kind.
@@ -914,7 +914,7 @@ impl Registry {
 
 /// The refusal of a key with more than one candidate: `key 1234 has 2
 /// clients (4, 7); name one with party_id`.
-fn ambiguous_key(key: Key, what: &str, ids: &[PartyId]) -> Error {
+fn ambiguous_key(key: &Key, what: &str, ids: &[PartyId]) -> Error {
     let ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
     Error::Rejected(format!(
         "key {key} has {} {what} ({}); name one with party_id",
@@ -932,7 +932,7 @@ mod tests {
     use crate::protocol::message::store_key as skey;
     use crate::testing::Rng;
 
-    const KEY: Key = 42;
+    const KEY: u64 = 42;
 
     fn now() -> Instant {
         Instant::now()
@@ -958,13 +958,18 @@ mod tests {
         RegToken::from_bytes([7; 16])
     }
 
-    fn publish(r: &mut Registry, key: Key, ping: bool, t: Instant) -> PartyId {
-        r.publish(key, addr(9000), addr(9001), ping, tok(), t)
+    fn publish(r: &mut Registry, key: impl Into<Key>, ping: bool, t: Instant) -> PartyId {
+        r.publish(key.into(), addr(9000), addr(9001), ping, tok(), t)
             .unwrap()
     }
 
-    fn claim(r: &mut Registry, key: Key, ping: bool, t: Instant) -> (PartyId, ServiceHandle) {
-        r.claim(key, addr(7000), ping, tok(), t).unwrap()
+    fn claim(
+        r: &mut Registry,
+        key: impl Into<Key>,
+        ping: bool,
+        t: Instant,
+    ) -> (PartyId, ServiceHandle) {
+        r.claim(key.into(), addr(7000), ping, tok(), t).unwrap()
     }
 
     fn handle_of(r: &Registry, service: PartyId) -> ServiceHandle {
@@ -1007,7 +1012,7 @@ mod tests {
         let t = now();
         let bind = Addr::new(Transport::Https, "10.0.0.1", 9001);
         let id = r
-            .publish(7, addr(9000), bind.clone(), true, tok(), t)
+            .publish(Key::from(7), addr(9000), bind.clone(), true, tok(), t)
             .unwrap();
         assert_eq!(
             r.service(id).unwrap(),
@@ -1015,7 +1020,7 @@ mod tests {
                 token: tok(),
                 record: ServiceRecord {
                     id,
-                    key: 7,
+                    key: Key::from(7),
                     service_addr: addr(9000),
                     bind_addr: bind,
                     ping: true,
@@ -1046,7 +1051,7 @@ mod tests {
                 token: tok(),
                 record: ClientRecord {
                     id: c1,
-                    key: KEY,
+                    key: Key::from(KEY),
                     bind_addr: addr(7000),
                     service: s1,
                     ping: true,
@@ -1065,8 +1070,8 @@ mod tests {
         assert_eq!((c2, h2), (PartyId(5), handle_of(&r, s2)));
         assert_eq!(claimed_by(&r, s2), Some(c2));
         assert!(matches!(
-            r.claim(KEY, addr(7000), false, tok(), t),
-            Err(Error::NoService(KEY))
+            r.claim(Key::from(KEY), addr(7000), false, tok(), t),
+            Err(Error::NoService(k)) if k == Key::from(KEY)
         ));
         assert_eq!(r.len(), 5, "a failed claim registers nothing");
     }
@@ -1076,8 +1081,8 @@ mod tests {
         let mut r = registry(8);
         let t = now();
         assert!(matches!(
-            r.claim(99, addr(7000), false, tok(), t),
-            Err(Error::NoService(99))
+            r.claim(Key::from(99), addr(7000), false, tok(), t),
+            Err(Error::NoService(k)) if k == Key::from(99)
         ));
         assert!(r.is_empty());
         assert_eq!(publish(&mut r, KEY, false, t), PartyId(1));
@@ -1543,7 +1548,7 @@ mod tests {
         assert_eq!(r.len(), 3);
 
         assert!(is_full(r.publish(
-            KEY,
+            Key::from(KEY),
             addr(9000),
             addr(9001),
             false,
@@ -1551,7 +1556,7 @@ mod tests {
             t
         )));
         assert!(
-            is_full(r.claim(KEY, addr(7000), false, tok(), t)),
+            is_full(r.claim(Key::from(KEY), addr(7000), false, tok(), t)),
             "rejected although s2 is free"
         );
         assert_eq!(r.len(), 3, "rejected requests register nothing");
@@ -1564,7 +1569,13 @@ mod tests {
             }
         );
         assert_eq!(publish(&mut r, KEY, false, t), PartyId(4));
-        assert!(is_full(r.claim(KEY, addr(7000), false, tok(), t)));
+        assert!(is_full(r.claim(
+            Key::from(KEY),
+            addr(7000),
+            false,
+            tok(),
+            t
+        )));
         assert_eq!(
             r.remove(s1),
             Removed::Service {
@@ -1573,7 +1584,7 @@ mod tests {
         );
         assert_eq!(claim(&mut r, KEY, false, t).0, PartyId(5));
         assert!(is_full(r.publish(
-            KEY,
+            Key::from(KEY),
             addr(9000),
             addr(9001),
             false,
@@ -1589,8 +1600,20 @@ mod tests {
         let _s = publish(&mut r, KEY, false, t);
         let _c = claim(&mut r, KEY, false, t);
         // No unclaimed service either way; the answer is still "full".
-        assert!(is_full(r.claim(KEY, addr(7000), false, tok(), t)));
-        assert!(is_full(r.claim(KEY + 1, addr(7000), false, tok(), t)));
+        assert!(is_full(r.claim(
+            Key::from(KEY),
+            addr(7000),
+            false,
+            tok(),
+            t
+        )));
+        assert!(is_full(r.claim(
+            Key::from(KEY + 1),
+            addr(7000),
+            false,
+            tok(),
+            t
+        )));
     }
 
     #[test]
@@ -1598,14 +1621,20 @@ mod tests {
         let mut r = registry(0);
         let t = now();
         assert!(is_full(r.publish(
-            KEY,
+            Key::from(KEY),
             addr(9000),
             addr(9001),
             false,
             tok(),
             t
         )));
-        assert!(is_full(r.claim(KEY, addr(7000), false, tok(), t)));
+        assert!(is_full(r.claim(
+            Key::from(KEY),
+            addr(7000),
+            false,
+            tok(),
+            t
+        )));
         assert!(r.is_empty());
     }
 
@@ -1618,9 +1647,11 @@ mod tests {
         let s_bind = Addr::new(Transport::Tls, "svc.example", 9001);
         let c_bind = Addr::new(Transport::Http, "fe80::1", 7000);
         let s = r
-            .publish(KEY, addr(9000), s_bind.clone(), false, tok(), t)
+            .publish(Key::from(KEY), addr(9000), s_bind.clone(), false, tok(), t)
             .unwrap();
-        let (c, _) = r.claim(KEY, c_bind.clone(), true, tok(), t).unwrap();
+        let (c, _) = r
+            .claim(Key::from(KEY), c_bind.clone(), true, tok(), t)
+            .unwrap();
 
         match r.get(s) {
             Some(Party::Service(entry)) => assert_eq!(entry, r.service(s).unwrap()),
@@ -1637,13 +1668,13 @@ mod tests {
         let p = r.get(s).unwrap();
         assert_eq!(
             (p.id(), p.key(), p.bind_addr(), p.is_ping()),
-            (s, KEY, &s_bind, false)
+            (s, &Key::from(KEY), &s_bind, false)
         );
         assert_eq!((p.failures(), p.last_seen()), (0, t));
         let p = r.get(c).unwrap();
         assert_eq!(
             (p.id(), p.key(), p.bind_addr(), p.is_ping()),
-            (c, KEY, &c_bind, true)
+            (c, &Key::from(KEY), &c_bind, true)
         );
 
         assert_eq!(r.bind_addr(s), Some(&s_bind));
@@ -2097,13 +2128,13 @@ mod tests {
         let t = now();
         let s_bind = Addr::new(Transport::Https, "10.0.0.1", 9001);
         let s = r
-            .publish(KEY, addr(9000), s_bind.clone(), false, tok(), t)
+            .publish(Key::from(KEY), addr(9000), s_bind.clone(), false, tok(), t)
             .unwrap();
         // Unclaimed: the service alone, no client.
         let alone = r.mesh_data(s).unwrap();
         assert_eq!(
             alone,
-            MeshData::new(KEY, Some(&r.service(s).unwrap().record), None)
+            MeshData::new(Key::from(KEY), Some(&r.service(s).unwrap().record), None)
         );
         assert_eq!(alone.nsm_mesh_service, Some(s_bind));
         assert_eq!(alone.nsm_service_port, Some(9000));
@@ -2112,14 +2143,16 @@ mod tests {
         assert_eq!(alone.nsm_mesh_client, None);
 
         let c_bind = Addr::new(Transport::Https, "10.0.0.2", 7000);
-        let (c, _) = r.claim(KEY, c_bind.clone(), true, tok(), t).unwrap();
+        let (c, _) = r
+            .claim(Key::from(KEY), c_bind.clone(), true, tok(), t)
+            .unwrap();
         let from_client = r.mesh_data(c).unwrap();
         let from_service = r.mesh_data(s).unwrap();
         assert_eq!(from_client, from_service, "one claim, one answer");
         assert_eq!(
             from_client,
             MeshData::new(
-                KEY,
+                Key::from(KEY),
                 Some(&r.service(s).unwrap().record),
                 Some(&r.client(c).unwrap().record)
             )
@@ -2139,7 +2172,7 @@ mod tests {
         let t = now();
         let s1 = publish(&mut r, KEY, false, t);
         let s2 = r
-            .publish(KEY, addr(9002), addr(9003), false, tok(), t)
+            .publish(Key::from(KEY), addr(9002), addr(9003), false, tok(), t)
             .unwrap();
         let (c, _) = claim(&mut r, KEY, false, t);
         assert_eq!(r.mesh_data(c).unwrap().nsm_service_id, Some(s1));
@@ -2148,7 +2181,7 @@ mod tests {
         let orphan = r.mesh_data(c).unwrap();
         assert_eq!(
             orphan,
-            MeshData::new(KEY, None, Some(&r.client(c).unwrap().record))
+            MeshData::new(Key::from(KEY), None, Some(&r.client(c).unwrap().record))
         );
         assert_eq!(orphan.nsm_mesh_client, Some(addr(7000)));
         // The spare is still unclaimed and says so.
@@ -2331,55 +2364,61 @@ mod tests {
         let mut r = registry(8);
         let t = now();
         let refused =
-            |r: &Registry, key: Key, party: Option<PartyId>| match r.resolve_key(key, party) {
+            |r: &Registry, key: &Key, party: Option<PartyId>| match r.resolve_key(key, party) {
                 Err(Error::Rejected(reason)) => reason,
                 other => panic!("resolve {key} {party:?}: {other:?}"),
             };
-        assert_eq!(refused(&r, KEY, None), "no party under key 42");
+        assert_eq!(refused(&r, &Key::from(KEY), None), "no party under key 42");
         assert_eq!(
-            refused(&r, KEY, Some(PartyId(1))),
+            refused(&r, &Key::from(KEY), Some(PartyId(1))),
             "no party 1 under key 42"
         );
 
         // One service, nobody holding it: the service.
         let s1 = publish(&mut r, KEY, false, t);
-        assert_eq!(r.resolve_key(KEY, None).unwrap(), s1);
+        assert_eq!(r.resolve_key(&Key::from(KEY), None).unwrap(), s1);
         assert_eq!(
-            stored_only(r.store_by_key(KEY, None, StoreOp::List).unwrap()),
+            stored_only(
+                r.store_by_key(&Key::from(KEY), None, StoreOp::List)
+                    .unwrap()
+            ),
             empty_unclaimed()
         );
         assert_eq!(
-            store_refusal_by_key(&mut r, KEY, None, put("step", "5")),
+            store_refusal_by_key(&mut r, &Key::from(KEY), None, put("step", "5")),
             format!("service {s1} is not claimed")
         );
         // Two unclaimed services: ambiguous, unless one is named.
         let s2 = publish(&mut r, KEY, false, t);
         assert_eq!(
-            refused(&r, KEY, None),
+            refused(&r, &Key::from(KEY), None),
             "key 42 has 2 unclaimed services (1, 2); name one with party_id"
         );
-        assert_eq!(r.resolve_key(KEY, Some(s2)).unwrap(), s2);
+        assert_eq!(r.resolve_key(&Key::from(KEY), Some(s2)).unwrap(), s2);
         // One client: its claim, whichever service is spare.
         let (c1, h1) = claim(&mut r, KEY, false, t);
         assert_eq!(h1.id, s1);
-        assert_eq!(r.resolve_key(KEY, None).unwrap(), c1);
+        assert_eq!(r.resolve_key(&Key::from(KEY), None).unwrap(), c1);
         assert_eq!(
-            r.store_by_key(KEY, None, put("step", "5")).unwrap(),
+            r.store_by_key(&Key::from(KEY), None, put("step", "5"))
+                .unwrap(),
             stored(c1, 1, vec![entry("step", "5", 1)])
         );
         // Either side of the claim names the same store; the spare its own
         // empty view.
         assert_eq!(
-            r.store_by_key(KEY, Some(s1), get("step")).unwrap(),
+            r.store_by_key(&Key::from(KEY), Some(s1), get("step"))
+                .unwrap(),
             stored(c1, 1, vec![entry("step", "5", 1)])
         );
         assert_eq!(
-            r.store_by_key(KEY, Some(s2), get("step")).unwrap(),
+            r.store_by_key(&Key::from(KEY), Some(s2), get("step"))
+                .unwrap(),
             empty_unclaimed()
         );
         // The reserved entry resolves the same way.
         assert_eq!(
-            r.store_by_key(KEY, None, get(MESH_DATA_KEY))
+            r.store_by_key(&Key::from(KEY), None, get(MESH_DATA_KEY))
                 .unwrap()
                 .mesh_data()
                 .unwrap(),
@@ -2389,40 +2428,41 @@ mod tests {
         let (c2, h2) = claim(&mut r, KEY, false, t);
         assert_eq!(h2.id, s2);
         assert_eq!(
-            refused(&r, KEY, None),
+            refused(&r, &Key::from(KEY), None),
             format!("key 42 has 2 clients ({c1}, {c2}); name one with party_id")
         );
-        assert_eq!(r.resolve_key(KEY, Some(c2)).unwrap(), c2);
+        assert_eq!(r.resolve_key(&Key::from(KEY), Some(c2)).unwrap(), c2);
         assert_eq!(
-            r.store_by_key(KEY, Some(s2), get("step")).unwrap(),
+            r.store_by_key(&Key::from(KEY), Some(s2), get("step"))
+                .unwrap(),
             stored(c2, 0, vec![]),
             "the second claim's own, empty store, through its service"
         );
         // A party under another key, or none at all, is not under this one.
         let other = publish(&mut r, KEY + 1, false, t);
         assert_eq!(
-            refused(&r, KEY, Some(other)),
+            refused(&r, &Key::from(KEY), Some(other)),
             format!("no party {other} under key 42")
         );
         assert_eq!(
-            refused(&r, KEY, Some(PartyId(99))),
+            refused(&r, &Key::from(KEY), Some(PartyId(99))),
             "no party 99 under key 42"
         );
-        assert_eq!(r.resolve_key(KEY + 1, None).unwrap(), other);
+        assert_eq!(r.resolve_key(&Key::from(KEY + 1), None).unwrap(), other);
         // An orphan is still the key's one client.
         let _ = r.remove(s1);
         let _ = r.remove(c2);
         let _ = r.remove(s2);
-        assert_eq!(r.resolve_key(KEY, None).unwrap(), c1);
+        assert_eq!(r.resolve_key(&Key::from(KEY), None).unwrap(), c1);
         assert_eq!(
-            r.store_by_key(KEY, None, get("step")).unwrap(),
+            r.store_by_key(&Key::from(KEY), None, get("step")).unwrap(),
             stored(c1, 1, vec![entry("step", "5", 1)])
         );
     }
 
     fn store_refusal_by_key(
         r: &mut Registry,
-        key: Key,
+        key: &Key,
         party: Option<PartyId>,
         op: StoreOp,
     ) -> String {
@@ -2490,14 +2530,21 @@ mod tests {
         for i in 0..4000 {
             match rng.below(10) {
                 0 => {
-                    if let Ok(id) =
-                        r.publish(rng.range(1, 2) as Key, addr(1), addr(2), false, tok(), t)
-                    {
+                    if let Ok(id) = r.publish(
+                        Key::from(rng.range(1, 2) as u64),
+                        addr(1),
+                        addr(2),
+                        false,
+                        tok(),
+                        t,
+                    ) {
                         issued.push(id);
                     }
                 }
                 1 => {
-                    if let Ok((id, _)) = r.claim(rng.range(1, 2) as Key, addr(3), false, tok(), t) {
+                    if let Ok((id, _)) =
+                        r.claim(Key::from(rng.range(1, 2) as u64), addr(3), false, tok(), t)
+                    {
                         issued.push(id);
                         assert!(model.insert(id, ModelStore::default()).is_none());
                     }
