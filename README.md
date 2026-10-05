@@ -51,6 +51,26 @@ rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl --no-default-features --features ring
 ```
 
+**Prebuilt binaries.** The binaries workflow
+([`.github/workflows/binaries.yml`](.github/workflows/binaries.yml)) builds
+`nsm` for the platforms below on every push to `main`, runs each binary where
+it can run, and a release attaches the tarballs (the binary, this README, the
+changelog, the license and `docs/`) with their SHA-256 sums. Take the one
+whose suffix names your platform:
+
+| Tarball suffix | Runs on | TLS provider |
+|---|---|---|
+| `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Linux with glibc 2.28 or newer (RHEL 8, Ubuntu 20.04, Debian 10, SLES 15 SP3, and newer) | `aws-lc-rs` |
+| `x86_64-unknown-linux-gnu-glibc2.17`, `aarch64-unknown-linux-gnu-glibc2.17` | Linux with glibc 2.17 or newer (RHEL and CentOS 7, and newer) | `ring` |
+| `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` | any Linux: static, no dynamic dependencies | `ring` |
+| `x86_64-apple-darwin` | macOS 10.12 or newer on Intel | `aws-lc-rs` |
+| `aarch64-apple-darwin` | macOS 11 or newer on Apple silicon | `aws-lc-rs` |
+| `x86_64-unknown-freebsd` | FreeBSD 14 or newer | `ring` |
+
+A binary built against an older glibc runs on every newer one, so the
+`glibc2.17` build is the one for a system whose `ldd --version` is below
+2.28, and the musl build the one for a minimal image.
+
 ## How it works
 
 ```text
@@ -654,9 +674,10 @@ controller should start parties over HTTP.
 ## Notes for HPC systems
 
 - **Static binary.** Build with `--no-default-features --features ring` for a
-  musl target; the result has no dynamic dependencies and runs on compute
-  nodes with a minimal image. Nothing needs a C toolchain or cmake with the
-  `ring` provider.
+  musl target, or take a release's `musl` tarball; the result has no dynamic
+  dependencies and runs on compute nodes with a minimal image. Nothing needs
+  a C toolchain or cmake with the `ring` provider. On a login node with an
+  old glibc (`ldd --version` below 2.28), the `glibc2.17` tarball runs too.
 - **Offline builds.** `vendor/` and `.cargo/config.toml` make every build
   offline; no registry access is needed on the login or build node.
 - **Interface selection.** Nodes usually have several interfaces (management,
@@ -724,8 +745,8 @@ cargo-machete, a Docker build and a coverage floor (`.github/workflows/ci.yml`).
 API documentation (`cargo doc`) and these pages are published by CI to
 <https://jblaschke.github.io/nsm_rs/> (the repository's Pages source must be
 set to "GitHub Actions" for the deploy step to take effect). Tagging `vX.Y.Z`
-runs the release workflow: static musl binaries (`ring`), glibc and macOS
-binaries (`aws-lc-rs`), a vendored source tarball for air-gapped builds, and
+runs the release workflow: the binaries of the table under
+[Building](#building), a vendored source tarball for air-gapped builds, and
 the container image on GHCR.
 
 ## License

@@ -271,11 +271,16 @@ version: 4.
   stable. Decision D12.
 - `tokio` and `hyper-util` are enabled with only the features the code uses
   instead of `full`.
-- Release automation: tagging `vX.Y.Z` builds static musl binaries (`ring`)
-  for x86_64 and aarch64, glibc and macOS binaries (`aws-lc-rs`), a vendored
-  source tarball for air-gapped builds and the container image on GHCR, and
-  publishes a GitHub release with the changelog section as notes. Dependabot
-  watches the GitHub Actions and Cargo dependencies weekly.
+- Release automation: tagging `vX.Y.Z` runs the binaries workflow, which
+  builds `nsm` for Linux on x86_64 and aarch64 three ways (against glibc 2.28
+  with `aws-lc-rs`, against glibc 2.17 and as a static musl binary with
+  `ring`), for macOS on Intel and Apple silicon (`aws-lc-rs`) and for FreeBSD
+  14 (`ring`), and runs every binary where it can run (the glibc 2.17 builds
+  on CentOS 7, the FreeBSD build in a FreeBSD virtual machine); the release
+  adds a vendored source tarball for air-gapped builds and the container
+  image on GHCR, and is published with the changelog section as notes. The
+  binaries workflow also runs on every push to `main`. Dependabot watches
+  the GitHub Actions and Cargo dependencies weekly.
 - Interface enumeration uses `if-addrs` instead of `pnet` (35 crates fewer).
   Decision D6.
 - HTTP servers are axum, HTTP clients are reqwest, both on hyper 1.x with

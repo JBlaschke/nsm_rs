@@ -33,6 +33,13 @@ The coverage job fails below the floor in `COVERAGE_FLOOR`
 `cargo llvm-cov --offline --summary-only`; when the measured value grows,
 raise the floor. It never goes down.
 
+A pull request that changes `Cargo.toml`, `Cargo.lock`, `vendor/`, `.cargo/`
+or the build recipe also runs the binaries workflow
+(`.github/workflows/binaries.yml`), which builds and runs `nsm` for every
+platform of the README's table under Building; every push to `main` and
+every release run it too. `scripts/package.sh NAME VERSION BINARY` packs a
+binary the way a release does, into `dist/`.
+
 ## Layout and rules
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes the modules and the
