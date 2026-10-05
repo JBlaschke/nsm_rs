@@ -45,3 +45,6 @@ view-events-role.yaml
 !vendor/**/*.log
 !vendor/**/.env
 !vendor/**/.env.*
+
+# Tarballs written by scripts/package.sh
+dist/
