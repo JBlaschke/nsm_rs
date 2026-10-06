@@ -421,8 +421,10 @@ against glibc 2.17 (`ring`, linked by zig against that version's stubs and
 run on CentOS 7) and as static musl binaries (`ring`), macOS on Intel and on
 Apple silicon (`aws-lc-rs`, each on its own runner), and FreeBSD 14 (`ring`,
 cross-compiled with clang against a FreeBSD 14 sysroot and run in a FreeBSD
-virtual machine). The README's table under Building says which tarball runs
-where; `scripts/package.sh` packs them.
+virtual machine). The README's table under Downloads says which tarball
+runs where; `scripts/package.sh` packs them. A push to `main` replaces the
+pre-release tagged `dev` on the releases page with its tarballs; a `v*` tag
+publishes a versioned release through the release workflow.
 
 ## 11. Design decisions
 

@@ -36,9 +36,11 @@ raise the floor. It never goes down.
 A pull request that changes `Cargo.toml`, `Cargo.lock`, `vendor/`, `.cargo/`
 or the build recipe also runs the binaries workflow
 (`.github/workflows/binaries.yml`), which builds and runs `nsm` for every
-platform of the README's table under Building; every push to `main` and
-every release run it too. `scripts/package.sh NAME VERSION BINARY` packs a
-binary the way a release does, into `dist/`.
+platform of the README's table under Downloads; every push to `main` runs
+it too and replaces the `dev` pre-release on the releases page with the
+result, and every release tag runs it through the release workflow.
+`scripts/package.sh NAME VERSION BINARY` packs a binary the way a release
+does, into `dist/`.
 
 ## Layout and rules
 

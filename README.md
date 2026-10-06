@@ -12,6 +12,7 @@ one protocol.
 
 ## Contents
 
+- [Downloads](#downloads)
 - [Building](#building)
 - [How it works](#how-it-works)
 - [Quickstart](#quickstart)
@@ -24,6 +25,44 @@ one protocol.
 - [Notes for HPC systems](#notes-for-hpc-systems)
 - [Testing](#testing)
 - [Documentation](#documentation)
+
+## Downloads
+
+Prebuilt binaries are on the
+[releases page](https://github.com/JBlaschke/nsm_rs/releases): one tarball
+per platform, holding the binary, this README, the changelog, the license
+and `docs/`, with its SHA-256 sum next to it. A versioned release,
+`nsm-<version>-<platform>.tar.gz`, is published when a `vX.Y.Z` tag is
+pushed. The pre-release tagged
+[`dev`](https://github.com/JBlaschke/nsm_rs/releases/tag/dev) holds the
+same set as `nsm-dev-<platform>.tar.gz`, built from the newest commit on
+`main` and replaced on every push, so its addresses never change:
+
+```bash
+curl -LO https://github.com/JBlaschke/nsm_rs/releases/download/dev/nsm-dev-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/JBlaschke/nsm_rs/releases/download/dev/nsm-dev-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c nsm-dev-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf nsm-dev-x86_64-unknown-linux-gnu.tar.gz
+nsm-dev-x86_64-unknown-linux-gnu/nsm --version
+```
+
+Take the platform whose suffix fits your system:
+
+| Tarball suffix | Runs on | TLS provider |
+|---|---|---|
+| `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Linux with glibc 2.28 or newer (RHEL 8, Ubuntu 20.04, Debian 10, SLES 15 SP3, and newer) | `aws-lc-rs` |
+| `x86_64-unknown-linux-gnu-glibc2.17`, `aarch64-unknown-linux-gnu-glibc2.17` | Linux with glibc 2.17 or newer (RHEL and CentOS 7, and newer) | `ring` |
+| `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` | any Linux: static, no dynamic dependencies | `ring` |
+| `x86_64-apple-darwin` | macOS 10.12 or newer on Intel | `aws-lc-rs` |
+| `aarch64-apple-darwin` | macOS 11 or newer on Apple silicon | `aws-lc-rs` |
+| `x86_64-unknown-freebsd` | FreeBSD 14 or newer | `ring` |
+
+A binary built against an older glibc runs on every newer one, so the
+`glibc2.17` build is the one for a system whose `ldd --version` is below
+2.28, and the musl build the one for a minimal image. The binaries workflow
+([`.github/workflows/binaries.yml`](.github/workflows/binaries.yml)) builds
+all of them from one commit and runs each where it can run, on every push
+to `main`, on a release tag and on a pull request that changes the build.
 
 ## Building
 
@@ -50,26 +89,6 @@ cargo build --release --no-default-features --features ring
 rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl --no-default-features --features ring
 ```
-
-**Prebuilt binaries.** The binaries workflow
-([`.github/workflows/binaries.yml`](.github/workflows/binaries.yml)) builds
-`nsm` for the platforms below on every push to `main`, runs each binary where
-it can run, and a release attaches the tarballs (the binary, this README, the
-changelog, the license and `docs/`) with their SHA-256 sums. Take the one
-whose suffix names your platform:
-
-| Tarball suffix | Runs on | TLS provider |
-|---|---|---|
-| `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Linux with glibc 2.28 or newer (RHEL 8, Ubuntu 20.04, Debian 10, SLES 15 SP3, and newer) | `aws-lc-rs` |
-| `x86_64-unknown-linux-gnu-glibc2.17`, `aarch64-unknown-linux-gnu-glibc2.17` | Linux with glibc 2.17 or newer (RHEL and CentOS 7, and newer) | `ring` |
-| `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` | any Linux: static, no dynamic dependencies | `ring` |
-| `x86_64-apple-darwin` | macOS 10.12 or newer on Intel | `aws-lc-rs` |
-| `aarch64-apple-darwin` | macOS 11 or newer on Apple silicon | `aws-lc-rs` |
-| `x86_64-unknown-freebsd` | FreeBSD 14 or newer | `ring` |
-
-A binary built against an older glibc runs on every newer one, so the
-`glibc2.17` build is the one for a system whose `ldd --version` is below
-2.28, and the musl build the one for a minimal image.
 
 ## How it works
 
@@ -746,8 +765,8 @@ API documentation (`cargo doc`) and these pages are published by CI to
 <https://jblaschke.github.io/nsm_rs/> (the repository's Pages source must be
 set to "GitHub Actions" for the deploy step to take effect). Tagging `vX.Y.Z`
 runs the release workflow: the binaries of the table under
-[Building](#building), a vendored source tarball for air-gapped builds, and
-the container image on GHCR.
+[Downloads](#downloads), a vendored source tarball for air-gapped builds,
+and the container image on GHCR.
 
 ## License
 

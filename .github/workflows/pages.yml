@@ -46,7 +46,8 @@ jobs:
           <link rel="stylesheet" href="guide/style.css">
           <h1>nsm documentation</h1>
           <ul>
-            <li><a href="guide/README.html">README: building, how it works, command-line reference</a></li>
+            <li><a href="guide/README.html">README: downloads, building, how it works, command-line reference</a></li>
+            <li><a href="https://github.com/JBlaschke/nsm_rs/releases">Downloads: prebuilt binaries on the releases page, versioned releases and the <code>dev</code> pre-release from main</a></li>
             <li><a href="guide/docs/ARCHITECTURE.html">Architecture</a></li>
             <li><a href="guide/docs/PROTOCOL.html">Wire protocol</a></li>
             <li><a href="guide/docs/REST_API.html">REST control plane</a></li>

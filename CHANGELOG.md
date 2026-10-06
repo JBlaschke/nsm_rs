@@ -279,7 +279,10 @@ version: 4.
   on CentOS 7, the FreeBSD build in a FreeBSD virtual machine); the release
   adds a vendored source tarball for air-gapped builds and the container
   image on GHCR, and is published with the changelog section as notes. The
-  binaries workflow also runs on every push to `main`. Dependabot watches
+  binaries workflow also runs on every push to `main` and replaces the
+  pre-release tagged `dev` on the releases page with that commit's tarballs
+  (`nsm-dev-<platform>.tar.gz`), so the newest `main` is always
+  downloadable at a fixed address (README, Downloads). Dependabot watches
   the GitHub Actions and Cargo dependencies weekly.
 - Interface enumeration uses `if-addrs` instead of `pnet` (35 crates fewer).
   Decision D6.
