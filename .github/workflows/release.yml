@@ -22,11 +22,13 @@ jobs:
   binaries:
     # One tarball and checksum per platform, as artifacts `nsm-<platform>`;
     # the binaries workflow runs each binary where it can run and checks the
-    # tag against Cargo.toml's version.
+    # tag against Cargo.toml's version. Its dev-release job (skipped on a
+    # tag) asks for contents: write, which a called workflow may only be
+    # granted, not take, so the grant is here.
     name: binaries
     uses: ./.github/workflows/binaries.yml
     permissions:
-      contents: read
+      contents: write
 
   vendored-source:
     name: vendored source tarball

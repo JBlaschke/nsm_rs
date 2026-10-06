@@ -6,7 +6,9 @@ name: Binaries
 # sum as the artifact `nsm-<platform>`. The release workflow calls this one on
 # a version tag and attaches the tarballs to the release; on its own it runs
 # on every push to main, on a pull request that changes the build recipe, and
-# on demand.
+# on demand. A push to main also replaces the pre-release tagged `dev` on the
+# releases page with that commit's tarballs, named nsm-dev-<platform>, so the
+# newest main is always downloadable at a fixed address (README, Downloads).
 #
 #   platform (tarball suffix)            built with                 provider   runs on
 #   x86_64-unknown-linux-gnu             manylinux_2_28, gcc 14     aws-lc-rs  Linux, glibc 2.28 or newer
@@ -58,12 +60,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      cargo: ${{ steps.version.outputs.cargo }}
     steps:
       - uses: actions/checkout@v7
       - id: version
         # The version in the tarball names: on a tag the tag's, which must be
-        # Cargo.toml's (the binary reports that one); elsewhere Cargo.toml's
-        # with the commit.
+        # Cargo.toml's (the binary reports that one); elsewhere `dev`, so that
+        # the `dev` pre-release keeps fixed download addresses.
         run: |
           cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           case "$GITHUB_REF" in
@@ -74,9 +77,9 @@ jobs:
                 exit 1
               fi ;;
             *)
-              version="$cargo-dev.$(git rev-parse --short=8 HEAD)" ;;
+              version=dev ;;
           esac
-          echo "version=$version" | tee -a "$GITHUB_OUTPUT"
+          printf 'version=%s\ncargo=%s\n' "$version" "$cargo" | tee -a "$GITHUB_OUTPUT"
 
   linux-gnu:
     name: ${{ matrix.target }} (aws-lc-rs, glibc 2.28)
@@ -282,3 +285,40 @@ jobs:
             ./nsm --version
             ./nsm list-interfaces
             ./nsm list-ips --ip-version 4
+
+  dev-release:
+    # The newest main, downloadable without a login: the pre-release tagged
+    # `dev` is deleted and created again with this commit's tarballs, so that
+    # <repo>/releases/download/dev/nsm-dev-<platform>.tar.gz always serves the
+    # latest build. Only on a push to main, and only after every build and
+    # every run check passed; versioned releases come from release.yml on a
+    # `v*` tag.
+    name: dev pre-release on the releases page
+    needs: [version, linux-gnu, linux-gnu-legacy, linux-musl, macos, freebsd, freebsd-run]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARGO_VERSION: ${{ needs.version.outputs.cargo }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Replace the dev pre-release
+        run: |
+          {
+            echo "Development build of \`main\` at ${GITHUB_SHA} ($(date -u +%Y-%m-%d), Cargo.toml version ${CARGO_VERSION}), replaced on every push to main."
+            echo "Not a versioned release: those are the \`vX.Y.Z\` tags. Which tarball runs where: the README, section Downloads."
+            echo
+            echo '```'
+            cat dist/*.sha256
+            echo '```'
+          } > notes.md
+          gh release delete dev --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/dev" >/dev/null 2>&1 || true
+          gh release create dev --prerelease --target "$GITHUB_SHA" \
+            --title "Development build (main)" --notes-file notes.md \
+            --repo "$GITHUB_REPOSITORY" dist/*.tar.gz dist/*.sha256
