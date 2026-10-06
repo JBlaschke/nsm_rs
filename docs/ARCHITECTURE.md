@@ -410,9 +410,21 @@ misconfiguration; registration retries only on the former.
 
 Two mutually exclusive features select the rustls crypto provider:
 `aws-lc-rs` (default; needs a C toolchain) and `ring` (pure Rust; used for
-static musl builds and the Docker image). Dependencies are vendored;
-`.cargo/config.toml` makes every build offline. Release builds keep overflow
-checks on.
+the static musl, the legacy-glibc and the FreeBSD builds and the Docker
+image). Dependencies are vendored; `.cargo/config.toml` makes every build
+offline. Release builds keep overflow checks on.
+
+The binaries workflow (`.github/workflows/binaries.yml`) builds nine
+binaries from one commit and runs each where it can run: Linux x86_64 and
+aarch64 against glibc 2.28 (`aws-lc-rs`, in the manylinux_2_28 image),
+against glibc 2.17 (`ring`, linked by zig against that version's stubs and
+run on CentOS 7) and as static musl binaries (`ring`), macOS on Intel and on
+Apple silicon (`aws-lc-rs`, each on its own runner), and FreeBSD 14 (`ring`,
+cross-compiled with clang against a FreeBSD 14 sysroot and run in a FreeBSD
+virtual machine). The README's table under Downloads says which tarball
+runs where; `scripts/package.sh` packs them. A push to `main` replaces the
+pre-release tagged `dev` on the releases page with its tarballs; a `v*` tag
+publishes a versioned release through the release workflow.
 
 ## 11. Design decisions
 
@@ -443,7 +455,7 @@ where they are decisions K1 to K4.
 | D8 | Liveness is one heartbeat task per two-sided party and a sweeper for ping-mode parties; a party is removed after `fail_threshold` consecutive failures. Every interval and threshold lives in `Timing`, overridable from the CLI; broker and parties should agree on the values. |
 | D9 | The control plane binds loopback by default, requires a bearer token elsewhere, answers long-running operations with a job, and never takes file paths from a request. |
 | D10 | Trust anchors are operator configuration (`--root-ca`, or `--system-roots` as an explicit opt-in) and never travel on the wire; a connection configured for TLS never falls back to plaintext. Mutual TLS is a follow-up ([#7](https://github.com/JBlaschke/nsm_rs/issues/7)). |
-| D11 | The rustls crypto provider is a feature: `aws-lc-rs` (default) or `ring` (pure Rust, used for static musl builds and the container image); exactly one is installed per process. |
+| D11 | The rustls crypto provider is a feature: `aws-lc-rs` (default) or `ring` (pure Rust, used for the static musl, the legacy-glibc and the FreeBSD builds and the container image); exactly one is installed per process. |
 | D12 | Edition 2024 and `rust-version = "1.88"`, the minimum the current dependencies need; CI builds and tests on that toolchain as well as on stable. |
 | D13 | A party's `Role` is a protocol type (`service` / `client`), and the reply to `collect` names it, so a reply says which of its fields apply instead of leaving the asker to guess; `ops::Collected` is an enum keyed by the role. Protocol version 2. |
 | D14 | A client's pairing is a `tokio::sync::watch` channel (`Session::pairings`), not a slot: `nsm claim` prints one stdout line per pairing, the first at registration and one more each time the broker re-pairs it, so the last line is always the current service. |

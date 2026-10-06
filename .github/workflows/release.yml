@@ -1,9 +1,9 @@
 name: Release
 
-# On a version tag: build release binaries (static musl with the pure-Rust
-# `ring` provider, glibc and macOS with `aws-lc-rs`), pack the vendored source
-# tree for air-gapped builds, push the container image to GHCR, and publish a
-# GitHub release with everything attached.
+# On a version tag: build the binaries for every platform (the Binaries
+# workflow, .github/workflows/binaries.yml), pack the vendored source tree for
+# air-gapped builds, push the container image to GHCR, and publish a GitHub
+# release with everything attached.
 
 on:
   push:
@@ -20,42 +20,15 @@ env:
 
 jobs:
   binaries:
-    name: ${{ matrix.target }} (${{ matrix.provider }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest,      target: x86_64-unknown-linux-musl,  provider: ring,      musl: true }
-          - { os: ubuntu-24.04-arm,   target: aarch64-unknown-linux-musl, provider: ring,      musl: true }
-          - { os: ubuntu-latest,      target: x86_64-unknown-linux-gnu,   provider: aws-lc-rs, musl: false }
-          - { os: ubuntu-24.04-arm,   target: aarch64-unknown-linux-gnu,  provider: aws-lc-rs, musl: false }
-          - { os: macos-latest,       target: aarch64-apple-darwin,       provider: aws-lc-rs, musl: false }
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - if: matrix.musl
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
-      - run: cargo build --release --locked --target ${{ matrix.target }} --no-default-features --features ${{ matrix.provider }}
-      - name: Package
-        run: |
-          set -eu
-          version=${GITHUB_REF_NAME#v}
-          name="nsm-${version}-${{ matrix.target }}"
-          mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/nsm" README.md CHANGELOG.md LICENSE "dist/$name/"
-          cp -R docs "dist/$name/docs"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
-          "dist/$name/nsm" --version
-      - uses: actions/upload-artifact@v7
-        with:
-          name: nsm-${{ matrix.target }}
-          path: |
-            dist/*.tar.gz
-            dist/*.sha256
+    # One tarball and checksum per platform, as artifacts `nsm-<platform>`;
+    # the binaries workflow runs each binary where it can run and checks the
+    # tag against Cargo.toml's version. Its dev-release job (skipped on a
+    # tag) asks for contents: write, which a called workflow may only be
+    # granted, not take, so the grant is here.
+    name: binaries
+    uses: ./.github/workflows/binaries.yml
+    permissions:
+      contents: write
 
   vendored-source:
     name: vendored source tarball
