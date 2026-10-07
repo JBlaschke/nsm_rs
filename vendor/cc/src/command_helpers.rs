@@ -4,19 +4,22 @@ use std::{
     borrow::Cow,
     collections::hash_map,
     ffi::{OsStr, OsString},
-    fmt::Display,
+    fmt::{self, Display},
     fs,
     hash::Hasher,
     io::{self, Read, Write},
     path::Path,
-    process::{Child, ChildStderr, Command, Output, Stdio},
+    process::{Child, ChildStderr, Command, ExitStatus, Output, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
 
-use crate::{utilities::cargo_env_var_os, Error, ErrorKind, Object};
+use crate::{
+    build_env::BuildEnv, logger::Logger, utilities::cargo_env_var_os, BuildMessageKind, Error,
+    ErrorKind, Object,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct CargoOutput {
@@ -24,6 +27,10 @@ pub(crate) struct CargoOutput {
     pub(crate) warnings: bool,
     pub(crate) debug: bool,
     pub(crate) output: OutputKind,
+    pub(crate) logger: Option<Logger>,
+    /// Whether the command only detects something, so cc recovers when it
+    /// fails. Passed to the logger with a failed command.
+    is_detection_cmd: bool,
     checked_dbg_var: Arc<AtomicBool>,
 }
 
@@ -49,8 +56,28 @@ impl CargoOutput {
                 Some(v) => v != "0" && v != "false" && !v.is_empty(),
                 None => false,
             },
+            logger: None,
+            is_detection_cmd: false,
             checked_dbg_var: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// A copy for a detection command, one whose failure cc recovers from.
+    pub(crate) fn for_detection_cmd(&self) -> Self {
+        let mut detection = self.clone();
+        detection.is_detection_cmd = true;
+        detection
+    }
+
+    /// A copy for a command whose stderr is expected to be noise: it is only
+    /// forwarded, as warnings and to the logger, when debugging.
+    pub(crate) fn quiet_unless_debug(&self) -> Self {
+        let mut quiet = self.clone();
+        quiet.warnings = quiet.debug;
+        if !quiet.debug {
+            quiet.logger = None;
+        }
+        quiet
     }
 
     pub(crate) fn print_metadata(&self, s: &dyn Display) {
@@ -63,6 +90,45 @@ impl CargoOutput {
         if self.warnings {
             println!("cargo:warning={arg}");
         }
+        if let Some(logger) = &self.logger {
+            logger.log(BuildMessageKind::GeneralWarning, &arg.to_string(), &());
+        }
+    }
+
+    /// Forward one line of `cmd`'s stderr.
+    fn forward_stderr_line(&self, line: &[u8], cmd: &Command) {
+        if self.warnings {
+            write_warning(line);
+        }
+        if let Some(logger) = &self.logger {
+            // Streamed lines still end in `\r` when the compiler wrote `\r\n`.
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            logger.log(
+                BuildMessageKind::StderrForwarding,
+                &String::from_utf8_lossy(line),
+                cmd,
+            );
+        }
+    }
+
+    /// The error for `cmd` exiting with `status`, which also goes to the
+    /// logger.
+    pub(crate) fn command_failed(&self, cmd: &Command, status: ExitStatus) -> Error {
+        let message = format!(
+            "command did not execute successfully (status code {status}): {}",
+            CommandLine(cmd)
+        );
+        if let Some(logger) = &self.logger {
+            logger.log(
+                BuildMessageKind::CommandFailed {
+                    is_detection_cmd: self.is_detection_cmd,
+                    exit_status: status,
+                },
+                &message,
+                cmd,
+            );
+        }
+        Error::new(ErrorKind::ToolExecError, message)
     }
 
     pub(crate) fn print_debug(&self, arg: &dyn Display) {
@@ -80,7 +146,7 @@ impl CargoOutput {
     }
 
     fn stdio_for_warnings(&self) -> Stdio {
-        if self.warnings {
+        if self.warnings || self.logger.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -98,6 +164,7 @@ impl CargoOutput {
 
 pub(crate) struct StderrForwarder {
     inner: Option<(ChildStderr, Vec<u8>)>,
+    cargo_output: CargoOutput,
     #[cfg(feature = "parallel")]
     is_non_blocking: bool,
     #[cfg(feature = "parallel")]
@@ -109,12 +176,13 @@ pub(crate) struct StderrForwarder {
 const MIN_BUFFER_CAPACITY: usize = 100;
 
 impl StderrForwarder {
-    pub(crate) fn new(child: &mut Child) -> Self {
+    pub(crate) fn new(child: &mut Child, cargo_output: &CargoOutput) -> Self {
         Self {
             inner: child
                 .stderr
                 .take()
                 .map(|stderr| (stderr, Vec::with_capacity(MIN_BUFFER_CAPACITY))),
+            cargo_output: cargo_output.clone(),
             bytes_buffered: 0,
             #[cfg(feature = "parallel")]
             is_non_blocking: false,
@@ -123,7 +191,8 @@ impl StderrForwarder {
         }
     }
 
-    pub(crate) fn forward_available(&mut self) -> bool {
+    /// Forward the stderr of `cmd` that is available.
+    pub(crate) fn forward_available(&mut self, cmd: &Command) -> bool {
         if let Some((stderr, buffer)) = self.inner.as_mut() {
             loop {
                 // For non-blocking we check to see if there is data available, so we should try to
@@ -146,8 +215,9 @@ impl StderrForwarder {
                         Err(_) => {
                             // On Windows, if we get an error then the pipe is broken, so flush
                             // the buffer and bail.
-                            if !buffer.is_empty() {
-                                write_warning(&buffer[..]);
+                            if self.bytes_buffered > 0 {
+                                self.cargo_output
+                                    .forward_stderr_line(&buffer[..self.bytes_buffered], cmd);
                             }
                             self.inner = None;
                             break true;
@@ -187,7 +257,7 @@ impl StderrForwarder {
                             // Only forward complete lines, leave the rest in the buffer.
                             if let Some((b'\n', line)) = line.split_last() {
                                 consumed += line.len() + 1;
-                                write_warning(line);
+                                self.cargo_output.forward_stderr_line(line, cmd);
                             }
                         }
                         if consumed > 0 && consumed < self.bytes_buffered {
@@ -199,12 +269,13 @@ impl StderrForwarder {
                     res => {
                         // End of stream: flush remaining data and bail.
                         if self.bytes_buffered > 0 {
-                            write_warning(&buffer[..self.bytes_buffered]);
+                            self.cargo_output
+                                .forward_stderr_line(&buffer[..self.bytes_buffered], cmd);
                         }
                         if let Err(err) = res {
-                            write_warning(
-                                format!("Failed to read from child stderr: {err}").as_bytes(),
-                            );
+                            self.cargo_output.print_warning(&format_args!(
+                                "Failed to read from child stderr: {err}"
+                            ));
                         }
                         self.inner.take();
                         break true;
@@ -230,13 +301,13 @@ impl StderrForwarder {
     }
 
     #[cfg(feature = "parallel")]
-    pub(crate) fn forward_all(&mut self) {
-        while !self.forward_available() {}
+    pub(crate) fn forward_all(&mut self, cmd: &Command) {
+        while !self.forward_available(cmd) {}
     }
 
     #[cfg(not(feature = "parallel"))]
-    fn forward_all(&mut self) {
-        let forward_result = self.forward_available();
+    fn forward_all(&mut self, cmd: &Command) {
+        let forward_result = self.forward_available(cmd);
         assert!(forward_result, "Should have consumed all data");
     }
 }
@@ -254,14 +325,17 @@ fn wait_on_child(
     child: &mut Child,
     cargo_output: &CargoOutput,
 ) -> Result<(), Error> {
-    StderrForwarder::new(child).forward_all();
+    StderrForwarder::new(child, cargo_output).forward_all(cmd);
 
     let status = match child.wait() {
         Ok(s) => s,
         Err(e) => {
             return Err(Error::new(
                 ErrorKind::ToolExecError,
-                format!("failed to wait on spawned child process `{cmd:?}`: {e}"),
+                format!(
+                    "failed to wait on spawned child process `{}`: {e}",
+                    CommandLine(cmd)
+                ),
             ));
         }
     };
@@ -271,10 +345,7 @@ fn wait_on_child(
     if status.success() {
         Ok(())
     } else {
-        Err(Error::new(
-            ErrorKind::ToolExecError,
-            format!("command did not execute successfully (status code {status}): {cmd:?}"),
-        ))
+        Err(cargo_output.command_failed(cmd, status))
     }
 }
 
@@ -436,18 +507,15 @@ pub(crate) fn run_silent_on_error(
     cargo_output.print_debug(&status);
 
     if status.success() {
-        if cargo_output.warnings {
-            stderr
-                .split(|&b| b == b'\n')
-                .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
-                .filter(|line| !line.is_empty())
-                .for_each(write_warning);
-        }
+        stderr_warnings(&stderr, None).for_each(|line| cargo_output.forward_stderr_line(line, cmd));
         Ok(())
     } else {
         Err(Error::new(
             ErrorKind::ToolExecError,
-            format!("command did not execute successfully (status code {status}): {cmd:?}"),
+            format!(
+                "command did not execute successfully (status code {status}): {}",
+                CommandLine(cmd)
+            ),
         ))
     }
 }
@@ -464,33 +532,53 @@ pub(crate) fn spawn_and_wait_for_output(
         .map_err(|e| {
             Error::new(
                 ErrorKind::ToolExecError,
-                format!("failed to wait on spawned child process `{cmd:?}`: {e}"),
+                format!(
+                    "failed to wait on spawned child process `{}`: {e}",
+                    CommandLine(cmd)
+                ),
             )
         })
 }
 
 pub(crate) fn run_output(cmd: &mut Command, cargo_output: &CargoOutput) -> Result<Vec<u8>, Error> {
+    run_output_ignoring_line(cmd, cargo_output, None)
+}
+
+/// Like [`run_output`], but a line of stderr equal to `ignored_line` is not
+/// forwarded as a warning.
+pub(crate) fn run_output_ignoring_line(
+    cmd: &mut Command,
+    cargo_output: &CargoOutput,
+    ignored_line: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
     let Output {
         status,
         stdout,
         stderr,
     } = spawn_and_wait_for_output(cmd, cargo_output)?;
 
-    stderr
-        .split(|&b| b == b'\n')
-        .filter(|part| !part.is_empty())
-        .for_each(write_warning);
+    stderr_warnings(&stderr, ignored_line)
+        .for_each(|line| cargo_output.forward_stderr_line(line, cmd));
 
     cargo_output.print_debug(&status);
 
     if status.success() {
         Ok(stdout)
     } else {
-        Err(Error::new(
-            ErrorKind::ToolExecError,
-            format!("command did not execute successfully (status code {status}): {cmd:?}"),
-        ))
+        Err(cargo_output.command_failed(cmd, status))
     }
+}
+
+/// The non-empty lines of `stderr` to forward as warnings, skipping any line
+/// equal to `ignored_line`.
+fn stderr_warnings<'a>(
+    stderr: &'a [u8],
+    ignored_line: Option<&'a [u8]>,
+) -> impl Iterator<Item = &'a [u8]> {
+    stderr
+        .split(|&b| b == b'\n')
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+        .filter(move |line| !line.is_empty() && Some(*line) != ignored_line)
 }
 
 pub(crate) fn spawn(cmd: &mut Command, cargo_output: &CargoOutput) -> Result<Child, Error> {
@@ -504,7 +592,7 @@ pub(crate) fn spawn(cmd: &mut Command, cargo_output: &CargoOutput) -> Result<Chi
         }
     }
 
-    cargo_output.print_debug(&format_args!("running: {cmd:?}"));
+    cargo_output.print_debug(&format_args!("running: {}", CommandLine(cmd)));
 
     let cmd = ResetStderr(cmd);
     let child = cmd
@@ -527,7 +615,7 @@ pub(crate) fn spawn(cmd: &mut Command, cargo_output: &CargoOutput) -> Result<Chi
         }
         Err(e) => Err(Error::new(
             ErrorKind::ToolExecError,
-            format!("command `{:?}` failed to start: {e}", cmd.0),
+            format!("command `{}` failed to start: {e}", CommandLine(cmd.0)),
         )),
     }
 }
@@ -554,14 +642,26 @@ pub(crate) fn command_add_output_file(cmd: &mut Command, dst: &Path, args: CmdAd
     }
 }
 
+/// Shows a command's program and arguments like `{cmd:?}`, but not its
+/// environment. cc sets the whole environment on the commands it runs, which
+/// the `Debug` output on Unix would list variable by variable.
+pub(crate) struct CommandLine<'a>(pub(crate) &'a Command);
+
+impl fmt::Display for CommandLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.0.get_program())?;
+        for arg in self.0.get_args() {
+            write!(f, " {arg:?}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Naming the two probe classes at the call site, so a caller does not have
 /// to reach for [`ProbeKind`] to say which one it means.
 pub(crate) trait CommandExt {
-    /// Apply `Build::env` to a compiler family detection probe.
-    fn set_family_detection_env<K, V>(&mut self, env: &[(K, V)]) -> &mut Self
-    where
-        K: AsRef<OsStr>,
-        V: AsRef<OsStr>;
+    /// Apply the `Build`'s environment to a compiler family detection probe.
+    fn set_family_detection_env(&mut self, env: &BuildEnv) -> &mut Self;
 
     /// Apply `Build::env` to an `is_flag_supported` probe.
     fn set_flag_supported_env<K, V>(&mut self, env: &[(K, V)]) -> &mut Self
@@ -569,20 +669,14 @@ pub(crate) trait CommandExt {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>;
 
-    /// Apply `Build::env` to the Android `llvm-ar` probe.
-    fn set_ar_detection_env<K, V>(&mut self, env: &[(K, V)]) -> &mut Self
-    where
-        K: AsRef<OsStr>,
-        V: AsRef<OsStr>;
+    /// Apply the `Build`'s environment to the Android `llvm-ar` probe.
+    fn set_ar_detection_env(&mut self, env: &BuildEnv) -> &mut Self;
 }
 
 impl CommandExt for Command {
-    fn set_family_detection_env<K, V>(&mut self, env: &[(K, V)]) -> &mut Self
-    where
-        K: AsRef<OsStr>,
-        V: AsRef<OsStr>,
-    {
-        set_probe_env(self, env, ProbeKind::FamilyDetection);
+    fn set_family_detection_env(&mut self, env: &BuildEnv) -> &mut Self {
+        env.inherited().apply(self);
+        set_probe_env(self, &env.explicit, ProbeKind::FamilyDetection);
         self
     }
 
@@ -595,12 +689,32 @@ impl CommandExt for Command {
         self
     }
 
-    fn set_ar_detection_env<K, V>(&mut self, env: &[(K, V)]) -> &mut Self
-    where
-        K: AsRef<OsStr>,
-        V: AsRef<OsStr>,
-    {
-        set_probe_env(self, env, ProbeKind::ArDetection);
+    fn set_ar_detection_env(&mut self, env: &BuildEnv) -> &mut Self {
+        env.inherited().apply(self);
+        set_probe_env(self, &env.explicit, ProbeKind::ArDetection);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stderr_warnings_skips_ignored_line() {
+        // cl.exe echoes the source file name before any real diagnostics (#896).
+        let stderr = b"expando.c\r\nexpando.c(2): warning C4005: 'X': macro redefinition\r\n";
+        let warnings: Vec<_> = stderr_warnings(stderr, Some(b"expando.c")).collect();
+        assert_eq!(
+            warnings,
+            [&b"expando.c(2): warning C4005: 'X': macro redefinition"[..]]
+        );
+    }
+
+    #[test]
+    fn stderr_warnings_keeps_every_line_without_ignored_line() {
+        let stderr = b"expando.c\n\nsecond\n";
+        let warnings: Vec<_> = stderr_warnings(stderr, None).collect();
+        assert_eq!(warnings, [&b"expando.c"[..], &b"second"[..]]);
     }
 }

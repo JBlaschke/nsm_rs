@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0](https://github.com/rust-lang/cc-rs/compare/cc-v1.5.1...cc-v1.6.0) - 2026-10-03
+
+### Added
+
+- add `Build::create_archive` and `emit_link_directives` ([#1972](https://github.com/rust-lang/cc-rs/pull/1972))
+- read the process environment once per `Build`, on first use ([#1969](https://github.com/rust-lang/cc-rs/pull/1969))
+- add `Build::message_logger` for structured access to cc's messages ([#1967](https://github.com/rust-lang/cc-rs/pull/1967))
+- add `CXXSTDLIB_STATIC` to link the C++ stdlib statically from outside ([#1957](https://github.com/rust-lang/cc-rs/pull/1957))
+
+### Fixed
+
+- key the flag support cache on target, host, language and environment ([#1965](https://github.com/rust-lang/cc-rs/pull/1965))
+- forward each line of compiler stderr once and whole with `parallel` ([#1959](https://github.com/rust-lang/cc-rs/pull/1959))
+
+### Other
+
+- find compile commands by source file so tests pass with `parallel` ([#1973](https://github.com/rust-lang/cc-rs/pull/1973))
+- add support for `armeb-unknown-linux-gnueabi` ([#1958](https://github.com/rust-lang/cc-rs/pull/1958))
+
+## [1.5.1](https://github.com/rust-lang/cc-rs/compare/cc-v1.5.0...cc-v1.5.1) - 2026-09-25
+
+### Fixed
+
+- link the static C++ stdlib with `-bundle`, once per `Build` ([#1955](https://github.com/rust-lang/cc-rs/pull/1955))
+
+### Other
+
+- Use lp64d ABI for Redox riscv64 ([#1953](https://github.com/rust-lang/cc-rs/pull/1953))
+
+## [1.5.0](https://github.com/rust-lang/cc-rs/compare/cc-v1.4.7...cc-v1.5.0) - 2026-09-25
+
+### Added
+
+- inherit x86 target features from RUSTFLAGS ([#1948](https://github.com/rust-lang/cc-rs/pull/1948))
+
+### Fixed
+
+- don't report the file name cl.exe echoes as a warning in expand() ([#1950](https://github.com/rust-lang/cc-rs/pull/1950))
+- ignore MSVC `/link` flags with a warning ([#1949](https://github.com/rust-lang/cc-rs/pull/1949))
+- Make `windows_sys` more private and re-export types needed by cc-rs ([#1944](https://github.com/rust-lang/cc-rs/pull/1944))
+- pass -Tp on MSVC for .cc so they are not treated as objects ([#1930](https://github.com/rust-lang/cc-rs/pull/1930))
+
+### Other
+
+- document macOS SDKROOT and Xcode CLT for testing ([#1943](https://github.com/rust-lang/cc-rs/pull/1943))
+- remove License section from CONTRIBUTING.md ([#1942](https://github.com/rust-lang/cc-rs/pull/1942))
+- add CONTRIBUTING.md and Conventional Commit PR title check ([#1938](https://github.com/rust-lang/cc-rs/pull/1938))
+
+### Fixed
+
+- Pass `-Tp` immediately before `.cc` sources on MSVC (not clang-cl) when compiling C++ so they are not treated as object files ([#1877](https://github.com/rust-lang/cc-rs/issues/1877))
+
 ## [1.4.7](https://github.com/rust-lang/cc-rs/compare/cc-v1.4.6...cc-v1.4.7) - 2026-09-18
 
 ### Fixed

@@ -106,6 +106,7 @@ impl TlsConnector {
             },
 
             need_flush: false,
+            error: None,
 
             #[cfg(feature = "early-data")]
             early_waker: None,
@@ -236,6 +237,8 @@ pub struct TlsStream<IO> {
     pub(crate) session: ClientConnection,
     pub(crate) state: TlsState,
     pub(crate) need_flush: bool,
+    /// Buffered error that occurred during batch reading
+    pub(crate) error: Option<io::Error>,
 
     #[cfg(feature = "early-data")]
     pub(crate) early_waker: Option<Waker>,
@@ -335,6 +338,9 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        if let Some(err) = self.error.take() {
+            return Poll::Ready(Err(err));
+        };
         let data = ready!(self.as_mut().poll_fill_buf(cx))?;
         let len = data.len().min(buf.remaining());
         if len == 0 {
@@ -347,7 +353,10 @@ where
             let data = match self.as_mut().poll_fill_buf(cx) {
                 Poll::Ready(Ok([])) => break,
                 Poll::Ready(Ok(data)) => data,
-                Poll::Ready(Err(_)) => break, // non-transient error gets re-emitted next poll
+                Poll::Ready(Err(err)) => {
+                    self.error = Some(err);
+                    break;
+                }
                 Poll::Pending => break,
             };
             let len = Ord::min(data.len(), buf.remaining());

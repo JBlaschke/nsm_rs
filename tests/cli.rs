@@ -274,7 +274,7 @@ fn heartbeat_addr(line: &str) -> String {
 fn version_and_help_for_every_command() {
     let out = run(["--version"]);
     assert_eq!(out.code, 0);
-    assert!(out.stdout.starts_with("nsm 0.1.0"), "{}", out.stdout);
+    assert!(out.stdout.starts_with("nsm 0.1.1"), "{}", out.stdout);
     assert!(out.stderr.is_empty());
 
     let out = run(["--help"]);

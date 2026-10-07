@@ -11,8 +11,9 @@
 
 [package]
 edition = "2021"
+rust-version = "1.82"
 name = "yoke-derive"
-version = "0.8.3"
+version = "0.8.4"
 authors = ["Manish Goregaokar <manishsmail@gmail.com>"]
 build = false
 autolib = false
