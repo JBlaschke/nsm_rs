@@ -111,6 +111,7 @@ macro_rules! attrgen {
             (fallback, false, Fallback(Span)),
             (main, false, Main(Span)),
             (start, false, Start(Span)),
+            (experimental_tokio, false, ExperimentalTokio(Span, Option<String>)),
             (wasm_bindgen, false, WasmBindgen(Span, syn::Path)),
             (js_sys, false, JsSys(Span, syn::Path)),
             (wasm_bindgen_futures, false, WasmBindgenFutures(Span, syn::Path)),
@@ -1724,6 +1725,37 @@ fn function_from_decl(
             r#unsafe: matches!(sig.safety, syn::Safety::Unsafe(_)),
             r#async: sig.asyncness.is_some(),
             jspi: opts.jspi().is_some(),
+            tokio: match opts.experimental_tokio() {
+                Some(mode) => {
+                    let span = opts
+                        .attrs
+                        .iter()
+                        .find_map(|(_, attr)| match attr {
+                            BindgenAttr::ExperimentalTokio(span, _) => Some(*span),
+                            _ => None,
+                        })
+                        .unwrap();
+                    if sig.asyncness.is_none() {
+                        return Err(Diagnostic::span_error(
+                            span,
+                            "#[wasm_bindgen(experimental_tokio)] can only be applied to `async` functions",
+                        ));
+                    }
+                    match mode.as_deref() {
+                        None => Some(ast::TokioMode::Ambient),
+                        Some("isolated") => Some(ast::TokioMode::Isolated),
+                        Some(other) => {
+                            return Err(Diagnostic::span_error(
+                                span,
+                                format!(
+                                    "unknown tokio mode `{other}`; expected `experimental_tokio` or `experimental_tokio = \"isolated\"`"
+                                ),
+                            ))
+                        }
+                    }
+                }
+                None => None,
+            },
             generate_typescript: opts.skip_typescript().is_none(),
             generate_jsdoc: opts.skip_jsdoc().is_none(),
             variadic: opts.variadic().is_some(),
@@ -2033,6 +2065,17 @@ impl<'a> MacroParse<(Option<BindgenAttrs>, &'a mut TokenStream)> for syn::Item {
             }
             syn::Item::Impl(mut i) => {
                 let opts = opts.unwrap_or_default();
+                // The methods take their crate paths from the class marker,
+                // which reads them off `program`.
+                if let Some(path) = opts.wasm_bindgen() {
+                    program.wasm_bindgen = path.clone();
+                }
+                if let Some(path) = opts.js_sys() {
+                    program.js_sys = path.clone();
+                }
+                if let Some(path) = opts.wasm_bindgen_futures() {
+                    program.wasm_bindgen_futures = path.clone();
+                }
                 (&mut i).macro_parse(program, opts)?;
                 i.to_tokens(tokens);
             }
